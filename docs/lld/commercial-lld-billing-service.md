@@ -2393,7 +2393,7 @@ sequenceDiagram
     Op->>B: B-O8 conversion-reversals {dispute_id, refund, reason}
     B->>RP: RP-4 POST /api/v1/internal/tenants/:id/revert-conversion (commercial-system, Idempotency-Key revert:<t>:<s>)
     alt 200
-        B->>S: CancelNow; Refund (unless the dispute already reversed funds)
+        B->>S: CancelNow, then Refund (unless the dispute already reversed funds)
         B->>B: commit: subscription ended (operator_reversal), saga reverted, dispute reverted, AL-5
     else 409 revert_window_expired
         B-->>Op: 409 REVERT_WINDOW_EXPIRED (late reversion is an operator runbook)
@@ -2440,7 +2440,7 @@ sequenceDiagram
     RP-->>BFF: {keycloak_user_id}
     BFF->>C: I-1 create tenant (owner_user_id)
     RP->>B: TenantConverted(direct_signup=true) via tenant-billing-q
-    B->>B: commit: saga confirmed; +120 s TenantSeatsChanged {reason: conversion}
+    B->>B: commit: saga confirmed, then +120 s TenantSeatsChanged {reason: conversion}
 ```
 
 1. **B-I1** as §5.4.2. The saga starts in `awaiting_tenant_converted` with `payment_confirmed_at` set.
@@ -2538,7 +2538,7 @@ stateDiagram-v2
     [*] --> pending_payment: B-P7 / B-P20
     pending_payment --> confirmed: invoice paid
     pending_payment --> requires_action: 3-D Secure / no default PM
-    requires_action --> confirmed: customer completes; invoice paid
+    requires_action --> confirmed: customer completes, invoice paid
     pending_payment --> failed: declined
     requires_action --> failed: declined
     pending_payment --> expired: 30 min, no outcome
@@ -2595,7 +2595,7 @@ sequenceDiagram
         B->>S: ScheduleAtPeriodEnd(quantity = renewal_seats, no proration)
         B->>B: commit: seats_in_use_at_apply, renewal_seats, provider_schedule_id
     else 503 / timeout
-        B->>B: retry next run; at effective_at − 1 h: status skipped (iam_unavailable), renew at current count, notify
+        B->>B: retry next run, at effective_at − 1 h: status skipped (iam_unavailable), renew at current count, notify
     end
 ```
 
@@ -2831,7 +2831,7 @@ stateDiagram-v2
     rp_convert_pending --> refund_pending: B-O9 refund
     awaiting_tenant_converted --> refund_pending: B-O9 refund
     failed --> refund_pending: B-O9 refund
-    refund_pending --> refunded: refund succeeded; subscription ended
+    refund_pending --> refunded: refund succeeded, subscription ended
     confirmed --> reverted: B-O8 RP-4 succeeded
     awaiting_tenant_converted --> confirmed: B-O9 resolved_manually
     confirmed --> [*]
