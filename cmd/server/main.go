@@ -5,8 +5,9 @@
 // and shuts down gracefully.
 //
 // Wired so far: the provider registry and its refresh, B-W1 and the webhook
-// processor (Phase 3). The outbox runner, saga worker, audit runner, SQS
-// consumers and delayed emissions are added in later phases.
+// processor (Phase 3), and the billing.events outbox publisher (Phase 4).
+// The saga worker, audit runner, SQS consumers and delayed emissions are
+// added in later phases.
 package main
 
 import (
@@ -172,7 +173,14 @@ func run() int {
 		},
 		Routes: []func(gin.IRouter){webhookRoute(cfg, registry, sysPool, log)},
 	})
-	bg := startWorkers(cfg, registry, appPool, sysPool, log)
+	// billing.events publisher (§7.3.8): Glue schema versions are resolved
+	// once here, so a deploy ahead of schema registration fails to start.
+	ob, err := outboxRunner(context.Background(), cfg, appPool, log)
+	if err != nil {
+		log.Error("billing.events outbox", map[string]any{"error": err.Error()})
+		return 1
+	}
+	bg := startWorkers(cfg, registry, appPool, sysPool, ob, log)
 
 	srv := &http.Server{
 		Addr:              ":" + strconv.Itoa(cfg.AppPort),

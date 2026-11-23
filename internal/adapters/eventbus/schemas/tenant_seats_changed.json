@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TenantSeatsChangedPayload",
+  "type": "object",
+  "required": [
+    "tenant_id",
+    "licensed_seats",
+    "reason"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "licensed_seats": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "previous_licensed_seats": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "conversion",
+        "purchase",
+        "renewal",
+        "renewal_topup",
+        "reactivation",
+        "resync"
+      ]
+    },
+    "billing_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "billing_subscription_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "deferred_amount_minor": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "deferral_reason": {
+      "type": "string",
+      "enum": [
+        "below_provider_minimum"
+      ]
+    }
+  }
+}

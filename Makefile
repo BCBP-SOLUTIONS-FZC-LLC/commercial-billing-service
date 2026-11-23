@@ -15,11 +15,18 @@ DOCKER_SOCKET := $(shell [ -S /Users/$(USER)/.docker/run/docker.sock ] && echo u
 export DOCKER_HOST ?= $(DOCKER_SOCKET)
 export APP_NAME APP_ENV BUILD_VERSION
 
+# Schema governance (platform-schemagov 0.4), as in the IAM services.
+SCHEMA_GOV_IMAGE    ?= ghcr.io/bcbp-solutions-fzc-llc/platform-schemagov:0.4
+SCHEMA_GOV_PLATFORM ?= linux/amd64
+SCHEMA_DIR          := internal/adapters/eventbus/schemas
+SCHEMA_GOV          := docker run --rm --platform "$(SCHEMA_GOV_PLATFORM)" -v "$(CURDIR)":/workspace -w /workspace "$(SCHEMA_GOV_IMAGE)"
+
 LDFLAGS := -s -w -X main.buildVersion=$(BUILD_VERSION)
 
 .PHONY: help
 help:
 	@echo "build lint arch-lint guards test test-integration test-contract ci run migrate docker-up docker-down tidy fmt fmt-check"
+	@echo "schema-extract schema-check schema-validate (schema-gov via $(SCHEMA_GOV_IMAGE))"
 
 # ── Build ───────────────────────────────────────────────────────────────
 .PHONY: build
@@ -85,6 +92,20 @@ cover:
 
 .PHONY: ci
 ci: fmt-check vet lint arch-lint guards test build
+
+# ── Schema governance (LLD §7.3, §14.4) ─────────────────────────────────
+# api/asyncapi.yaml is the source; $(SCHEMA_DIR)/*.json are derived and embedded.
+.PHONY: schema-extract
+schema-extract:
+	$(SCHEMA_GOV) extract --asyncapi api/asyncapi.yaml --schema-dir $(SCHEMA_DIR)
+
+.PHONY: schema-check
+schema-check:
+	$(SCHEMA_GOV) extract --asyncapi api/asyncapi.yaml --schema-dir $(SCHEMA_DIR) --check
+
+.PHONY: schema-validate
+schema-validate: schema-check
+	$(SCHEMA_GOV) validate --asyncapi api/asyncapi.yaml --schema-dir $(SCHEMA_DIR)
 
 # ── Run ─────────────────────────────────────────────────────────────────
 .PHONY: docker-up

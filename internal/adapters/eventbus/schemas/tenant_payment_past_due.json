@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TenantPaymentPastDuePayload",
+  "type": "object",
+  "required": [
+    "tenant_id",
+    "invoice_ref",
+    "past_due_since"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "invoice_ref": {
+      "type": "string"
+    },
+    "amount_due": {
+      "type": "object",
+      "required": [
+        "amount_minor",
+        "currency"
+      ],
+      "properties": {
+        "amount_minor": {
+          "type": "integer"
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        }
+      }
+    },
+    "past_due_since": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_retry_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    }
+  }
+}

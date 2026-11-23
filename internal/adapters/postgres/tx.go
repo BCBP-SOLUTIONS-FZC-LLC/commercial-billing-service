@@ -17,14 +17,29 @@ import (
 
 type txKey struct{}
 
+// txCtx is the transaction in ctx plus per-transaction state: the last
+// event time stamped in it (BIL-EVT-1).
+type txCtx struct {
+	tx            pgx.Tx
+	lastEventTime time.Time
+}
+
 // withTx stores the transaction in ctx for repositories.
 func withTx(ctx context.Context, tx pgx.Tx) context.Context {
-	return context.WithValue(ctx, txKey{}, tx)
+	return context.WithValue(ctx, txKey{}, &txCtx{tx: tx})
 }
 
 func txFrom(ctx context.Context) (pgx.Tx, bool) {
-	tx, ok := ctx.Value(txKey{}).(pgx.Tx)
-	return tx, ok
+	t, ok := ctx.Value(txKey{}).(*txCtx)
+	if !ok {
+		return nil, false
+	}
+	return t.tx, true
+}
+
+func txStateFrom(ctx context.Context) (*txCtx, bool) {
+	t, ok := ctx.Value(txKey{}).(*txCtx)
+	return t, ok
 }
 
 // writeRetry retries deadlocks and serialization failures (§9.1).

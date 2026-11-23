@@ -17,6 +17,7 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/config"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events/v2/pkg/outbox"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
 )
 
@@ -48,12 +49,22 @@ func providers(cfg config.Config, sysPool *pgcommon.Pool, log port.Logger) (*pro
 type workers struct {
 	cancel context.CancelFunc
 	done   chan struct{}
+	outbox *outbox.Runner
+	log    port.Logger
 }
 
-// startWorkers starts the registry refresh and the webhook processor.
-func startWorkers(cfg config.Config, reg *provider.Registry, appPool, sysPool *pgcommon.Pool, log port.Logger) *workers {
+// startWorkers starts the registry refresh, the webhook processor and the
+// outbox publisher (nil in dev without a topic).
+func startWorkers(cfg config.Config, reg *provider.Registry, appPool, sysPool *pgcommon.Pool, ob *outbox.Runner, log port.Logger) *workers {
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &workers{cancel: cancel, done: make(chan struct{})}
+	w := &workers{cancel: cancel, done: make(chan struct{}), outbox: ob, log: log}
+	if ob != nil {
+		go func() {
+			if err := ob.Start(ctx); err != nil {
+				log.Error("outbox runner", map[string]any{"error": err.Error()})
+			}
+		}()
+	}
 	proc := &app.WebhookProcessor{
 		Ledger:      pgadapter.NewLedgerRepository(sysPool),
 		Providers:   reg,
@@ -70,9 +81,15 @@ func startWorkers(cfg config.Config, reg *provider.Registry, appPool, sysPool *p
 	return w
 }
 
-// stop cancels the loops and waits up to timeout for the processor to return.
+// stop cancels the loops, drains the outbox runner's in-flight batch, and
+// waits up to timeout for the processor to return.
 func (w *workers) stop(timeout time.Duration) {
 	w.cancel()
+	if w.outbox != nil {
+		if err := w.outbox.Stop(); err != nil {
+			w.log.Error("outbox runner stop", map[string]any{"error": err.Error()})
+		}
+	}
 	select {
 	case <-w.done:
 	case <-time.After(timeout):
