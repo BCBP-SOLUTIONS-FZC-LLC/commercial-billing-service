@@ -2,8 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Document | `commercial-lld-billing-service.md` rev 0.23 (base HLD v0.65) |
-| Progress | **9 of 9 closed — all design sign-off blockers approved (2026-11-23).** S-1, S-2, S-3 by Finance; S-4 by Finance and Security; S-5 by Finance and Legal; S-6 by Product and Finance; S-7 by the PCI owner group; S-8 by the Commercial TL and Entitlements; S-9 by the Commercial HLD owner (HLD v0.65). Next: final sign-off by the Commercial Team and the PCI owner group |
+| Document | `commercial-lld-billing-service.md` rev 0.29 (base HLD v0.65) |
+| Progress | **9 of 9 closed — all design sign-off blockers approved (2026-11-23).** S-1, S-2, S-3 by Finance; S-4 by Finance and Security; S-5 by Finance and Legal; S-6 by Product and Finance; S-7 by the PCI owner group; S-8 by the Commercial TL and Entitlements; S-9 by the Commercial HLD owner (HLD v0.65). Commercial Team additions to S-2, S-3, S-5 and S-6 acknowledged by Finance, Product and Legal (2026-11-23). Next: HLD v0.65 merge, PCI re-confirmation of §4 and §5.4.4, then final sign-off by the Commercial Team and the PCI owner group |
 | From | Commercial Team (Billing) |
 | Date | 2026-11-23 |
 | Purpose | Lists the decisions other teams must make before the Billing LLD can be **signed off as a design** |
@@ -97,6 +97,8 @@ Rule 3's sequence is now written in §8.6.3: renewal invoice → payment fails �
 1. **New operator route B-O16 for the draft decision.** Rule 2 needs an explicit, auditable decision per draft. The design had no Billing route for it, which would have left operators deciding in the Stripe dashboard, with no reason recorded and no audit entry. B-O16 `POST /api/v1/operator/tenants/:id/invoices/:invoice_id/disposition` takes `finalize` or `void` and a mandatory reason, and writes an AL-5 entry. Supporting changes: `invoices.held_for_review` plus disposition columns, port method `FinalizeInvoice`, invariant `BIL-SUB-7`, a metric and alert `BillingSuspensionDraftsAwaitingDecision` (drafts still undecided 24 h after reactivation). Finalising is refused while collection is still paused.
 2. **Invoices already open at suspension stop retrying.** Stripe's pause only holds *new* invoices. An invoice already `past_due` would keep retrying and could cancel the subscription through dunning, contradicting "no dunning" and "does not terminate the subscription". So while paused, automatic retries on those invoices stop and the dunning clock freezes. They stay open and owed (not waived), and retries restart on resume.
 
+✅ **Acknowledged 2026-11-23 by Finance**, no correction. B-O16 and the retry freeze stand as written.
+
 **Follow-up for IAM (new BL-OQ-25, go-live gate, not a design blocker):** add B-O16 to the OP-G4 operator test and add the Audit entry type `billing.invoice.suspension_disposition`.
 
 ### S-3 — Billing permissions (BL-OQ-13, BIZ-6)
@@ -127,6 +129,8 @@ Finance noted that the model gives complete coverage (every billing action maps 
 **Finance's overlap rule, now in §5.2:** *"Changing a payment method used for future invoices, updating billing-contact information, and initiating any action that can create a new contractual commitment require `commercial.payment_method.manage` or `commercial.subscription.change_plan` respectively, regardless of any other billing permissions."*
 
 **One interpretation, written into §5.2 so the rule can't conflict with the approved table:** a "new contractual commitment" means starting a paid subscription or converting a trial, changing tier (including scheduling a downgrade) and reactivating. Buying seats or add-ons within the current subscription, and scheduling a seat reduction, stay under `subscription.manage`, which Finance approved for tenant admins. New invariant `BIL-AUTH-7`: the two owner-only permissions are never implied by any other permission. No route or permission changed.
+
+✅ **Acknowledged 2026-11-23 by Finance**, no correction. The route-based definition stands.
 
 ### S-4 — Conversion reversal for fraud (BL-OQ-7, CD-10) — Finance + Security
 
@@ -191,6 +195,8 @@ Nothing in the design changed. LLD rev 0.18 records the approval and reasons in 
 
 New invariant `BIL-OPS-9`: no job deletes or minimises a financial record; `pii-minimisation` only nulls contact fields and never deletes a row. If Finance or Legal intended the ruling to cover contact data too, the CronJob is removed and nothing else changes.
 
+✅ **Acknowledged 2026-11-23 by Finance and Legal**, no correction. `pii-minimisation` stays, for contact data only.
+
 ---
 
 ## Product (with Finance)
@@ -227,6 +233,8 @@ New invariant `BIL-OPS-9`: no job deletes or minimises a financial record; `pii-
 | Notice period | **No minimum.** The notice goes out when the change is scheduled; a change found less than 1 h (`REPRICE_CUTOFF`) before a renewal moves at the following renewal | Product required notice but set no minimum |
 
 Also added: invariant `BIL-SUB-8` (price changes only at renewal or with a customer plan change), B-P1 field `scheduled_unit_price`, and a "renewal price change" message in the Notification list (BL-OQ-12). That message is a **go-live gate**: until Notification ships it, customers see the change only on the Billing page.
+
+✅ **Acknowledged 2026-11-23 by Product and Finance**, no correction. `renewal-repricing` and the no-minimum-notice rule stand.
 
 ---
 

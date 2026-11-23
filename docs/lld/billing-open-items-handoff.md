@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document | Hand-off of every open item in the Billing LLD, by owning team and service |
-| Billing LLD | `commercial-lld-billing-service.md` rev 0.28 (base HLD v0.65) |
+| Billing LLD | `commercial-lld-billing-service.md` rev 0.29 (base HLD v0.65) |
 | Date | 2026-11-23 |
 | From | Commercial Team (Billing) |
 | Deployment state | No service is in production; all run in dev only. "Done" means merged **and** promoted with each environment (dev → staging → production) |
@@ -15,7 +15,7 @@
 |---|---|
 | **Design decisions** | All nine partner-team decisions approved on 2026-11-23 (S-1 to S-9, `billing-design-signoff-blockers.md`). No design question is open |
 | **HLD alignment** | All four LLD/HLD differences accepted and written into HLD v0.65 (§17.8). v0.65 is not merged yet (§3.1) |
-| **Final sign-off** | Not given yet. Three steps remain (§3) |
+| **Final sign-off** | Not given yet. Two steps remain: §3.1 and §3.2 (§3.3 done) |
 | **Go-live** | Blocked by items owned by other teams (§4). Billing's design already behaves safely until each closes: a feature flag stays off, a route returns `403`, or a call fails closed with `503` |
 
 **How to read this document.** §2 is the one-page view. §3 lists what stands between the LLD and its signature. §4 has one section per team. Each item gives:
@@ -53,9 +53,9 @@
 | **Web / growth** | Signup BFF | BL-OQ-8 | Direct paid signup |
 | **Notification** | `hld-notification-service` | BL-OQ-12 | Customer emails; price increases for existing customers |
 | **Usage & Metering** | `commercial-usage-metering-service` | BL-OQ-24 | Billing's usage-record consumer |
-| **Finance** | — | Four acknowledgements (§3.3) | Final sign-off |
-| **Product** | — | One acknowledgement (S-6) | — |
-| **Legal** | — | One acknowledgement (S-5) | — |
+| **Finance** | — | — (acknowledgements received 2026-11-23) | — |
+| **Product** | — | — (acknowledgement received 2026-11-23) | — |
+| **Legal** | — | — (acknowledgement received 2026-11-23) | — |
 | **Commercial HLD owner** | `commercial-hld-docs` | Merge and tag HLD v0.65 | **Final sign-off** |
 | **Commercial Team (Billing)** | `commercial-billing` (`billing` / `commercial-billing`) | BL-OQ-9 (a); W-8 to W-10; contract-test gap; LLD housekeeping; push and PR; BL-OQ-15 (deferred) | Final sign-off (as approver); its own build |
 
@@ -84,7 +84,7 @@ The LLD is signed by the **Commercial Team** (whole document, CD-4) and the **PC
 - **Action:** read `billing-design-signoff-blockers.md` S-7 ("What the Commercial Team changed") and LLD §4.2.24, B-O14, B-O17 and `BIL-PROV-4`, then reply "confirmed" or with changes.
 - **Done when:** the PCI owner group confirms rev 0.21 or later.
 
-### 3.3 Partner teams — acknowledge four Commercial Team interpretations
+### 3.3 Partner teams — acknowledge four Commercial Team interpretations — ✅ done
 
 Partner teams approved S-2, S-3, S-5 and S-6. Applying those approvals needed four interpretations or additions they haven't seen. Each is written in the sign-off document as "correct us if you meant otherwise". One acknowledgement per team closes them.
 
@@ -96,6 +96,7 @@ Partner teams approved S-2, S-3, S-5 and S-6. Applying those approvals needed fo
 | S-6 | A `renewal-repricing` job moves subscribers to a new price at renewal (Stripe otherwise keeps the old price forever). No minimum notice period | Product + Finance |
 
 - **Done when:** each team replies "acknowledged" or with a correction.
+- **Result:** ✅ all four acknowledged by Finance, Product and Legal on 2026-11-23, without correction (LLD rev 0.29).
 
 ---
 
@@ -266,19 +267,19 @@ The work is probably unpushed. **These items stay open until the code can be see
 
 | # | What | Billing meanwhile | Action | Done when |
 |---|---|---|---|---|
-| Acks | S-2, S-3, S-5, S-6 interpretations (§3.3) | — | Reply | Acknowledged |
+| Acks | S-2, S-3, S-5, S-6 interpretations (§3.3) | — | — | ✅ Received 2026-11-23 |
 
 ### 4.11 Product
 
 | # | What | Billing meanwhile | Action | Done when |
 |---|---|---|---|---|
-| Ack | S-6 renewal-repricing job and no minimum notice (§3.3) | — | Reply | Acknowledged |
+| Ack | S-6 renewal-repricing job and no minimum notice (§3.3) | — | — | ✅ Received 2026-11-23 |
 
 ### 4.12 Legal
 
 | # | What | Action | Done when |
 |---|---|---|---|
-| Ack | S-5: contact-data minimisation continues for personal data (§3.3) | Reply | Acknowledged |
+| Ack | S-5: contact-data minimisation continues for personal data (§3.3) | — | ✅ Received 2026-11-23 |
 
 ### 4.13 Commercial Team (Billing) — own items
 
@@ -302,7 +303,7 @@ The work is probably unpushed. **These items stay open until the code can be see
 
 | Launch | Needs closed |
 |---|---|
-| **Final sign-off** | §3.1 HLD v0.65 merged · §3.2 PCI re-confirmation · §3.3 four acknowledgements |
+| **Final sign-off** | §3.1 HLD v0.65 merged · §3.2 PCI re-confirmation (§3.3 acknowledgements received) |
 | **Any Billing event in an environment** | Commercial IaC topic, registry and queues · Entitlements consumer event names (or Entitlements misses every plan change) |
 | **Paid subscriptions through Stripe** | OP-G1 rollout · **OP-G2** · OP-G3 · OP-G4 · BL-OQ-9 (a) · A-10 role + named holders · first certification approved (B-O17) |
 | **Direct paid signup** | All of the above · BL-OQ-8 · SRE-3 |
@@ -326,7 +327,7 @@ A-10 role + PCI names holders ────────────────�
 |---|---|---|---|---|
 | 3.1 | Merge and tag HLD v0.65 | Commercial HLD owner | `commercial-hld-docs` | Open |
 | 3.2 | Re-confirm §4, §5.4.4 | PCI owner group | — | Open |
-| 3.3 | Acknowledge S-2, S-3, S-5, S-6 interpretations | Finance, Product, Legal | — | Open |
+| 3.3 | Acknowledge S-2, S-3, S-5, S-6 interpretations | Finance, Product, Legal | — | **Done** 2026-11-23 |
 | BL-OQ-14 | OP-G2 gateway provider | Platform-edge | Envoy Gateway | **Not started** |
 | BL-OQ-14 | OP-G1 rollout, operator users | IAM | Realm Provisioner | Merged; rollout open |
 | BL-OQ-14 | OP-G3, OP-G4, OP-G6 | IAM | AuthZ Enrichment | Blocked on OP-G2 |
