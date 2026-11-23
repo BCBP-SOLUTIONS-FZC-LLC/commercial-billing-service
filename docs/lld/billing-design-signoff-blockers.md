@@ -2,8 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Document | `commercial-lld-billing-service.md` rev 0.15 (base HLD v0.64) |
-| Progress | **1 of 9 closed** — S-1 approved by Finance 2026-11-23 |
+| Document | `commercial-lld-billing-service.md` rev 0.16 (base HLD v0.64) |
+| Progress | **2 of 9 closed** — S-1 and S-2 approved by Finance 2026-11-23 |
 | From | Commercial Team (Billing) |
 | Date | 2026-11-23 |
 | Purpose | Lists the decisions other teams must make before the Billing LLD can be **signed off as a design** |
@@ -26,7 +26,7 @@ The Billing LLD tracks three kinds of open item. Only the first kind is in this 
 | # | Team | Item | Question in one line | Billing's proposal (current default) | If rejected |
 |---|---|---|---|---|---|
 | S-1 | Finance | BL-OQ-6 | How are mid-period seat purchases charged when the payment provider can't calculate proration? | ✅ **Approved 2026-11-23, unchanged**, with three record-keeping additions (see S-1). Applied in LLD rev 0.15 | — |
-| S-2 | Finance | BL-OQ-1 (CD-24) | Do we keep charging a tenant that an operator suspended? | No: collection pauses automatically, invoices are kept as drafts, an operator decides | §8.10 reduced to "bill as normal"; config flag removed |
+| S-2 | Finance | BL-OQ-1 (CD-24) | Do we keep charging a tenant that an operator suspended? | ✅ **Approved 2026-11-23**, rules 1–4, auto-pause on. Adds new operator route B-O16 (see S-2). Applied in LLD rev 0.16 | — |
 | S-3 | Finance | BL-OQ-13 (BIZ-6) | Which roles can do which billing actions? | Six permissions, two added by the LLD (owner-only plan change and payment method) | §5.2 table and the permission code change |
 | S-4 | Finance + Security | BL-OQ-7 (CD-10) | When is a trial-to-paid conversion reversed for fraud? | Fraud dispute or early fraud warning on the conversion payment within 7 days → SEV-2 → operator approves; never automatic | §8.2 flow, B-O8 and the alert change |
 | S-5 | Finance + Legal | BL-OQ-11 (CD-14) | How long must financial records be kept, per jurisdiction? | Keep everything; no financial deletion job; operational prunes only | Billing adds a retention/deletion job (new design work) |
@@ -81,7 +81,23 @@ Rule 3's sequence is now written in §8.6.3: renewal invoice → payment fails �
 
 **Why:** these suspensions are usually disputes or investigations, so billing that time should be a human decision.
 
-**Decision needed:** approve, or choose "bill as normal during operator suspension".
+**Decision: ✅ Approved by Finance, 2026-11-23. Rules 1–4 approved, with `AUTO_PAUSE_ON_OPERATOR_SUSPENSION=true`.**
+
+| Rule | Finance's decision | Finance's reason |
+|---|---|---|
+| 1. Pause automatically on suspension | Approve. No automated charge, no dunning; no purchases, seat changes, upgrades, downgrades or add-ons (`409 COLLECTION_PAUSED`) | Avoids charging a tenant whose access may be restricted for reasons outside their control, and avoids reversing invoices if the investigation clears them |
+| 2. Drafts need review on reactivation | Approve. Collection resumes, but drafts from the pause are never charged automatically; an operator finalises and collects, or voids | Outcomes differ: abuse → collect; false positive → void; legal hold or security compromise → case by case. Automatic charging carries high dispute risk |
+| 3. Operator override (B-O10) | Approve, with a **mandatory reason** | Legitimate exceptions exist: contractual or legal obligations to keep billing, enterprise terms, fraud cases where service stays reserved |
+| 4. Default on | Approve `true` | A temporary pause is limited and recoverable; billing a suspended customer risks disputes, write-offs, refunds and escalations |
+
+**Finance's clarifying sentence, now in §8.10:** *"Operator suspension pauses collection activity but does not terminate the subscription, alter entitlements, cancel the contract, or waive amounts that were already due before the suspension."*
+
+**Two design choices made while applying this (agreed with the Commercial Team, 2026-11-23):**
+
+1. **New operator route B-O16 for the draft decision.** Rule 2 needs an explicit, auditable decision per draft. The design had no Billing route for it, which would have left operators deciding in the Stripe dashboard, with no reason recorded and no audit entry. B-O16 `POST /api/v1/operator/tenants/:id/invoices/:invoice_id/disposition` takes `finalize` or `void` and a mandatory reason, and writes an AL-5 entry. Supporting changes: `invoices.held_for_review` plus disposition columns, port method `FinalizeInvoice`, invariant `BIL-SUB-7`, a metric and alert `BillingSuspensionDraftsAwaitingDecision` (drafts still undecided 24 h after reactivation). Finalising is refused while collection is still paused.
+2. **Invoices already open at suspension stop retrying.** Stripe's pause only holds *new* invoices. An invoice already `past_due` would keep retrying and could cancel the subscription through dunning, contradicting "no dunning" and "does not terminate the subscription". So while paused, automatic retries on those invoices stop and the dunning clock freezes. They stay open and owed (not waived), and retries restart on resume.
+
+**Follow-up for IAM (new BL-OQ-25, go-live gate, not a design blocker):** add B-O16 to the OP-G4 operator test and add the Audit entry type `billing.invoice.suspension_disposition`.
 
 ### S-3 — Billing permissions (BL-OQ-13, BIZ-6)
 
@@ -201,7 +217,7 @@ Tender admins and members get none of these.
 | # | Team | Approver | Reply | Date |
 |---|---|---|---|---|
 | S-1 | Finance | Finance | ✅ Approved, rules 1–3 unchanged; three record-keeping additions applied (LLD rev 0.15) | 2026-11-23 |
-| S-2 | Finance | | | |
+| S-2 | Finance | Finance | ✅ Approved, rules 1–4, auto-pause `true`; B-O16 and retry freeze added (LLD rev 0.16) | 2026-11-23 |
 | S-3 | Finance | | | |
 | S-4 | Finance | | | |
 | S-4 | Security | | | |

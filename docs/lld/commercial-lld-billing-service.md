@@ -7,7 +7,7 @@
 | Document type | Low-Level Design (LLD) |
 | Service | `commercial-billing` (Billing) |
 | Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing` |
-| Status | **Submitted for sign-off** (rev 0.15) — design stage; no code yet. Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
+| Status | **Submitted for sign-off** (rev 0.16) — design stage; no code yet. Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
 | Base HLD | Commercial Domain HLD **v0.64** (`hld-commercial-domain-v0.64.md`), the only HLD for the domain. Rebased from v0.51 in rev 0.14: v0.52 to v0.64 checked for Billing impact (§1.1, "HLD v0.52 to v0.64"); only v0.64 (`platform-audit`) changes Billing, already applied in rev 0.5. Parent: IAM HLD **v1.59** |
 | Supersedes | `hld-billing-service.md` v0.2 (draft Billing HLD, dropped in Commercial HLD v0.28). Its open items B-1 to B-13 are dispositioned in §16.3 and are never a source of requirements |
 | Sibling LLDs | Commercial: `commercial-lld-entitlements-service.md`, `commercial-lld-usage-metering-service.md` (to be written; until it exists the consumed `UsagePeriodClosed` contract is unverified, BL-OQ-24). IAM (contracts verified against these): Core `iam-lld-org-membership-service.md` rev 2.49 (I-11, I-18, `billing-orgm-q`, EVT-14/15/18, SEAT-2), Realm Provisioner `iam-lld-realm-provisioner-service.md` rev 1.46+ (RP-3, RP-4, RP-11, `billing-realm-q`, `iam.tenant.events` payloads), Audit Log `iam-lld-audit-log-service.md` rev 0.37 (AL-5, entry taxonomy, Billing admission since rev 0.34, `billing.token_addon.refunded` since rev 0.37), `platform-audit` `docs/lld/platform-lld-audit.md` rev 1.5 (§4, §11, §18.6, §19.2), AuthZ Enrichment `iam-lld-authz-enrichment.md` v1.50 (operator path, CD-52; §8.9.1 OP-G4 lists Billing B-O1 to B-O15). Edge: `signup-bff-lld.md` (Signup BFF, `BillingClient.AuthorizeAndCharge`) |
@@ -19,6 +19,7 @@
 
 | Rev | Date | Change |
 |---|---|---|
+| 0.16 | 2026-11-23 | **BL-OQ-1 (CD-24) closed — Finance approved rules 1 to 4, `AUTO_PAUSE_ON_OPERATOR_SUSPENSION=true`** (sign-off item S-2). §8.10 rewritten: scope sentence (a pause does not terminate the subscription, change entitlements, cancel the contract or waive amounts already due); retries on invoices already open at suspension are stopped and the dunning clock frozen (`PauseCollection` contract, Stripe `auto_advance = false`), restarted on resume; `409 COLLECTION_PAUSED` extended to seat reduction schedules and downgrades. **New operator route B-O16** (finalise or void a held draft, mandatory reason; 44 endpoint IDs), port `FinalizeInvoice`, `invoices.held_for_review` and disposition columns, invariant `BIL-SUB-7`, metrics, alert `BillingSuspensionDraftsAwaitingDecision`, error `INVOICE_NOT_HELD`. B-O10 reason mandatory. New BL-OQ-25 (IAM: OP-G4 coverage and Audit entry type for B-O16). |
 | 0.15 | 2026-11-23 | **BL-OQ-6 closed — Finance approved proration rules 1 to 3 unchanged** (sign-off item S-1). (1) §8.5.3: fallback calculator used only for providers certified `Proration = fallback`; providers with their own engine (Stripe) stay the system of record. (2) Finance requirements added: `seat_purchases` stores calculator inputs, `amount_unrounded_minor` and the rounded amount (§4.2.10, new `BIL-SEAT-5`); a purchase below the provider minimum is confirmed free with `deferred_amount_minor` and `deferral_reason = below_provider_minimum`, replacing the earlier "`adjustments` row" wording, and carried in `TenantSeatsChanged` (additive fields, §7.3.4) and two new metrics (§11.2). (3) §8.6.3: renewal top-up failure sequence stated; seats never removed automatically. B-P6 response, §12, §14.1 golden table and §16.4 updated. |
 | 0.14 | 2026-11-23 | **Sign-off housekeeping.** Status set to "Submitted for sign-off" with named approvers. Base HLD rebased v0.51 → **v0.64**; v0.52 to v0.64 checked, none changes Billing beyond v0.64's `platform-audit` (already in rev 0.5) (§1.1 impact table, §1.2). Sibling revisions updated: AuthZ Enrichment v1.50 (OP-G4 covers B-O1–B-O15), Audit Log rev 0.37 (`billing.token_addon.refunded`). §16.4 corrected to B-O6–B-O15; Appendix A reserved-reasons row aligned with D-8. New BL-OQ-24: `UsagePeriodClosed` contract unverified until the Usage & Metering LLD exists. §1.2 lists the 19 Nov action and reply documents; two cited source files are not yet in the repository. No design change. |
 | 0.13 | 2026-11-19 | **IAM PRs merged.** [iam-authz-enrichment#43](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-authz-enrichment/pull/43) (OP-G4 AuthZ tests for B-O1–B-O15), [iam-audit-log#24](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-audit-log/pull/24) (`billing.token_addon.refunded`), [iam-realm-provisioner#60](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-realm-provisioner/pull/60) (OP-G1 platform realm `bcbp-platform`). BL-OQ-9: IAM part done, Billing's `HTTPRoute` remains. BL-OQ-23 (b) merged. BL-OQ-14: OP-G1 merged; OP-G2 (platform edge) is the remaining external blocker. |
@@ -134,7 +135,7 @@ Refined into an implementable spec, this document gives the database schema, the
 | CD-21 | AL-5 entries; one `platform_tenant` entry per cross-tenant job | §10.6, §8.13 |
 | CD-22 | Superseded by CD-54 (no overage) | §2.2 |
 | CD-23 | 90-day lapse timeline executed by IAM | §8.8 |
-| CD-24 (open) | Billing decides invoicing during an operator suspension | §8.10 (proposal), BL-OQ-1 |
+| CD-24 | Billing decides invoicing during an operator suspension: automatic collection pause, operator decision on held drafts (Finance approved, BL-OQ-1) | §8.10, B-O10, B-O16, `BIL-SUB-7` |
 | CD-31 | RFC 9457 errors, frozen codes | §5.1, §17 |
 | CD-49 | `tenant-billing-q` filter adds `TenantConverted`, `TenantOffboarded` | §7.1 |
 | CD-50 | Core parks early events; `IAMParkedTenantEventsStale` routed to Billing on-call | §8.3, §11.5, §20.1 |
@@ -438,7 +439,7 @@ type PaymentProvider interface {
 	ReleaseSchedule(ctx context.Context, ref ScheduleRef, idemKey string) error
 	SetCancelAtPeriodEnd(ctx context.Context, ref SubscriptionRef, cancel bool, idemKey string) error
 	CancelNow(ctx context.Context, ref SubscriptionRef, idemKey string) error
-	PauseCollection(ctx context.Context, ref SubscriptionRef, pause bool, idemKey string) error
+	PauseCollection(ctx context.Context, ref SubscriptionRef, pause bool, idemKey string) error       // pause: new invoices held as drafts AND automatic retries stopped on already-open invoices; resume restarts retries only (§8.10)
 
 	// Pricing previews and one-off charges
 	PreviewQuantityChange(ctx context.Context, in QuantityChange) (ProrationPreview, error)          // Proration = fallback → never called; §8.5.3 calculator (BIL-PROV-3)
@@ -450,6 +451,7 @@ type PaymentProvider interface {
 	InvoicePDFLink(ctx context.Context, ref InvoiceRef) (URLWithExpiry, error)
 	PayOpenInvoiceLink(ctx context.Context, ref InvoiceRef) (URLWithExpiry, error)
 	VoidInvoice(ctx context.Context, ref InvoiceRef, idemKey string) error
+	FinalizeInvoice(ctx context.Context, ref InvoiceRef, idemKey string) error                       // B-O16: finalise a held draft and collect it automatically
 	Refund(ctx context.Context, in RefundInput, idemKey string) (RefundResult, error)
 	CreditBalance(ctx context.Context, in BalanceAdjustment, idemKey string) (string, error)        // operator adjustments
 
@@ -1020,11 +1022,22 @@ CREATE TABLE invoices (
   issued_at            timestamptz,
   paid_at              timestamptz,
   provider_updated_at  timestamptz NOT NULL,               -- ordering guard for the mirror (BIL-PAY-4)
+  -- CD-24 (§8.10): draft created while collection was paused; needs an operator decision (B-O16)
+  held_for_review      boolean NOT NULL DEFAULT false,
+  disposition          text CHECK (disposition IN ('finalize','void')),
+  disposition_reason   text CHECK (length(disposition_reason) BETWEEN 10 AND 1000),
+  disposed_by          uuid,                                -- operator sub
+  disposed_at          timestamptz,
   updated_at           timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT uq_inv_provider UNIQUE (provider, provider_invoice_id),
-  CHECK (amount_refunded_minor <= amount_paid_minor)
+  CHECK (amount_refunded_minor <= amount_paid_minor),
+  CONSTRAINT chk_inv_disposition CHECK (
+    (disposition IS NULL AND disposition_reason IS NULL AND disposed_by IS NULL AND disposed_at IS NULL)
+    OR (held_for_review AND disposition IS NOT NULL AND disposition_reason IS NOT NULL
+        AND disposed_by IS NOT NULL AND disposed_at IS NOT NULL))                         -- BIL-SUB-7
 );
 CREATE INDEX idx_inv_tenant_issued ON invoices (tenant_id, issued_at DESC, invoice_id);
+CREATE INDEX idx_inv_held ON invoices (tenant_id) WHERE held_for_review AND disposition IS NULL;
 ```
 
 PDFs are never stored; B-P18 resolves a short-lived provider link at request time.
@@ -1361,6 +1374,7 @@ Applied `BEFORE UPDATE … FOR EACH ROW WHEN (OLD.* IS DISTINCT FROM NEW.*)` on 
 | BIL-SUB-4 | Status moves only along the transition table in §8.14; a callback that would move it any other way is recorded `ignored` (`BIL-PAY-4`). |
 | BIL-SUB-5 | The seat item `quantity` changes only on a **confirmed** payment (conversion, purchase, top-up) or at a renewal applying a reduction; never on a request. |
 | BIL-SUB-6 | An account's currency is fixed while it has a non-`ended` subscription. |
+| BIL-SUB-7 | While collection is paused (CD-24, §8.10) no payment is attempted: new invoices are held as drafts (`held_for_review`), automatic retries on already-open invoices are stopped, and no dunning transition is made. A held draft is charged or voided only by an explicit operator decision with a reason (B-O16, `chk_inv_disposition`); it is never finalised automatically, including on reactivation. Pausing never waives an amount already due, cancels the subscription or changes entitlements. |
 | BIL-SEAT-1 | One open seat purchase per subscription (`uq_sp_one_open`). |
 | BIL-SEAT-2 | One open seat change schedule per subscription (`uq_scs_one_open`). |
 | BIL-SEAT-3 | `renewal_seats = max(target_seats, seats_in_use)`; after the renewal top-up check the licensed count is never below I-11's `active_users + pending_invitations` (HLD §8.5.1). |
@@ -1379,7 +1393,7 @@ Applied `BEFORE UPDATE … FOR EACH ROW WHEN (OLD.* IS DISTINCT FROM NEW.*)` on 
 ---
 ## 5. API Contract
 
-**Endpoint count.** 26 tenant routes (`B-P1`–`B-P26`), 1 internal route (`B-I1`), 1 webhook route (`B-W1`), 15 operator routes (`B-O1`–`B-O15`): **43 endpoint IDs**. IDs are stable and never reused; a retired route keeps its ID struck through, as in IAM.
+**Endpoint count.** 26 tenant routes (`B-P1`–`B-P26`), 1 internal route (`B-I1`), 1 webhook route (`B-W1`), 16 operator routes (`B-O1`–`B-O16`): **44 endpoint IDs**. IDs are stable and never reused; a retired route keeps its ID struck through, as in IAM.
 
 ### 5.1 Conventions
 
@@ -1491,7 +1505,7 @@ No other service calls Billing synchronously: IAM never calls Commercial (HLD §
 
 #### Operator routes (`/api/v1/operator/…`)
 
-B-O1 to B-O5 are the HLD §11.4 catalogue rows for Billing. B-O6 to B-O15 are **LLD additions**, exposed by Billing's own operator `HTTPRoute` (§13.1) and added to IAM's end-to-end operator test (AuthZ Enrichment LLD §8.9.1 OP-G4), whose list today covers only B-O1 to B-O5 (BL-OQ-9). There is no IAM-side route list: the platform-realm `jwt_authn` provider and AuthZ Enrichment admit the whole `/api/v1/operator/` prefix.
+B-O1 to B-O5 are the HLD §11.4 catalogue rows for Billing. B-O6 to B-O16 are **LLD additions** (B-O16 added in rev 0.16; its OP-G4 coverage is BL-OQ-25), exposed by Billing's own operator `HTTPRoute` (§13.1) and added to IAM's end-to-end operator test (AuthZ Enrichment LLD §8.9.1 OP-G4), whose list today covers only B-O1 to B-O5 (BL-OQ-9). There is no IAM-side route list: the platform-realm `jwt_authn` provider and AuthZ Enrichment admit the whole `/api/v1/operator/` prefix.
 
 | # | Method & path | Purpose | Audit (AL-5 `entry_type`) |
 |---|---|---|---|
@@ -1504,12 +1518,13 @@ B-O1 to B-O5 are the HLD §11.4 catalogue rows for Billing. B-O6 to B-O15 are **
 | B-O7 | `GET /api/v1/operator/tenants/:id/subscription` | Full subscription, sagas, purchases, schedules, disputes, ledger excerpt | — |
 | B-O8 | `POST /api/v1/operator/tenants/:id/conversion-reversals` | Operator-approved RP-4 reversal (CD-10, §8.2) | `billing.conversion.reverted` (requested) |
 | B-O9 | `POST /api/v1/operator/tenants/:id/conversion-sagas/:saga_id/actions` | Stuck saga: `retry`, `refund`, `resolved_manually` | `billing.saga.resolved` (requested) |
-| B-O10 | `PUT /api/v1/operator/tenants/:id/collection-pause` | Override the automatic CD-24 behaviour | `billing.collection.paused` (requested) |
+| B-O10 | `PUT /api/v1/operator/tenants/:id/collection-pause` | Pause or continue billing (overrides the automatic CD-24 behaviour); mandatory reason | `billing.collection.paused` |
 | B-O11 | `POST /api/v1/operator/billing/plan-prices` | Add a price row (closes the current one) | `billing.price_book.changed` (requested), `platform_tenant` |
 | B-O12 | `POST /api/v1/operator/billing/token-packs` | Add, change or retire a token pack | `billing.price_book.changed` (requested), `platform_tenant` |
 | B-O13 | `POST /api/v1/operator/billing/webhook-events/:provider/:provider_event_id/replay` | Re-process a ledger row (§20.2) | — (ledger row records the replay) |
 | B-O14 | `POST /api/v1/operator/billing/provider-certifications` | Record a certification run produced by `cmd/certify` (§14.7) | `billing.provider.certified` (requested), `platform_tenant` |
 | B-O15 | `POST /api/v1/operator/billing/provider-certifications/:id/revoke` | Revoke a certification (provider stops taking new accounts) | `billing.provider.certification_revoked` (requested), `platform_tenant` |
+| B-O16 | `POST /api/v1/operator/tenants/:id/invoices/:invoice_id/disposition` | Finalise or void a draft held during a collection pause (CD-24, §8.10); mandatory reason | `billing.invoice.suspension_disposition` (requested, BL-OQ-25) |
 
 ---
 ### 5.4 Endpoint specifications
@@ -1963,7 +1978,7 @@ Preconditions: subscription `active`/`past_due` with `converted_at` ≤ 7 days a
 
 ##### (B-O10) `PUT /api/v1/operator/tenants/:id/collection-pause`
 
-`{ "paused": true, "reason": "…" }` → `PauseCollection`; `collection_paused_by = operator` (an operator override is never undone automatically by `TenantReactivated`). `200 SubscriptionView`.
+`{ "paused": true, "reason": "…" }` → `PauseCollection`; `collection_paused_by = operator` (an operator override is never undone automatically by `TenantReactivated`). `{ "paused": false, "reason": "…" }` → resume or continue billing, including during an operator suspension (`collection_paused = false`, `collection_paused_by = NULL`). `reason` is **mandatory**, 10–1000 characters (`422 VALIDATION_ERROR`). AL-5 `billing.collection.paused` records the direction, actor and reason. Drafts already held stay held for B-O16. `200 SubscriptionView`. `409 OPTIMISTIC_LOCK_CONFLICT` on a concurrent change (§8.10, BL-OQ-1).
 
 ##### (B-O11) `POST /api/v1/operator/billing/plan-prices` and (B-O12) `POST /api/v1/operator/billing/token-packs`
 
@@ -2021,6 +2036,26 @@ Preconditions: subscription `active`/`past_due` with `converted_at` ≤ 7 days a
 ##### (B-O15) `POST /api/v1/operator/billing/provider-certifications/:id/revoke`
 
 `{ "reason": "Stripe API version change shipped in 1.0.1 without a run" }` → `status = revoked`, `revoked_at`, `revoked_by`, `revoked_reason`; `200` with the record. The provider stops taking new accounts within `PROVIDER_REGISTRY_REFRESH`; existing accounts keep working (`BIL-PROV-2`). `404 CERTIFICATION_NOT_FOUND`; `409 CERTIFICATION_NOT_ACTIVE` if not `passed`. Revoking the `manual` `exempt` record is refused (`409`).
+
+##### (B-O16) `POST /api/v1/operator/tenants/:id/invoices/:invoice_id/disposition`
+
+Operator decision on a draft invoice held during a collection pause (CD-24, §8.10, `BIL-SUB-7`).
+
+```jsonc
+// Request (Idempotency-Key required)
+{ "action": "finalize", "reason": "Abuse confirmed by T&S case 4411; customer liable for the period" }   // finalize | void
+// 200
+{ "invoice_id": "…", "status": "open", "disposition": "finalize", "disposed_by": "…", "disposed_at": "2026-12-03T09:12:00Z" }
+```
+
+| Check | Error |
+|---|---|
+| Invoice belongs to tenant `:id` | `404 INVOICE_NOT_FOUND` |
+| `held_for_review = true`, `status = 'draft'`, no `disposition` yet | `409 INVOICE_NOT_HELD` (already decided, or not held) |
+| `reason` 10–1000 characters; `action` `finalize` \| `void` | `422 VALIDATION_ERROR` |
+| `finalize` only when collection is not paused (tenant reactivated, or B-O10 "continue billing") | `409 COLLECTION_PAUSED` |
+
+Effect: `finalize` → `FinalizeInvoice`; the provider then collects it automatically like any open invoice, and a failure follows normal dunning (§8.8.1). `void` → `VoidInvoice`; nothing is owed. Commit: `disposition`, `disposition_reason`, `disposed_by` (`x-user-id`), `disposed_at`; AL-5 `billing.invoice.suspension_disposition` (requested, BL-OQ-25) with action, amount and reason. The invoice mirror's status then follows the provider callback. `void` is allowed while collection is still paused.
 
 ### 5.5 Status codes
 
@@ -2759,17 +2794,28 @@ Triggers: dunning exhausted; a customer cancellation (B-P12) reaching period end
 
 Keeping `billing_subscription_id` stable keeps RP's and Core's references valid. Core restores `active` and clears `cancelled_at` and `suspension_source` (no-op if offboarded, PAID-1); AuthZ evicts; RP re-enables a suspended realm from `billing-realm-q`; Entitlements returns to `active`; Workflow resumes (W-1). **Billing never calls RP-10** (`403` by CD-19; HLD §8.9).
 
-### 8.10 Operator suspension observed on `tenant-billing-q` (CD-24 — proposed)
+### 8.10 Operator suspension observed on `tenant-billing-q` (CD-24)
 
-**Proposal for sign-off (BL-OQ-1).**
+**Finance approved (BL-OQ-1, 2026-11-23), rules 1 to 4, with `AUTO_PAUSE_ON_OPERATOR_SUSPENSION=true`.** An operator suspension (abuse, security incident, legal hold, sanctions review, regulatory investigation) is an exceptional investigation state, not non-payment. Billing preserves the status quo until an operator decides how the period is billed.
 
-1. `TenantSuspended {source: operator}` → `iam_lifecycle = suspended`, `iam_suspension_source = operator`; if `AUTO_PAUSE_ON_OPERATOR_SUSPENSION` (default `true`): `PauseCollection(true)` — Stripe `pause_collection.behavior = keep_as_draft` (renewal invoices are created as drafts and not charged); `collection_paused = true`, `collection_paused_by = auto`; AL-5 entry.
-2. While paused: no seat or add-on purchase, no plan change (`409 COLLECTION_PAUSED`); no dunning events (no charge is attempted).
-3. `TenantReactivated {source: operator}` → `iam_lifecycle = active`; if `collection_paused_by = auto` → `PauseCollection(false)`. Draft invoices created during the pause stay drafts for an operator to finalise or void (an operator suspension is usually abuse, security or legal hold, so billing that time is a manual decision).
-4. **B-O10** overrides either way with a reason; an operator pause is never undone automatically.
-5. A `billing_lapse` suspension needs no pause: the subscription is already `cancelled`.
+> **Scope of a pause.** Operator suspension pauses collection activity but does not terminate the subscription, alter entitlements, cancel the contract, or waive amounts that were already due before the suspension.
 
-Finance confirms this or chooses "bill as normal" (then step 1 only records the lifecycle).
+1. **Pause on suspension (rule 1, rule 4).** `TenantSuspended {source: operator}` → `iam_lifecycle = suspended`, `iam_suspension_source = operator`. If `AUTO_PAUSE_ON_OPERATOR_SUSPENSION` (default `true`), `PauseCollection(true)` in the same handler:
+   - **New invoices:** Stripe `pause_collection.behavior = keep_as_draft`. Renewal invoices are still created, but as drafts that are never charged. Billing mirrors each one with `held_for_review = true`.
+   - **Invoices already open** (for example a `past_due` renewal): stay open and owed, but automatic retries stop (Stripe `auto_advance = false` on each open invoice). The dunning clock is frozen, so a suspension never leads to `cancelled` through dunning.
+   - Commit: `collection_paused = true`, `collection_paused_by = auto`; AL-5 `billing.collection.paused`; subscription status unchanged (an `active` subscription stays `active`, a `past_due` one stays `past_due`).
+2. **While paused (`BIL-SUB-7`).** No automated charge and no dunning transition. Tenant routes that would create a charge or change what is billed answer `409 COLLECTION_PAUSED`: seat purchase (B-P7), seat reduction schedule and its cancellation (B-P10, B-P11), plan change and its cancellation (B-P4, B-P5), token add-on purchase (B-P20), reactivation (B-P14). Read routes keep working. Entitlements and licensed seats are unchanged.
+3. **Reactivation (rule 2).** `TenantReactivated {source: operator}` → `iam_lifecycle = active`. If `collection_paused_by = auto` → `PauseCollection(false)`: new invoices are charged normally again and automatic retries restart on invoices that were open before the suspension (normal dunning resumes from where it stopped). **Drafts held during the pause are not finalised or collected automatically.** Each one waits for an operator decision through **B-O16**: `finalize` (charge it) or `void`, with a mandatory reason. Alert `BillingSuspensionDraftsAwaitingDecision` fires while any held draft has no decision 24 h after reactivation.
+
+   | Suspension outcome | Typical B-O16 decision |
+   |---|---|
+   | Customer responsible for abuse | `finalize` and collect |
+   | False-positive investigation | `void` |
+   | Legal hold | Human review; decide case by case |
+   | Security compromise | Case by case |
+
+4. **Operator override (rule 3, B-O10).** An operator may pause or continue billing at any time with a mandatory reason, for example a contractual obligation to keep billing, a legal preservation requirement, enterprise terms, or a fraud investigation where service stays reserved. `paused: false` during a suspension means "continue billing" and clears the automatic pause. An operator pause (`collection_paused_by = operator`) is never undone automatically, including by `TenantReactivated`. Every override writes AL-5 `billing.collection.paused` with the reason.
+5. A `billing_lapse` suspension needs no pause: the subscription is already `cancelled` (§8.8.3).
 
 ### 8.11 Operator adjustments, refunds and manual add-on corrections
 
@@ -3112,6 +3158,8 @@ Three tiers (IAM Platform Observability Standard, HLD §12.2); const labels `dom
 | `commercial_billing_unmatched_conversions_total` | Counter | — | `TenantConverted` with no saga |
 | `commercial_billing_reconciliation_findings` | Gauge | `kind`, `repaired` | Last run |
 | `commercial_billing_collection_paused` | Gauge | `by` | CD-24 |
+| `commercial_billing_invoices_held_for_review` | Gauge | `currency` | Drafts held during a collection pause with no B-O16 decision yet (§8.10) |
+| `commercial_billing_invoice_dispositions_total` | Counter | `action` (`finalize`\|`void`) | B-O16 decisions |
 | `commercial_billing_scheduled_emissions_pending` | Gauge | `builder` | `BIL-EVT-6` queue |
 | `commercial_billing_provider_certified` | Gauge | `provider`, `adapter_version` | 1 if the loaded adapter version has a valid record (`BIL-PROV-1`), 0 otherwise; refreshed with the registry |
 
@@ -3171,6 +3219,7 @@ Rules in `deploy/monitoring/app-alerts.yml`, routed by Grafana OnCall to **Billi
 | `BillingDLQNotEmpty` | `platform_dlq_depth{queue=~"tenant-billing-q-dlq\|usage-billing-q-dlq"} > 0` | SEV-3 (HLD §12.4) |
 | `BillingI18Unavailable` | I-18 `503` for > 10 min | SEV-3 (HLD §12.4) |
 | `BillingReversalDecisionNeeded` | dispute / EFW within the revert window | SEV-2 |
+| `BillingSuspensionDraftsAwaitingDecision` | a held draft (`held_for_review`, no `disposition`) on a tenant reactivated more than 24 h ago | SEV-3 (Finance / operator queue, §8.10) |
 | `BillingReconciliationDrift` | unrepaired findings > 0 for 24 h | SEV-3 |
 | `BillingSeatProjectionDrift` | same tenant mismatched twice in 24 h | SEV-3 |
 | `BillingProviderUnavailable` | `platform_dependency_request_seconds{dependency="stripe",outcome="error"}` ratio > 50% for 5 min | SEV-2 |
@@ -3237,7 +3286,7 @@ Values from `deploy/helm/values.yaml` (`env:`) and OpenBao (`secretValues:` via 
 | `EMISSION_POLL_INTERVAL` | `5s` | 1–30 s | `scheduled_emissions` worker |
 | `PRORATION_BELOW_MINIMUM` | `free_until_renewal` | `free_until_renewal`\|`charge_minimum` | §8.5.3 (BL-OQ-6, Finance approved `free_until_renewal`; change only with Finance) |
 | `MIN_CHARGE_MINOR` | `200` (per currency map) | ≥ 0 | Provider minimum |
-| `AUTO_PAUSE_ON_OPERATOR_SUSPENSION` | `true` | bool | CD-24 proposal (§8.10) |
+| `AUTO_PAUSE_ON_OPERATOR_SUSPENSION` | `true` | bool | CD-24 (§8.10); Finance approved `true` (BL-OQ-1); change only with Finance |
 | `AUTO_REVERT_ON_EFW` | `false` | bool | CD-10 proposal (§8.2) |
 | `REVIEW_THRESHOLD_MINOR` | `100000` | ≥ 0 | HLD §11.6 review trigger |
 | `IDEMPOTENCY_TTL_HOURS` | `72` | 24–168 | §9.2 |
@@ -3272,7 +3321,7 @@ Namespace `billing`; ServiceAccount and `app.kubernetes.io/name` `commercial-bil
 | `PodDisruptionBudget` | `minAvailable: 1` |
 | `Job` `<release>-migrate` | Helm pre-install / pre-upgrade hook, `cmd/migrate`, `activeDeadlineSeconds: 900` |
 | `HTTPRoute` (tenant) | `PathPrefix /api/v1/tenants/` with path match `…/subscription*`, `…/payment-methods*`, `…/invoices*`, `…/token-packs`, `…/token-addons*`, `…/billing-contact` → 8080; `SecurityPolicy` JWT + `ext_authz`, CORS for `TENANT_APP_BASE_URL`, rate limit 20 rps per tenant |
-| `HTTPRoute` (operator) | `PathPrefix /api/v1/operator/` scoped to Billing's paths; platform-realm `jwt_authn` provider (platform-edge, AuthZ LLD OP-G2). Path matches list every Billing operator route, B-O1 to B-O15 (§5.3); a route missing here is not reachable through the gateway (BL-OQ-9) |
+| `HTTPRoute` (operator) | `PathPrefix /api/v1/operator/` scoped to Billing's paths; platform-realm `jwt_authn` provider (platform-edge, AuthZ LLD OP-G2). Path matches list every Billing operator route, B-O1 to B-O16 (§5.3); a route missing here is not reachable through the gateway (BL-OQ-9) |
 | `HTTPRoute` (webhook) | Exact `/api/v1/webhooks/stripe`; no JWT; `ext_authz` disabled; 50 rps |
 | `NetworkPolicy` | §10.2 |
 | Istio `AuthorizationPolicy` | B-I1 from `bff/bff-signup` only; tenant and operator routes from the gateway only |
@@ -3350,7 +3399,7 @@ Postgres 16 with the real migrations and RLS; **stripe-mock** for the adapter; *
 | Renewal with reduction and top-up | Final seats = in use; event `renewal` |
 | Downgrade blocked at recheck | Schedule released; request `blocked` |
 | Offboarding with an open purchase | Purchase `cancelled`; invoice voided; account closed |
-| Operator suspension | Collection paused automatically; resumed on operator reactivation; operator override persists |
+| Operator suspension | Collection paused automatically (new invoices held as drafts, retries on open invoices stopped, nothing waived); resumed on operator reactivation; held drafts wait for B-O16; operator override persists |
 | Seat projection drift | Resync event emitted with fresh `time` |
 
 ### 14.3 Contract tests
@@ -3365,7 +3414,7 @@ Postgres 16 with the real migrations and RLS; **stripe-mock** for the adapter; *
 
 ### 14.4 E2E (staging)
 
-Stripe test mode with **Test Clocks**: monthly and annual renewal; failed renewal → `past_due` → retries → `cancelled`; reactivation from `past_due` and from `cancelled`; scheduled downgrade with I-18 re-check; reduction across a renewal; token add-on with 3-D Secure test cards. CD-19 smoke: Billing calls each admitted route as `commercial-system` and expects `403` on RP-10 and RP-14. Operator paths once OP-G1 to OP-G3 are done: the joint end-to-end test OP-G4 (IAM + Commercial) covers B-O1 to B-O15.
+Stripe test mode with **Test Clocks**: monthly and annual renewal; failed renewal → `past_due` → retries → `cancelled`; operator suspension across a renewal (draft held, no charge, open `past_due` invoice stops retrying and never cancels) → reactivation (retries resume, held draft not finalised) → B-O16 `finalize` and `void`; reactivation from `past_due` and from `cancelled`; scheduled downgrade with I-18 re-check; reduction across a renewal; token add-on with 3-D Secure test cards. CD-19 smoke: Billing calls each admitted route as `commercial-system` and expects `403` on RP-10 and RP-14. Operator paths once OP-G1 to OP-G3 are done: the joint end-to-end test OP-G4 (IAM + Commercial) covers B-O1 to B-O15.
 
 ### 14.5 RLS test cases
 
@@ -3450,7 +3499,8 @@ Each item names the default the design runs with until it closes.
 
 | # | Question / decision | HLD ref | Owner | Default until closed | Status |
 |---|---|---|---|---|---|
-| BL-OQ-1 | **CD-24 — invoicing during an operator suspension.** Proposal §8.10: pause collection automatically (`keep_as_draft`), resume on operator reactivation, drafts decided by an operator; B-O10 override | CD-24 | Finance + Billing | Proposal on (`AUTO_PAUSE_ON_OPERATOR_SUSPENSION=true`) | Proposed |
+| BL-OQ-1 | **CD-24 — invoicing during an operator suspension.** Proposal §8.10: pause collection automatically (`keep_as_draft`), resume on operator reactivation, drafts decided by an operator; B-O10 override | CD-24 | Finance + Billing | Proposal on (`AUTO_PAUSE_ON_OPERATOR_SUSPENSION=true`) | **Closed** (Finance, 2026-11-23): rules 1 to 4 approved, default `true`. Added: scope sentence (no termination, entitlement change or waiver); retries on already-open invoices stopped while paused; mandatory reason on B-O10; new B-O16 for the operator's finalise/void decision on held drafts (`BIL-SUB-7`). IAM follow-up BL-OQ-25 |
+| BL-OQ-25 | **IAM for B-O16** (from BL-OQ-1): (a) AuthZ Enrichment adds B-O16 `POST /api/v1/operator/tenants/:id/invoices/:invoice_id/disposition` to the OP-G4 test list (tenant in path); (b) Audit Log adds AL-5 entry type `billing.invoice.suspension_disposition` (`security_3y`). Billing's operator `HTTPRoute` lists B-O16 | §11.4, §11.6 | IAM (AuthZ Enrichment, Audit Log); Billing (`HTTPRoute`) | Until (b) ships, AL-5 entries stay in `pending_audit_entries` (as BL-OQ-10); B-O16 reachable only once the operator path is live (BL-OQ-14) | Open (go-live gate, not a design blocker) |
 | BL-OQ-2 | **EVT-14 and Billing's events (blocking for direct-signup and conversion go-live).** Core's recency guard runs on `TenantSeatsChanged` too, so a newer Billing seat event applied before an in-flight `TenantConverted` makes Core skip the conversion. Ask: give `licensed_seats` its own recency mark, or do not let `TenantSeatsChanged` advance `tenants.last_event_at`. Also confirm Core's tie rule (`time ==` → skip?) | §9.3, §7.5 | IAM (Core) | `BIL-EVT-5`, `BIL-EVT-6` (120 s delay), `seat-projection-check` | **Closed** (Core, 2026-11-19): `TenantSeatsChanged` has its own watermark `tenants.seats_last_event_at` (migration `000010_seats_last_event_at`); EVT-14 split by event type, so a seat event no longer advances `last_event_at`; tie rule `time ==` → skip confirmed; regression test `TestConsumerEVT14_SeatsChangedDoesNotBlockLifecycle`. `BIL-EVT-5/6` and `seat-projection-check` stay as defence in depth |
 | BL-OQ-3 | **Billing as an Entitlements caller** for `BIL-ADD-1` (finite token quota). Entitlements admits `billing` / `commercial-billing` on `GET /api/v1/internal/tenants/:id/entitlements` (NetworkPolicy + mTLS). Alternative: an `addon_eligible` field in the effective set | §5.2, §8.6.2 | Entitlements LLD | Purchase fails closed (`503`) if not admitted | **Decided** (TL, 2026-11-19): generic `addon_eligible` rejected; Entitlements exposes resource-level eligibility (`llm_tokens`, `api_requests`) on the effective set; Billing → Entitlements **read-only** access approved (`GET /api/v1/internal/tenants/:id/entitlements` only, NetworkPolicy + mTLS for `cluster.local/ns/billing/sa/commercial-billing`). Entitlements to implement |
 | BL-OQ-4 | **`purchased_at` on `TenantQuotaAddOnChanged`** (additive) as the 12-month expiry basis | §8.6.2, §9.4 | Entitlements LLD, Audit | Field emitted; envelope `time` equals it | **Decided** (TL, 2026-11-19): Billing is the only publisher of `TenantQuotaAddOnChanged` on `billing.events`; `purchased_at` stays Billing's (payment confirmation). Entitlements withdraws its `tenant_quota_add_on_changed` |
@@ -3516,7 +3566,7 @@ Each item names the default the design runs with until it closes.
 | §3.4 seat-purchase SLO "confirmed in the Billing LLD" | Confirmed ≤ 60 s; Billing share ≤ 5 s p99 (§11.1) |
 | §3.4 webhook-to-conversion 30-minute threshold "Billing LLD" | `BIL-OPS-5`, §8.1.2 |
 | §5.1 / §9.4 `BillingPeriodRolled` | Not emitted |
-| §5.1 invoicing during operator suspension (CD-24) | Proposal (BL-OQ-1) |
+| §5.1 invoicing during operator suspension (CD-24) | Decided: §8.10, B-O10, B-O16 (Finance approved, BL-OQ-1) |
 | §6.6 permission mapping | §5.2 (BIZ-6 to confirm) |
 | §8.4 downgrade timing | Period end |
 | §8.5.1 adapter rounding and day-count | §8.5.3 (Finance approved, BL-OQ-6) |
@@ -3567,7 +3617,8 @@ The `type` base comes from the platform type registry. Extension members are lis
 | 409 | `SUBSCRIPTION_NOT_LAPSED` | Reactivate on an `active` subscription | None | B-P14 |
 | 409 | `SUBSCRIPTION_ENDING` | Reduction requested while auto-renew is off | Resume first (B-P13) | B-P10 |
 | 409 | `ACCOUNT_CLOSED` | Offboarded tenant | New signup | all mutations |
-| 409 | `COLLECTION_PAUSED` | Operator suspension pause (CD-24) | Contact support | purchases, plan change, reactivate |
+| 409 | `COLLECTION_PAUSED` | Collection paused (CD-24) | Contact support | B-P4, B-P5, B-P7, B-P10, B-P11, B-P14, B-P20; B-O16 `finalize` |
+| 409 | `INVOICE_NOT_HELD` | Invoice not held for review, or already decided | Refresh | B-O16 |
 | 409 | `PLAN_CHANGE_BLOCKED` | I-18 blockers; ext. `blockers[]` | Remove SSO / move users to local accounts | B-P4 |
 | 409 | `PLAN_CHANGE_PENDING` | Another change open | Wait or cancel it (B-P5) | B-P4 |
 | 409 | `SAME_PLAN` | Target equals current | None | B-P3, B-P4 |
@@ -3682,7 +3733,8 @@ B-I1 only (§5.4.2). **Go-live order** (HLD §10.6, SGN-2): (1) SRE-3 deploys Co
 | Downgrade / renewal quantity | Subscription Schedule from the subscription, phase starting at `current_period_end` |
 | Cancel at period end / resume | `cancel_at_period_end` |
 | Offboarding / reversal | `subscriptions.cancel` (`prorate=false`, `invoice_now=false`) |
-| Operator suspension | `pause_collection {behavior: keep_as_draft}` |
+| Operator suspension | `pause_collection {behavior: keep_as_draft}`; `auto_advance = false` on each already-open invoice (restored on resume) |
+| Held-draft decision (B-O16) | `invoices.finalize_invoice` (then `auto_advance = true`) or `invoices.void_invoice` |
 | Token add-on | Invoice item + Invoice (`collection_method=charge_automatically`, `auto_advance=true`), pay off-session |
 | Adjustment | Customer balance transaction |
 | Refund | Refund on the invoice's charge |

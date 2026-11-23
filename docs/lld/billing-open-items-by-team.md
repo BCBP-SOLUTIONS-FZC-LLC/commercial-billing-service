@@ -1,6 +1,6 @@
 # Billing Service — Open Items by Team
 
-Source: `commercial-lld-billing-service.md` rev 0.14 (2026-11-23; base HLD v0.64), updated with the team responses, the Commercial TL decisions and the AI team reply (draft) of 2026-11-19 (`billing-open-items-team-response.md` and `billing-reply-ai-team.md`, not yet in this repository), §16.1 register, §16.2 discrepancies, platform/SRE dependencies, and the ENT-D3 / ENT-D6 product memos. Item IDs match the LLD. **Deployment state:** no service is in production; every service, Billing included, runs in dev only. "Deploy" items below are environment-promotion steps, not production fixes. Where several teams share an item, it is listed under each, with the lead team first.
+Source: `commercial-lld-billing-service.md` rev 0.16 (2026-11-23; base HLD v0.64), updated with the team responses, the Commercial TL decisions and the AI team reply (draft) of 2026-11-19 (`billing-open-items-team-response.md` and `billing-reply-ai-team.md`, not yet in this repository), §16.1 register, §16.2 discrepancies, platform/SRE dependencies, and the ENT-D3 / ENT-D6 product memos. Item IDs match the LLD. **Deployment state:** no service is in production; every service, Billing included, runs in dev only. "Deploy" items below are environment-promotion steps, not production fixes. Where several teams share an item, it is listed under each, with the lead team first.
 
 **Status key:** **Decided** = TL decision made; owning team to implement · **Conflict** = a team answered, but the answer contradicts the HLD or Billing's need · **Open** = needs an answer · **Proposed** = Billing has a proposal; needs sign-off · **External** = depends on another team's delivery · **Deferred** = later phase.
 
@@ -10,9 +10,9 @@ Source: `commercial-lld-billing-service.md` rev 0.14 (2026-11-23; base HLD v0.64
 |---|---|---|
 | IAM — Core (Org & Membership) | SRE-3 (code ready; ships with Core's environment promotion) | SRE-3 (direct signup). BL-OQ-2, D-3, D-4, SRE-6 closed |
 | IAM — Audit Log | BL-OQ-23 (SRE-8 filter, refund entry type) | Token add-on refund audit |
-| IAM — Operator path / platform-edge | BL-OQ-9 (b) OP-G4 coverage; BL-OQ-14; OP-G1, OP-G3, OP-G6 (IAM); **OP-G2 (Platform edge)** | Every operator route `403` until OP-G1 to OP-G3; OP-G2 is the external blocker |
+| IAM — Operator path / platform-edge | BL-OQ-9 (b) OP-G4 coverage; BL-OQ-14; BL-OQ-25 (B-O16 test + Audit type); OP-G1, OP-G3, OP-G6 (IAM); **OP-G2 (Platform edge)** | Every operator route `403` until OP-G1 to OP-G3; OP-G2 is the external blocker |
 | Entitlements | BL-OQ-3, BL-OQ-4, BL-OQ-20, read-only access (all **decided**, to implement) | BL-OQ-3 (add-on purchase needs per-resource eligibility and access) |
-| Finance | BL-OQ-1, 5, 6, 7, 11, 13, 15, 16, 17, 22; PD-LLM-1 R-3; ENT-D6 budgets | BL-OQ-5 (launch currency), BL-OQ-22 (final prices) |
+| Finance | BL-OQ-5, 7, 11, 13, 15, 16, 17, 22; PD-LLM-1 R-3; ENT-D6 budgets | BL-OQ-5 (launch currency), BL-OQ-22 (final prices) |
 | Product | BL-OQ-16, 18, 22; PD-LLM-1 and ENT-D6 approval; **PD-LLM-1 R-4 (Opus tier)**; R-1 model list; R-2 evaluation set and pass bar | BL-OQ-18 (token add-ons have no packs) |
 | Legal | BL-OQ-11, BL-OQ-17 | BL-OQ-17 (UAE Stripe account) |
 | Security | BL-OQ-7 | — |
@@ -56,6 +56,7 @@ All Core-owned items closed on 2026-11-19.
 |---|---|---|---|
 | BL-OQ-9 | (a) **Billing:** its operator `HTTPRoute` lists every operator path, B-O1 to B-O15 (Billing chart, LLD §13.1). (b) **IAM:** OP-G4 covers only B-O1 to B-O5 (Commercial's 28 Oct list); extend it to B-O6 to B-O15 | `403` until OP-G1 to OP-G3 are done (the path is off, not a missing route) | **Approved; IAM part merged** ([iam-authz-enrichment#43](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-authz-enrichment/pull/43)). Remaining: Billing's `HTTPRoute` lists B-O1–B-O15 |
 | BL-OQ-14 | **CD-52:** Billing's operator routes work only after OP-G1 to OP-G3, then the joint OP-G4 run per environment. Expected denials (IAM HLD §5.4): no `platform_operator` → `403 DENY_ROLE_INSUFFICIENT`; tenant token on an operator route → `403`; malformed tenant in the path → **`401` `DENY_MALFORMED_IDENTITY`** | Operator routes `403 INSUFFICIENT_ROLE` outside dev/test (`BIL-AUTH-6`); no Billing bypass | Open (external) — waits on OP-G2 (Platform edge) and OP-G6 date |
+| BL-OQ-25 | **New (from BL-OQ-1, 2026-11-23).** (a) AuthZ Enrichment: add B-O16 `POST /api/v1/operator/tenants/:id/invoices/:invoice_id/disposition` (tenant in path) to the OP-G4 test list. (b) Audit Log: new AL-5 entry type `billing.invoice.suspension_disposition` (`security_3y`). Billing adds B-O16 to its operator `HTTPRoute` | AL-5 entries wait in `pending_audit_entries`; route `403` until the operator path is live | Open (go-live gate) |
 
 ## Entitlements
 
@@ -83,7 +84,7 @@ All Core-owned items closed on 2026-11-19.
 | BL-OQ-5 | **Launch currency.** HLD lists USD; the capability bar needs AED. One currency per market? Both in Phase 1? | `DEFAULT_CURRENCY=USD`; AED rows via B-O11 | **Open — blocking** price book |
 | BL-OQ-22 | **Final prices wait on token-budget validation** (PD-LLM-1 R-3: 500K / 5M / 25M quotas vs tier model cost; ENT-D6 trial budgets). Then set `plan_prices` and `token_packs` (with Product) | Phase 1 seed; `token_packs` empty → `ADDON_NOT_AVAILABLE` | Open |
 | BL-OQ-6 | Proration rule without a provider engine; behaviour below the minimum charge; renewal top-up kept on payment failure | Seconds-based, half-up; `free_until_renewal`; top-up kept | **Closed** (Finance approved 2026-11-23; LLD rev 0.15) |
-| BL-OQ-1 | **CD-24:** invoicing during operator suspension — auto-pause collection (`keep_as_draft`), resume on reactivation, operator decides drafts (with Billing) | `AUTO_PAUSE_ON_OPERATOR_SUSPENSION=true` | Proposed |
+| BL-OQ-1 | **CD-24:** invoicing during operator suspension — auto-pause collection (`keep_as_draft`), resume on reactivation, operator decides drafts (with Billing) | `AUTO_PAUSE_ON_OPERATOR_SUSPENSION=true` | **Closed** (Finance approved 2026-11-23; LLD rev 0.16; follow-up BL-OQ-25) |
 | BL-OQ-7 | **CD-10:** conversion reversal on a fraud dispute or early fraud warning within 7 days, operator-approved (with Billing, Security) | Operator-approved; `AUTO_REVERT_ON_EFW=false` | Proposed |
 | BL-OQ-11 | **CD-14:** financial-record retention per jurisdiction; also sets Workflow history retention (with Legal, Billing) | No financial deletion job | Open |
 | BL-OQ-13 | **BIZ-6:** approve the six billing permissions (two added by the LLD) (with Billing) | §5.2 as written | Proposed |
