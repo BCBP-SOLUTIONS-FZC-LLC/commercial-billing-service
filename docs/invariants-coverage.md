@@ -57,24 +57,24 @@ Status: **pending** = not implemented yet · **partial** = enforced, test missin
 | `BIL-PROV-1` | §4.6 | A provider is enabled for new billing accounts only if a `passed` (or, for `manual`, `exempt`) `provider_certifications` row exists for its … | — | — | pending |
 | `BIL-PROV-2` | §4.6 | Changing the adapter version or the pinned provider API version requires a new certification run; until it passes, the provider takes no new … | — | — | pending |
 | `BIL-PROV-3` | §4.6 | A provider certified with `proration_mode = fallback` always uses Billing's calculator for previews and charges (§8.5.3); one certified `native` … | — | — | pending |
-| `BIL-PROV-4` | §4.6 | A certification becomes `passed` only through B-O17, by a caller holding `pci_owner_reviewer` who did not submit the run (`chk_pc_two_people`, … | — | — | pending |
-| `BIL-RLS-1` | §4.3 | Every tenant-scoped table has `ENABLE` + `FORCE ROW LEVEL SECURITY` and the `tenant_isolation` policy; a CI test lists `pg_class` and fails on any … | — | — | pending |
-| `BIL-RLS-2` | §4.3 | `app.tenant_id` is bound transaction-locally on every app-pool checkout (`set_config(…, true)`), never session-wide. | — | — | pending |
+| `BIL-PROV-4` | §4.6 | A certification becomes `passed` only through B-O17, by a caller holding `pci_owner_reviewer` who did not submit the run (`chk_pc_two_people`, … | `trg_pc_guard`, `chk_pc_two_people`, `uq_pc_run` (000004); B-O17 route in Phase 5 | `TestBIL_PROV_4_CertificationGuard` | partial |
+| `BIL-RLS-1` | §4.3 | Every tenant-scoped table has `ENABLE` + `FORCE ROW LEVEL SECURITY` and the `tenant_isolation` policy; a CI test lists `pg_class` and fails on any … | §4.3 policies (000001, 000005) | `TestBIL_RLS_1_EveryTenantTableForcesRLS`, `TestRLSIsolationEveryTable`, `TestRLSWithCheck` | done |
+| `BIL-RLS-2` | §4.3 | `app.tenant_id` is bound transaction-locally on every app-pool checkout (`set_config(…, true)`), never session-wide. | app pool `GUCProvider = pgcommon.GUCSetFromContext` (transaction-local) | `TestRLSIsolationEveryTable` | partial |
 | `BIL-RLS-3` | §4.3 | `billing_system` is used only by the paths listed above; handlers for tenant routes have no access to the sysPool (constructor injection). | — | — | pending |
 | `BIL-SAGA-1` | §8.1.1 | RP-3 is called only after payment is confirmed server-side — a verified callback re-read from the provider, or a provider API response — never on … | — | — | pending |
 | `BIL-SAGA-2` | §4.6 | One saga per `billing_subscription_id`; RP-3 is always called with `Idempotency-Key: convert:<tenant_id>:<billing_subscription_id>`. | `internal/domain/saga.go` `RP3IdempotencyKey` | `TestBIL_SAGA_2_RP3Key` | partial |
-| `BIL-SEAT-1` | §4.6 | One open seat purchase per subscription (`uq_sp_one_open`). | — | — | pending |
-| `BIL-SEAT-2` | §4.6 | One open seat change schedule per subscription (`uq_scs_one_open`). | — | — | pending |
+| `BIL-SEAT-1` | §4.6 | One open seat purchase per subscription (`uq_sp_one_open`). | `uq_sp_one_open` (000001) | `TestBIL_SEAT_1_and_2_OneOpen` | done |
+| `BIL-SEAT-2` | §4.6 | One open seat change schedule per subscription (`uq_scs_one_open`). | `uq_scs_one_open` (000001) | `TestBIL_SEAT_1_and_2_OneOpen` | done |
 | `BIL-SEAT-3` | §4.6 | `renewal_seats = max(target_seats, seats_in_use)`; after the renewal top-up check the licensed count is never below I-11's `active_users + … | `internal/domain/seats.go` `RenewalSeatCount`, `RenewalTopUp` | `TestBIL_SEAT_3_RenewalSeats` | partial |
 | `BIL-SEAT-4` | §4.6 | A seat change schedule never changes `licensed_seats` before the renewal and never blocks a purchase or a member addition (HLD §8.5.1 step 2). | — | — | pending |
-| `BIL-SEAT-5` | §4.6 | A seat purchase priced by Billing's fallback calculator stores its inputs, the unrounded amount and the rounded `amount_minor` … | `internal/domain/proration.go` `Prorate` | `TestBIL_SEAT_5_ProrationGoldenTable` | partial |
+| `BIL-SEAT-5` | §4.6 | A seat purchase priced by Billing's fallback calculator stores its inputs, the unrounded amount and the rounded `amount_minor` … | `internal/domain/proration.go`; `chk_sp_calc_inputs`, `chk_sp_deferral` (000001) | `TestBIL_SEAT_5_ProrationGoldenTable`, `TestBIL_SEAT_5_StoredCalculation` | partial |
 | `BIL-SUB-1` | §2.3 | Billing never emits an event that sets `suspended`, `trial_expired` or `offboarded`; those are IAM's. | — | — | pending |
 | `BIL-SUB-2` | §2.3 | `offboarded` is terminal (Core PAID-1). Billing closes the account; a returning customer is a new tenant with a new account and a new … | — | — | pending |
-| `BIL-SUB-3` | §4.6 | At most one non-`ended` subscription per tenant (`uq_sub_one_live`). | — | — | pending |
+| `BIL-SUB-3` | §4.6 | At most one non-`ended` subscription per tenant (`uq_sub_one_live`). | `uq_sub_one_live` (000001) | `TestBIL_SUB_3_OneLiveSubscription` | done |
 | `BIL-SUB-4` | §4.6 | Status moves only along the transition table in §8.14; a callback that would move it any other way is recorded `ignored` (`BIL-PAY-4`). | `internal/domain/subscription.go` transition table | `TestBIL_SUB_4_EveryStatusPair` | partial |
 | `BIL-SUB-5` | §4.6 | The seat item `quantity` changes only on a **confirmed** payment (conversion, purchase, top-up) or at a renewal applying a reduction; never on a … | — | — | pending |
-| `BIL-SUB-6` | §4.6 | An account's currency is fixed while it has a non-`ended` subscription. | — | — | pending |
-| `BIL-SUB-7` | §4.6 | While collection is paused (CD-24, §8.10) no payment is attempted: new invoices are held as drafts (`held_for_review`), automatic retries on … | — | — | pending |
+| `BIL-SUB-6` | §4.6 | An account's currency is fixed while it has a non-`ended` subscription. | `trg_prevent_currency_change` (000001) | `TestBIL_SUB_6_CurrencyFixed` | done |
+| `BIL-SUB-7` | §4.6 | While collection is paused (CD-24, §8.10) no payment is attempted: new invoices are held as drafts (`held_for_review`), automatic retries on … | `chk_inv_disposition` (000001); pause behaviour in Phase 6 | `TestBIL_SUB_7_InvoiceDisposition` | partial |
 | `BIL-SUB-8` | §4.6 | A live subscription's price changes only at a renewal or with a plan change the customer makes (BL-OQ-16, §8.16). At renewal `R` the seat item … | — | — | pending |
 
 Phase 1 marks the domain-rule invariants **partial**: the rule and its test exist in `internal/domain`, while the database constraint, app-layer enforcement or route check arrives in Phases 2 to 6.

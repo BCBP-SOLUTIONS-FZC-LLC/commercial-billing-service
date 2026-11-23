@@ -52,6 +52,7 @@ vet:
 .PHONY: lint
 lint:
 	$(GO) tool golangci-lint run ./...
+	$(GO) tool golangci-lint run --build-tags=integration ./...
 
 .PHONY: arch-lint
 arch-lint:
@@ -68,7 +69,7 @@ guards:
 test:
 	$(GO) test ./... -race -count=1 -timeout 180s
 
-# testcontainers-go Postgres, floci, stripe-mock (Phase 2 onwards).
+# testcontainers-go Postgres (Phase 2); floci and stripe-mock join in later phases.
 .PHONY: test-integration
 test-integration:
 	$(GO) test ./test/... -tags=integration -race -count=1 -timeout 900s

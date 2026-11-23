@@ -105,6 +105,18 @@ func run() int {
 		return 1
 	}
 
+	// Schema: in Kubernetes the migrate hook Job owns migrations and replicas
+	// run with RUN_MIGRATIONS=false (§12, §19.1); local runs may migrate here.
+	if cfg.RunMigrations {
+		migCtx, cancelMig := context.WithTimeout(context.Background(), cfg.MigrateTimeout)
+		err := pgadapter.MigrateSchema(migCtx, pgadapter.MigrationDSNFromEnv(), log)
+		cancelMig()
+		if err != nil {
+			log.Error("migrate at startup", map[string]any{"error": err.Error()})
+			return 1
+		}
+	}
+
 	// App pool: billing_app, RLS-bound, app.tenant_id GUC on every checkout.
 	appCfg, cfgWarnings := pgadapter.AppPoolConfig(log)
 	for _, w := range cfgWarnings {
