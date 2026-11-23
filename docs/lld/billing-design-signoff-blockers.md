@@ -2,8 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Document | `commercial-lld-billing-service.md` rev 0.17 (base HLD v0.64) |
-| Progress | **3 of 9 closed** — S-1, S-2 and S-3 approved by Finance 2026-11-23 |
+| Document | `commercial-lld-billing-service.md` rev 0.18 (base HLD v0.64) |
+| Progress | **4 of 9 closed** — S-1, S-2 and S-3 approved by Finance; S-4 approved by Finance and Security (all 2026-11-23) |
 | From | Commercial Team (Billing) |
 | Date | 2026-11-23 |
 | Purpose | Lists the decisions other teams must make before the Billing LLD can be **signed off as a design** |
@@ -28,7 +28,7 @@ The Billing LLD tracks three kinds of open item. Only the first kind is in this 
 | S-1 | Finance | BL-OQ-6 | How are mid-period seat purchases charged when the payment provider can't calculate proration? | ✅ **Approved 2026-11-23, unchanged**, with three record-keeping additions (see S-1). Applied in LLD rev 0.15 | — |
 | S-2 | Finance | BL-OQ-1 (CD-24) | Do we keep charging a tenant that an operator suspended? | ✅ **Approved 2026-11-23**, rules 1–4, auto-pause on. Adds new operator route B-O16 (see S-2). Applied in LLD rev 0.16 | — |
 | S-3 | Finance | BL-OQ-13 (BIZ-6) | Which roles can do which billing actions? | ✅ **Approved 2026-11-23, unchanged**, plus an overlap rule (see S-3). Applied in LLD rev 0.17 | — |
-| S-4 | Finance + Security | BL-OQ-7 (CD-10) | When is a trial-to-paid conversion reversed for fraud? | Fraud dispute or early fraud warning on the conversion payment within 7 days → SEV-2 → operator approves; never automatic | §8.2 flow, B-O8 and the alert change |
+| S-4 | Finance + Security | BL-OQ-7 (CD-10) | When is a trial-to-paid conversion reversed for fraud? | ✅ **Approved 2026-11-23 by Finance and Security, unchanged** (see S-4). Recorded in LLD rev 0.18 | — |
 | S-5 | Finance + Legal | BL-OQ-11 (CD-14) | How long must financial records be kept, per jurisdiction? | Keep everything; no financial deletion job; operational prunes only | Billing adds a retention/deletion job (new design work) |
 | S-6 | Product + Finance | BL-OQ-16 | When a price changes, when do existing subscribers pay it? | At their next renewal | Price rows need a grandfathering period; §4.2.2 / B-O11 change |
 | S-7 | PCI owner group | BL-OQ-21 + review | Who may mark a payment provider as certified? Plus PCI review of §4, §5.4.4, §10 | A Billing engineer submits, a PCI owner group member reviews; enforced in the database | `provider_certifications` constraint and B-O14 change |
@@ -143,6 +143,20 @@ Finance noted that the model gives complete coverage (every billing action maps 
 - **Finance:** approve the trigger, the 7-day window and the refund rule.
 - **Security:** approve SEV-2 severity and operator-only approval.
 
+**Decision: ✅ Approved by Finance and Security, 2026-11-23, with no changes.**
+
+| Team | Approved | Reason given |
+|---|---|---|
+| Finance | Trigger: dispute reason `fraudulent` or early fraud warning | The goal is to reverse fraudulent conversions, not ordinary commercial disputes ("product not received", "unsatisfactory", billing complaints), which are customer-service matters |
+| Finance | Conversion payment only | A dispute on a later renewal can never revert an established tenant |
+| Finance | 7-day window; runbook after that | Deterministic; the tenant is still close to its trial state, and operators never have to debate 30-, 60- or 90-day-old conversions |
+| Finance | Refund unless the dispute already returned the funds | No double reimbursement; Stripe stays the source of truth for chargeback outcomes |
+| Security | SEV-2 `BillingReversalDecisionNeeded` | Possible payment fraud, abuse and financial loss, but the platform keeps running, data is not necessarily compromised, and there is no platform-wide impact |
+| Security | Operator-only approval through B-O8 | Early fraud warnings can be wrong, and a reversal has several consequential effects (realm migration, cancellation, refund, audit) |
+| Security | `AUTO_REVERT_ON_EFW=false` in Phase 1 | Automatic handling of EFW-only cases may be considered later, once fraud and false-positive rates are measured |
+
+Nothing in the design changed. LLD rev 0.18 records the approval and reasons in §8.2 and closes BL-OQ-7 and CD-10.
+
 ### S-5 — Financial-record retention (BL-OQ-11, CD-14) — Finance + Legal
 
 **Background.** Invoices, refunds, adjustments, disputes and subscription history must be kept for a legal period that depends on jurisdiction (UAE first). The same answer sets how long Workflow history is kept (LLD §15.3).
@@ -231,8 +245,8 @@ Finance noted that the model gives complete coverage (every billing action maps 
 | S-1 | Finance | Finance | ✅ Approved, rules 1–3 unchanged; three record-keeping additions applied (LLD rev 0.15) | 2026-11-23 |
 | S-2 | Finance | Finance | ✅ Approved, rules 1–4, auto-pause `true`; B-O16 and retry freeze added (LLD rev 0.16) | 2026-11-23 |
 | S-3 | Finance | Finance | ✅ Approved unchanged; overlap rule and `BIL-AUTH-7` added (LLD rev 0.17) | 2026-11-23 |
-| S-4 | Finance | | | |
-| S-4 | Security | | | |
+| S-4 | Finance | Finance | ✅ Approved unchanged: trigger, conversion-payment scope, 7-day window, refund rule (LLD rev 0.18) | 2026-11-23 |
+| S-4 | Security | Security | ✅ Approved unchanged: SEV-2, operator-only B-O8, `AUTO_REVERT_ON_EFW=false` (LLD rev 0.18) | 2026-11-23 |
 | S-5 | Finance | | | |
 | S-5 | Legal | | | |
 | S-6 | Product | | | |

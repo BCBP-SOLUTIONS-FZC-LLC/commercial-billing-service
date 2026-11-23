@@ -7,7 +7,7 @@
 | Document type | Low-Level Design (LLD) |
 | Service | `commercial-billing` (Billing) |
 | Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing` |
-| Status | **Submitted for sign-off** (rev 0.17) — design stage; no code yet. Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
+| Status | **Submitted for sign-off** (rev 0.18) — design stage; no code yet. Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
 | Base HLD | Commercial Domain HLD **v0.64** (`hld-commercial-domain-v0.64.md`), the only HLD for the domain. Rebased from v0.51 in rev 0.14: v0.52 to v0.64 checked for Billing impact (§1.1, "HLD v0.52 to v0.64"); only v0.64 (`platform-audit`) changes Billing, already applied in rev 0.5. Parent: IAM HLD **v1.59** |
 | Supersedes | `hld-billing-service.md` v0.2 (draft Billing HLD, dropped in Commercial HLD v0.28). Its open items B-1 to B-13 are dispositioned in §16.3 and are never a source of requirements |
 | Sibling LLDs | Commercial: `commercial-lld-entitlements-service.md`, `commercial-lld-usage-metering-service.md` (to be written; until it exists the consumed `UsagePeriodClosed` contract is unverified, BL-OQ-24). IAM (contracts verified against these): Core `iam-lld-org-membership-service.md` rev 2.49 (I-11, I-18, `billing-orgm-q`, EVT-14/15/18, SEAT-2), Realm Provisioner `iam-lld-realm-provisioner-service.md` rev 1.46+ (RP-3, RP-4, RP-11, `billing-realm-q`, `iam.tenant.events` payloads), Audit Log `iam-lld-audit-log-service.md` rev 0.37 (AL-5, entry taxonomy, Billing admission since rev 0.34, `billing.token_addon.refunded` since rev 0.37), `platform-audit` `docs/lld/platform-lld-audit.md` rev 1.5 (§4, §11, §18.6, §19.2), AuthZ Enrichment `iam-lld-authz-enrichment.md` v1.50 (operator path, CD-52; §8.9.1 OP-G4 lists Billing B-O1 to B-O15). Edge: `signup-bff-lld.md` (Signup BFF, `BillingClient.AuthorizeAndCharge`) |
@@ -19,6 +19,7 @@
 
 | Rev | Date | Change |
 |---|---|---|
+| 0.18 | 2026-11-23 | **BL-OQ-7 (CD-10) closed — Finance and Security approved the conversion-reversal proposal unchanged** (sign-off item S-4). Finance: trigger (dispute reason `fraudulent` or Stripe early fraud warning), conversion payment only, 7-day window, refund unless the dispute already returned the funds. Security: SEV-2 `BillingReversalDecisionNeeded`, operator-only approval through B-O8, `AUTO_REVERT_ON_EFW=false` in Phase 1. §8.2 heading and text record the approval and the reasons; §1.1, §16.1 and §16.4 updated. No flow, route, schema or config change. |
 | 0.17 | 2026-11-23 | **BL-OQ-13 (BIZ-6) closed — Finance approved the six permissions and role mapping unchanged** (sign-off item S-3): owner all six; tenant admin `subscription.manage`, `billing.view`, `billing.download_invoice`; tender roles none. §5.2: approval recorded; Finance's overlap rule added, with "new contractual commitment" defined by route (B-P2, B-P4, B-P5, B-P14) so seat and add-on purchases stay under `subscription.manage`; new invariant `BIL-AUTH-7`. No route or permission change. |
 | 0.16 | 2026-11-23 | **BL-OQ-1 (CD-24) closed — Finance approved rules 1 to 4, `AUTO_PAUSE_ON_OPERATOR_SUSPENSION=true`** (sign-off item S-2). §8.10 rewritten: scope sentence (a pause does not terminate the subscription, change entitlements, cancel the contract or waive amounts already due); retries on invoices already open at suspension are stopped and the dunning clock frozen (`PauseCollection` contract, Stripe `auto_advance = false`), restarted on resume; `409 COLLECTION_PAUSED` extended to seat reduction schedules and downgrades. **New operator route B-O16** (finalise or void a held draft, mandatory reason; 44 endpoint IDs), port `FinalizeInvoice`, `invoices.held_for_review` and disposition columns, invariant `BIL-SUB-7`, metrics, alert `BillingSuspensionDraftsAwaitingDecision`, error `INVOICE_NOT_HELD`. B-O10 reason mandatory. New BL-OQ-25 (IAM: OP-G4 coverage and Audit entry type for B-O16). |
 | 0.15 | 2026-11-23 | **BL-OQ-6 closed — Finance approved proration rules 1 to 3 unchanged** (sign-off item S-1). (1) §8.5.3: fallback calculator used only for providers certified `Proration = fallback`; providers with their own engine (Stripe) stay the system of record. (2) Finance requirements added: `seat_purchases` stores calculator inputs, `amount_unrounded_minor` and the rounded amount (§4.2.10, new `BIL-SEAT-5`); a purchase below the provider minimum is confirmed free with `deferred_amount_minor` and `deferral_reason = below_provider_minimum`, replacing the earlier "`adjustments` row" wording, and carried in `TenantSeatsChanged` (additive fields, §7.3.4) and two new metrics (§11.2). (3) §8.6.3: renewal top-up failure sequence stated; seats never removed automatically. B-P6 response, §12, §14.1 golden table and §16.4 updated. |
@@ -126,7 +127,7 @@ Refined into an implementable spec, this document gives the database schema, the
 |---|---|---|
 | CD-3 / CD-3a / CD-4 | Namespace `billing`; LLD location; Commercial Team owns Billing | Header, §13 |
 | CD-9 | Signup BFF, not Billing, calls RP-2 and I-1 | §8.3 |
-| CD-10 (open) | Conversion-reversal trigger is Billing's | §8.2 (proposal), §16 BL-OQ-7 |
+| CD-10 | Conversion-reversal trigger is Billing's: fraud dispute or early fraud warning on the conversion payment within 7 days, operator-approved (Finance and Security approved, BL-OQ-7) | §8.2, B-O8 |
 | CD-12 | Quota period = UTC month; Billing no longer announces its period; `BillingPeriodRolled` optional | §7.3.2 (not emitted) |
 | CD-14 (open) | Financial-record retention | §15.3, §16 BL-OQ-11 |
 | CD-17 | Envelope `source = commercial-billing`; metric prefix | §7.3, §11.2 |
@@ -2473,9 +2474,12 @@ sequenceDiagram
 
 Dependency: the operator path (CD-52, OP-G1 to OP-G3). Until it is live the stub is usable only in dev and test.
 
-### 8.2 Conversion reversal (CD-10 — proposed)
+### 8.2 Conversion reversal (CD-10)
 
-**Proposal for sign-off (BL-OQ-7, BIZ-7).**
+**Approved by Finance and Security (BL-OQ-7, BIZ-7, 2026-11-23), unchanged.**
+
+- **Finance** approved the trigger, the conversion-payment-only scope, the 7-day window and the refund rule. The aim is to reverse fraudulent conversions, not to unwind ordinary commercial disputes ("product not received", "unsatisfactory", billing complaints), which are customer-service matters. Tying the trigger to the conversion payment means a later renewal dispute can never revert an established tenant. A hard 7-day limit keeps the behaviour deterministic while the tenant is still close to its trial state; after that, the runbook applies. Refunding only when the dispute has not already returned the funds prevents double reimbursement and keeps Stripe the source of truth for chargeback outcomes.
+- **Security** approved SEV-2 for `BillingReversalDecisionNeeded` (possible payment fraud and financial loss, but no platform-wide impact and no implied data compromise), operator-only approval through B-O8, and `AUTO_REVERT_ON_EFW=false` in Phase 1. Early fraud warnings can be wrong (cardholder confusion, bank-side signals), and a reversal migrates the realm, cancels the subscription, may refund and writes audit records, so it needs explicit operator approval. Automatic handling of EFW-only cases may be evaluated in a later phase, once fraud and false-positive rates are measured.
 
 ```mermaid
 sequenceDiagram
@@ -3291,7 +3295,7 @@ Values from `deploy/helm/values.yaml` (`env:`) and OpenBao (`secretValues:` via 
 | `PRORATION_BELOW_MINIMUM` | `free_until_renewal` | `free_until_renewal`\|`charge_minimum` | §8.5.3 (BL-OQ-6, Finance approved `free_until_renewal`; change only with Finance) |
 | `MIN_CHARGE_MINOR` | `200` (per currency map) | ≥ 0 | Provider minimum |
 | `AUTO_PAUSE_ON_OPERATOR_SUSPENSION` | `true` | bool | CD-24 (§8.10); Finance approved `true` (BL-OQ-1); change only with Finance |
-| `AUTO_REVERT_ON_EFW` | `false` | bool | CD-10 proposal (§8.2) |
+| `AUTO_REVERT_ON_EFW` | `false` | bool | CD-10 (§8.2); Security approved `false` for Phase 1 (BL-OQ-7) |
 | `REVIEW_THRESHOLD_MINOR` | `100000` | ≥ 0 | HLD §11.6 review trigger |
 | `IDEMPOTENCY_TTL_HOURS` | `72` | 24–168 | §9.2 |
 | `CORE_BASE_URL` / `CORE_TIMEOUT_MS` | — / `3000` | — / 1000–10000 | I-11, I-18 (I-18 waits up to 2 s on RP-11 inside Core) |
@@ -3510,7 +3514,7 @@ Each item names the default the design runs with until it closes.
 | BL-OQ-4 | **`purchased_at` on `TenantQuotaAddOnChanged`** (additive) as the 12-month expiry basis | §8.6.2, §9.4 | Entitlements LLD, Audit | Field emitted; envelope `time` equals it | **Decided** (TL, 2026-11-19): Billing is the only publisher of `TenantQuotaAddOnChanged` on `billing.events`; `purchased_at` stays Billing's (payment confirmation). Entitlements withdraws its `tenant_quota_add_on_changed` |
 | BL-OQ-5 | **Launch currency.** HLD §6.3 lists USD amounts; the capability bar requires AED pricing. Which currency per market; AED and USD both in Phase 1? | §6.3, §10.7.1, CD-56 | Finance | `DEFAULT_CURRENCY=USD`, AED rows added by B-O11 | Open |
 | BL-OQ-6 | **Proration rule without a provider engine** (§8.5.3); behaviour below the minimum charge; renewal top-up kept on payment failure (§8.6.3) | CD-54 | Finance | Seconds-based, half-up; `free_until_renewal`; top-up kept | **Closed** (Finance, 2026-11-23): rules 1 to 3 approved unchanged. Added on Finance's request: unrounded amount and inputs stored (`BIL-SEAT-5`); below-minimum deferral recorded with `deferral_reason = below_provider_minimum` in the purchase row, `TenantSeatsChanged` (audit) and metrics; fallback calculator never overrides a provider's own proration |
-| BL-OQ-7 | **CD-10 — conversion-reversal trigger.** Proposal §8.2: fraud dispute or early fraud warning on the conversion payment within 7 days → SEV-2 → operator-approved B-O8 → RP-4 | CD-10, BIZ-7 | Billing + Finance + Security | Operator-approved; `AUTO_REVERT_ON_EFW=false` | Proposed |
+| BL-OQ-7 | **CD-10 — conversion-reversal trigger.** Proposal §8.2: fraud dispute or early fraud warning on the conversion payment within 7 days → SEV-2 → operator-approved B-O8 → RP-4 | CD-10, BIZ-7 | Billing + Finance + Security | Operator-approved; `AUTO_REVERT_ON_EFW=false` | **Closed** (Finance and Security, 2026-11-23): approved unchanged. Finance: trigger, conversion-payment scope, 7-day window, refund rule. Security: SEV-2, operator-only B-O8, `AUTO_REVERT_ON_EFW=false` |
 | BL-OQ-8 | **BFF alignment (SGN-2).** Contract published in §5.4.2. BFF: `BILLING_TIMEOUT_MS ≥ 15000`; field mapping `PaymentToken → payment_method_ref`, `Plan → plan_code`, `Seats → licensed_seats`; 3-D Secure (`402 PAYMENT_ACTION_REQUIRED` → browser → same-key retry). Go-live order §18.7 | §10.6 | Web / growth (BFF) | `FEATURE_DIRECT_SIGNUP=false` | Open — contract published |
 | BL-OQ-9 | **Operator routes B-O6 to B-O15.** (a) Billing's operator `HTTPRoute` lists every operator path, B-O1 to B-O15 (Billing's own chart, §13.1). (b) IAM extends the end-to-end operator test (AuthZ Enrichment LLD §8.9.1 OP-G4), whose list covers only B-O1 to B-O5, to B-O6 to B-O15. No IAM gateway route list exists: Envoy Gateway is the only ingress, and the platform-realm `jwt_authn` provider and AuthZ Enrichment admit the whole `/api/v1/operator/` prefix | §11.4 | Billing (a); IAM + Commercial (b) | Today's `403` is the operator path being off (OP-G1 to OP-G3, `BIL-AUTH-6`), not a missing route | **Approved; IAM part merged** ([iam-authz-enrichment#43](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-authz-enrichment/pull/43), `f4af854`, 2026-11-19): AuthZ unit and e2e tests cover B-O1–B-O15. **Remaining:** (a) Billing's operator `HTTPRoute` lists B-O1 to B-O15 when Billing's chart is written. Gateway half of OP-G4 waits on BL-OQ-14 |
 | BL-OQ-10 | **Audit Log:** admit `cluster.local/ns/billing/sa/commercial-billing` to AL-5; add entry types `billing.conversion.stub`, `billing.conversion.reverted`, `billing.saga.resolved`, `billing.collection.paused`, `billing.price_book.changed`, `billing.provider.certified`, `billing.provider.certification_revoked` (tier `security_3y`) | §11.6, CD-21 | Audit Log | Entries held in `pending_audit_entries` | **Closed** (Audit Log rev 0.34: admitted; all seven types added) |
@@ -3578,7 +3582,7 @@ Each item names the default the design runs with until it closes.
 | §10.7.1 adapter interface | §3.4 |
 | §11.4 Billing operator paths "finalised in the Billing LLD" | §5.3 (B-O1–B-O5 as HLD; B-O6–B-O15 added, B-O14 and B-O15 in rev 0.3) |
 | §13.1 RTO/RPO "confirm in each service LLD" | 30 min / 5 min confirmed (§11.1, §20.6) |
-| CD-10 | Proposal (BL-OQ-7) |
+| CD-10 | §8.2 (Finance and Security approved, BL-OQ-7) |
 | CD-14 | Setting and placeholders (BL-OQ-11) |
 | CD-56 per-tenant selection, payment-method migration | Designed (§19.3), deferred (BL-OQ-15) |
 | CD-56 (5) provider capability certification | **Closed by this LLD:** §3.4, §3.5, §4.2.24 (`BIL-PROV-1` to `BIL-PROV-3`), §12, §14.7, §19.3, §19.6 |
