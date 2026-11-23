@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document | Hand-off of every open item in the Billing LLD, by owning team and service |
-| Billing LLD | `commercial-lld-billing-service.md` rev 0.24 (base HLD v0.65) |
+| Billing LLD | `commercial-lld-billing-service.md` rev 0.25 (base HLD v0.65) |
 | Date | 2026-11-23 |
 | From | Commercial Team (Billing) |
 | Deployment state | No service is in production; all run in dev only. "Done" means merged **and** promoted with each environment (dev → staging → production) |
@@ -30,7 +30,9 @@
 
 ---
 
-**Closed since first issue:** BL-OQ-5 (launch currency), Finance 2026-11-23: USD remains the default currency. Market-specific currencies are configured through `plan_prices`; AED pricing can be introduced via B-O11 without application changes. No further design or implementation work is required.
+**Closed since first issue:**
+- BL-OQ-17 (Stripe UAE terms), Legal 2026-11-23: Legal reviewed the Stripe UAE data-location and processor terms and accepted them without required amendments. Billing may proceed with the planned Stripe UAE account configuration. No additional design, legal or implementation work remains.
+- BL-OQ-5 (launch currency), Finance 2026-11-23: USD remains the default currency. Market-specific currencies are configured through `plan_prices`; AED pricing can be introduced via B-O11 without application changes. No further design or implementation work is required.
 
 ## 2. Summary by team
 
@@ -48,9 +50,9 @@
 | **Web / growth** | Signup BFF | BL-OQ-8 | Direct paid signup |
 | **Notification** | `hld-notification-service` | BL-OQ-12 | Customer emails; price increases for existing customers |
 | **Usage & Metering** | `commercial-usage-metering-service` | BL-OQ-24 | Billing's usage-record consumer |
-| **Finance** | — | BL-OQ-22, BL-OQ-17 (with Legal); four acknowledgements | **Final prices and launch** |
+| **Finance** | — | BL-OQ-22; four acknowledgements | **Final prices** |
 | **Product** | — | BL-OQ-18; BL-OQ-22 (with Finance); approve PD-LLM-1 and ENT-D6 memos; one acknowledgement | Token packs; final prices |
-| **Legal** | — | BL-OQ-17 (with Finance); one acknowledgement | UAE Stripe account |
+| **Legal** | — | One acknowledgement (S-5) | — |
 | **Commercial HLD owner** | `commercial-hld-docs` | Merge and tag HLD v0.65 | **Final sign-off** |
 | **Commercial Team (Billing)** | `commercial-billing` (`billing` / `commercial-billing`) | BL-OQ-9 (a); W-8 to W-10; contract-test gap; LLD housekeeping; push and PR; BL-OQ-15 (deferred) | Final sign-off (as approver); its own build |
 
@@ -262,7 +264,6 @@ The work is probably unpushed. **These items stay open until the code can be see
 | # | What | Billing meanwhile | Action | Done when |
 |---|---|---|---|---|
 | BL-OQ-22 | **Final prices** after token-budget validation (PD-LLM-1 R-3: Starter 500K, Pro 5M, Enterprise 25M against model cost; ENT-D6 trial budgets). With Product | Phase 1 seed prices; no packs | Validate budgets; set plan and pack prices | Prices loaded (data only) |
-| BL-OQ-17 | Stripe UAE account: data location and processor terms. With Legal | — | Accept or negotiate the terms | Terms accepted |
 | Acks | S-2, S-3, S-5, S-6 interpretations (§3.3) | — | Reply | Acknowledged |
 
 ### 4.11 Product
@@ -278,7 +279,6 @@ The work is probably unpushed. **These items stay open until the code can be see
 
 | # | What | Action | Done when |
 |---|---|---|---|
-| BL-OQ-17 | Stripe UAE data location and processor terms (with Finance) | Review the terms | Accepted |
 | Ack | S-5: contact-data minimisation continues for personal data (§3.3) | Reply | Acknowledged |
 
 ### 4.13 Commercial Team (Billing) — own items
@@ -305,7 +305,7 @@ The work is probably unpushed. **These items stay open until the code can be see
 |---|---|
 | **Final sign-off** | §3.1 HLD v0.65 merged · §3.2 PCI re-confirmation · §3.3 four acknowledgements |
 | **Any Billing event in an environment** | Commercial IaC topic, registry and queues · Entitlements consumer event names (or Entitlements misses every plan change) |
-| **Paid subscriptions through Stripe** | OP-G1 rollout · **OP-G2** · OP-G3 · OP-G4 · BL-OQ-9 (a) · A-10 role + named holders · first certification approved (B-O17) · BL-OQ-22 · BL-OQ-17 |
+| **Paid subscriptions through Stripe** | OP-G1 rollout · **OP-G2** · OP-G3 · OP-G4 · BL-OQ-9 (a) · A-10 role + named holders · first certification approved (B-O17) · BL-OQ-22 |
 | **Direct paid signup** | All of the above · BL-OQ-8 · SRE-3 |
 | **Token add-ons** (`FEATURE_TOKEN_ADDONS=true`) | Stripe launch · Entitlements E-1, E-2, E-4, E-5 verified · W-8 to W-11 · BL-OQ-18 · BL-OQ-19 (AI-1, AI-3, AI-5) · A-5 deployed |
 | **Price increases for live subscribers** | BL-OQ-12 price-change message |
@@ -318,7 +318,6 @@ The work is probably unpushed. **These items stay open until the code can be see
 OP-G1 rollout ─► OP-G2 (platform-edge, not started) ─► OP-G3 ─► OP-G4 joint run ─┐
 A-10 role + PCI names holders ───────────────────────────────────────────────────┼─► first certification (B-O17) ─► Stripe live
 BL-OQ-22 prices (after PD-LLM-1 R-3) ───────────────────────────────────────────────┘
-BL-OQ-17 UAE terms ─────────────────────────────────────────────────────────────────┘
 ```
 
 **OP-G2 is the longest pole.** It hasn't started, and nothing operator-side can be proven without it. Ask IAM for the OP-G6 date and escalate OP-G2 first.
@@ -350,7 +349,7 @@ BL-OQ-17 UAE terms ────────────────────�
 | BL-OQ-24 | `UsagePeriodClosed` contract | Usage & Metering | `commercial-usage-metering` | Open (known risk) |
 | BL-OQ-5 | Launch currency | Finance | — | **Closed** 2026-11-23: USD default; others via `plan_prices` / B-O11 |
 | BL-OQ-22 | Final prices | Finance + Product | — | Open |
-| BL-OQ-17 | UAE Stripe terms | Finance + Legal | — | Open |
+| BL-OQ-17 | UAE Stripe terms | Finance + Legal | — | **Closed** 2026-11-23: accepted without amendments |
 | BL-OQ-18 | Token packs | Product | — | Open |
 | Memos | PD-LLM-1, ENT-D6 approval | Product (+ AI team R-1, R-2, R-4) | — | Proposed |
 | BL-OQ-9 (a) | `HTTPRoute` B-O1 to B-O17 | Commercial Team (Billing) | `commercial-billing` | Open (with chart) |

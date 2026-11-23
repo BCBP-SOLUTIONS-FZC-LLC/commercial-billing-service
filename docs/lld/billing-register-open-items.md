@@ -2,13 +2,15 @@
 
 | Field | Value |
 |---|---|
-| Source | `commercial-lld-billing-service.md` rev 0.24, §16.1 "Billing register" (base HLD v0.65) |
+| Source | `commercial-lld-billing-service.md` rev 0.25, §16.1 "Billing register" (base HLD v0.65) |
 | Date | 2026-11-23 |
 | From | Commercial Team (Billing) |
-| Scope | Every §16.1 row that is **not Closed**: 16 of the 26 rows. The 10 closed rows (BL-OQ-1, 2, 5, 6, 7, 10, 11, 13, 16, 21) are left out |
+| Scope | Every §16.1 row that is **not Closed**: 15 of the 26 rows. The 11 closed rows (BL-OQ-1, 2, 5, 6, 7, 10, 11, 13, 16, 17, 21) are left out |
 | Deployment state | No service is in production; all run in dev only. "Go-live" means promotion through dev → staging → production |
 
-**Closed since this list was first written:** BL-OQ-5 (launch currency), Finance 2026-11-23: USD remains the default currency. Market-specific currencies are configured through `plan_prices`; AED pricing can be introduced via B-O11 without application changes. No further design or implementation work is required.
+**Closed since this list was first written:**
+- BL-OQ-17 (Stripe UAE terms), Legal 2026-11-23: Legal reviewed the Stripe UAE data-location and processor terms and accepted them without required amendments. Billing may proceed with the planned Stripe UAE account configuration. No additional design, legal or implementation work remains.
+- BL-OQ-5 (launch currency), Finance 2026-11-23: USD remains the default currency. Market-specific currencies are configured through `plan_prices`; AED pricing can be introduced via B-O11 without application changes. No further design or implementation work is required.
 
 ## Read this first
 
@@ -18,7 +20,7 @@
 |---|---|---|
 | **Decided, to build** | The decision is made; another team has to implement it | BL-OQ-3, 4, 20 |
 | **Go-live gate** | Another team has to build, configure or deploy something before a Billing feature can be switched on. Billing's design already handles "not yet" (a feature flag, a `403` or a `503`) | BL-OQ-8, 9, 12, 14, 19, 23, 24, 25, 26 |
-| **Business decision or data** | A number, price, currency or contract term. Loaded as data or settled outside the code; no design change | BL-OQ-17, 18, 22 |
+| **Business decision or data** | A number, price, currency or contract term. Loaded as data or settled outside the code; no design change | BL-OQ-18, 22 |
 | **Deferred** | Planned for a later phase | BL-OQ-15 |
 
 Each item has a **default**: what Billing does until the item closes. The system is safe in that state. It just can't offer the feature yet.
@@ -32,7 +34,6 @@ Each item has a **default**: what Billing does until the item closes. The system
 | BL-OQ-9 | Billing's operator `HTTPRoute` lists every operator path | Billing | Go-live gate | Same `403` as BL-OQ-14 | Operator routes |
 | BL-OQ-25 | OP-G4 test and Audit type for B-O16 | IAM | Go-live gate | Audit entries wait in `pending_audit_entries` | Operator decision on invoices held during a suspension |
 | BL-OQ-22 | Final plan and pack prices, after token-budget validation | Finance + Product | Business data | Phase 1 seed prices; no token packs | **Final prices** |
-| BL-OQ-17 | Stripe data location and processor terms, UAE account | Finance + Legal | Business decision | — | **UAE Stripe account** |
 | BL-OQ-8 | Signup BFF aligns to Billing's published contract | Web / growth | Go-live gate | `FEATURE_DIRECT_SIGNUP=false` | Direct paid signup |
 | BL-OQ-12 | Notification messages for seat, add-on, downgrade and price-change events | Notification + Commercial | Go-live gate | Only past-due and cancelled emails | Customer emails; notice of price increases |
 | BL-OQ-3 | Entitlements: per-resource add-on eligibility and read-only access for Billing | Entitlements | Decided, to build | Add-on purchase fails closed (`503`) | Token add-ons |
@@ -48,7 +49,7 @@ Each item has a **default**: what Billing does until the item closes. The system
 
 | To launch | Needs closed |
 |---|---|
-| Paid subscriptions through Stripe | BL-OQ-14, BL-OQ-9, BL-OQ-26 (certification), BL-OQ-22 (prices), BL-OQ-17 (UAE account) |
+| Paid subscriptions through Stripe | BL-OQ-14, BL-OQ-9, BL-OQ-26 (certification), BL-OQ-22 (prices) |
 | Direct paid signup | The above, plus BL-OQ-8 |
 | Token add-ons | The above, plus BL-OQ-3, 4, 18, 19 and 20; BL-OQ-23 for the correct refund audit label |
 | Price increases for existing customers | BL-OQ-12 (the renewal price-change message) |
@@ -121,16 +122,6 @@ The PCI owner group names who holds the role.
 **Why it matters.** Final prices for launch. **Data only**: loaded through B-O11 and `price-book-sync`, with no schema or code change.
 
 **To close:** Finance validates the budgets; Finance and Product set the plan and pack prices.
-
-### BL-OQ-17 — Stripe data location and processor terms (UAE account) — Finance + Legal
-
-**Question.** Where does Stripe hold data for the UAE account, and are the processor terms acceptable (HLD §13.3)?
-
-**Billing's default.** None. This is a contract question, not a design one.
-
-**Why it matters.** It blocks opening or using the UAE Stripe account.
-
-**To close:** Legal and Finance accept the terms.
 
 ### BL-OQ-18 — Token pack sizes, prices and monthly cap (CD-55, BIZ-1) — Product
 
@@ -269,7 +260,6 @@ SRE-6 and SRE-8 are closed.
 | BL-OQ-9 | Billing | Go-live gate | IAM part merged; Billing `HTTPRoute` when the chart is written |
 | BL-OQ-25 | IAM | Go-live gate | Requested (A-9) |
 | BL-OQ-22 | Finance + Product | Business data | Open |
-| BL-OQ-17 | Finance + Legal | Business decision | Open |
 | BL-OQ-18 | Product | Business data | Open |
 | BL-OQ-8 | Web / growth | Go-live gate | Contract published |
 | BL-OQ-12 | Notification + Commercial | Go-live gate | Open |

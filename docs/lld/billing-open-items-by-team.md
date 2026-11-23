@@ -1,6 +1,6 @@
 # Billing Service — Open Items by Team
 
-Source: `commercial-lld-billing-service.md` rev 0.24 (2026-11-23; base HLD v0.65), updated with the team responses, the Commercial TL decisions and the AI team reply (draft) of 2026-11-19 (`billing-open-items-team-response.md` and `billing-reply-ai-team.md`, not yet in this repository), §16.1 register, §16.2 discrepancies, platform/SRE dependencies, and the ENT-D3 / ENT-D6 product memos. Item IDs match the LLD. **Deployment state:** no service is in production; every service, Billing included, runs in dev only. "Deploy" items below are environment-promotion steps, not production fixes. Where several teams share an item, it is listed under each, with the lead team first.
+Source: `commercial-lld-billing-service.md` rev 0.25 (2026-11-23; base HLD v0.65), updated with the team responses, the Commercial TL decisions and the AI team reply (draft) of 2026-11-19 (`billing-open-items-team-response.md` and `billing-reply-ai-team.md`, not yet in this repository), §16.1 register, §16.2 discrepancies, platform/SRE dependencies, and the ENT-D3 / ENT-D6 product memos. Item IDs match the LLD. **Deployment state:** no service is in production; every service, Billing included, runs in dev only. "Deploy" items below are environment-promotion steps, not production fixes. Where several teams share an item, it is listed under each, with the lead team first.
 
 **Status key:** **Decided** = TL decision made; owning team to implement · **Conflict** = a team answered, but the answer contradicts the HLD or Billing's need · **Open** = needs an answer · **Proposed** = Billing has a proposal; needs sign-off · **External** = depends on another team's delivery · **Deferred** = later phase.
 
@@ -12,9 +12,9 @@ Source: `commercial-lld-billing-service.md` rev 0.24 (2026-11-23; base HLD v0.65
 | IAM — Audit Log | BL-OQ-23 (SRE-8 filter, refund entry type) | Token add-on refund audit |
 | IAM — Operator path / platform-edge | BL-OQ-9 (b) OP-G4 coverage; BL-OQ-14; BL-OQ-25 (B-O16 test + Audit type); BL-OQ-26 (`pci_owner_reviewer` role, B-O17 test + Audit type); OP-G1, OP-G3, OP-G6 (IAM); **OP-G2 (Platform edge)** | Every operator route `403` until OP-G1 to OP-G3; OP-G2 is the external blocker |
 | Entitlements | BL-OQ-3, BL-OQ-4, BL-OQ-20, read-only access (all **decided**, to implement) | BL-OQ-3 (add-on purchase needs per-resource eligibility and access) |
-| Finance | BL-OQ-15, 17, 22; PD-LLM-1 R-3; ENT-D6 budgets | BL-OQ-22 (final prices) |
+| Finance | BL-OQ-15, 22; PD-LLM-1 R-3; ENT-D6 budgets | BL-OQ-22 (final prices) |
 | Product | BL-OQ-18, 22; PD-LLM-1 and ENT-D6 approval; **PD-LLM-1 R-4 (Opus tier)**; R-1 model list; R-2 evaluation set and pass bar | BL-OQ-18 (token add-ons have no packs) |
-| Legal | BL-OQ-17 | BL-OQ-17 (UAE Stripe account) |
+| Legal | — (BL-OQ-11, BL-OQ-17 closed 2026-11-23) | — |
 | Security | — (BL-OQ-7 closed 2026-11-23) | — |
 | PCI owner group | Name the `pci_owner_reviewer` role holders (BL-OQ-26) | First provider certification run (needs BL-OQ-26) |
 | Web / growth (Signup BFF) | BL-OQ-8 | Direct paid signup (`FEATURE_DIRECT_SIGNUP=false`) |
@@ -90,7 +90,7 @@ All Core-owned items closed on 2026-11-19.
 | BL-OQ-11 | **CD-14:** financial-record retention per jurisdiction; also sets Workflow history retention (with Legal, Billing) | No financial deletion job | **Closed** (Finance and Legal approved 2026-11-23: keep indefinitely; LLD rev 0.19) |
 | BL-OQ-13 | **BIZ-6:** approve the six billing permissions (two added by the LLD) (with Billing) | §5.2 as written | **Closed** (Finance approved 2026-11-23; LLD rev 0.17) |
 | BL-OQ-16 | Price changes for live subscriptions: next renewal or grandfather longer (with Product) | Next renewal | **Closed** (Product and Finance approved 2026-11-23; LLD rev 0.20) |
-| BL-OQ-17 | Stripe data location and processor terms for the UAE account (with Legal) | — | Open |
+| BL-OQ-17 | Stripe data location and processor terms for the UAE account (with Legal) | — | **Closed** (Legal accepted without amendments, 2026-11-23; LLD rev 0.25) |
 | BL-OQ-15 | **CD-56 follow-ups:** per-tenant provider selection; moving payment methods and live subscriptions off a removed provider (with Billing) | One provider | Deferred (Phase 3) |
 | PD-LLM-1 R-3 | Validate token quotas per plan against tier model cost | — | Open (memo) |
 | ENT-D6 | Validate Trial-Specific and Reduced token budgets | — | Open (memo) |
@@ -112,7 +112,7 @@ No Billing design change follows from either memo (LLD rev 0.6, §8.4.3).
 | ID | Item | Status |
 |---|---|---|
 | BL-OQ-11 | Financial-record retention per jurisdiction (with Finance, Billing) | **Closed** (approved 2026-11-23: keep indefinitely; LLD rev 0.19) |
-| BL-OQ-17 | Stripe data location and processor terms for the UAE account (with Finance) | Open |
+| BL-OQ-17 | Stripe data location and processor terms for the UAE account (with Finance) | **Closed** (accepted without amendments, 2026-11-23; LLD rev 0.25) |
 
 ## Security
 
