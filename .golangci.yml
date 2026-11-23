@@ -17,6 +17,10 @@ linters:
     - unparam
 
   settings:
+    # A default branch is an explicit choice for the rest of an enum (as with
+    # provider enums Billing does not mirror).
+    exhaustive:
+      default-signifies-exhaustive: true
     revive:
       rules:
         - name: var-naming
