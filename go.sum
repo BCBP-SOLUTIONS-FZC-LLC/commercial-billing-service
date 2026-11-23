@@ -26,8 +26,8 @@ github.com/Antonboom/nilnil v1.1.1 h1:9Mdr6BYd8WHCDngQnNVV0b554xyisFioEKi30sksuf
 github.com/Antonboom/nilnil v1.1.1/go.mod h1:yCyAmSw3doopbOWhJlVci+HuyNRuHJKIv6V2oYQa8II=
 github.com/Antonboom/testifylint v1.6.4 h1:gs9fUEy+egzxkEbq9P4cpcMB6/G0DYdMeiFS87UiqmQ=
 github.com/Antonboom/testifylint v1.6.4/go.mod h1:YO33FROXX2OoUfwjz8g+gUxQXio5i9qpVy7nXGbxDD4=
-github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2 v2.6.1 h1:rYH5HMIE4eW4nyQY5s9JZyqcLKOFRuCSUh7/CmuHbRs=
-github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2 v2.6.1/go.mod h1:UGwvHk81DnOCUgxTbEpyZ6r4Z+Jr4ezADP09XmTxjtU=
+github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2 v2.7.0 h1:SkMiiw4fFE+57MJelsAgI2J6D7SFGTPhFd8FFxsw6t0=
+github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2 v2.7.0/go.mod h1:UGwvHk81DnOCUgxTbEpyZ6r4Z+Jr4ezADP09XmTxjtU=
 github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2 v2.0.2 h1:vGlI8ytjCTySc9W6LNEMkGp6mqxmBQB9YM6T97PGRvA=
 github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2 v2.0.2/go.mod h1:Y7kwnvVdASCEYRtbsjC+/O5gYjOqJD2z3nDeXcF0JCU=
 github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
