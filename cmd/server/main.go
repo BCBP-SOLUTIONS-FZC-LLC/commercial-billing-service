@@ -4,9 +4,9 @@
 // (billing_system), serves the API on APP_PORT and metrics on METRICS_PORT,
 // and shuts down gracefully.
 //
-// Phase 0 wires only the infrastructure. Workers (outbox runner, webhook
-// processor, saga worker, audit runner, SQS consumers, delayed emissions)
-// are added in later phases, each with its own readiness or liveness check.
+// Wired so far: the provider registry and its refresh, B-W1 and the webhook
+// processor (Phase 3). The outbox runner, saga worker, audit runner, SQS
+// consumers and delayed emissions are added in later phases.
 package main
 
 import (
@@ -38,8 +38,9 @@ var buildVersion = "dev"
 // Shutdown budget (terminationGracePeriodSeconds 45, §13.1): HTTP drain
 // within the request timeout, then pool drain.
 const (
-	httpDrainTimeout = 30 * time.Second
-	poolDrainTimeout = 10 * time.Second
+	httpDrainTimeout  = 30 * time.Second
+	workerStopTimeout = 5 * time.Second
+	poolDrainTimeout  = 10 * time.Second
 )
 
 func main() {
@@ -152,13 +153,26 @@ func run() int {
 			return nil
 		})
 	}
+	// Payment providers and the certification gate (§3.5): read once at
+	// startup; a provider without a valid record stays loaded for running work.
+	registry, err := providers(cfg, sysPool, log)
+	if err != nil {
+		log.Error("payment providers", map[string]any{"error": err.Error()})
+		return 1
+	}
+	if _, err := registry.Refresh(context.Background()); err != nil {
+		log.Error("provider registry: first certification read failed; no provider enabled for new accounts until the next refresh", map[string]any{"error": err.Error()})
+	}
+
 	router := httpadapter.NewRouter(httpadapter.RouterConfig{
 		GinConfig: ginCfg,
 		Readiness: []httpadapter.Check{
 			{Name: "database", Pinger: poolCheck(appPool)},
 			{Name: "sys_database", Pinger: poolCheck(sysPool)},
 		},
+		Routes: []func(gin.IRouter){webhookRoute(cfg, registry, sysPool, log)},
 	})
+	bg := startWorkers(cfg, registry, appPool, sysPool, log)
 
 	srv := &http.Server{
 		Addr:              ":" + strconv.Itoa(cfg.AppPort),
@@ -212,6 +226,10 @@ func run() int {
 			log.Error("http shutdown", map[string]any{"addr": s.Addr, "error": err.Error()})
 		}
 	}
+
+	// Background loops stop after HTTP (no new ledger rows arrive) and
+	// before the pools drain.
+	bg.stop(workerStopTimeout)
 
 	poolCtx, cancelPool := context.WithTimeout(context.Background(), poolDrainTimeout)
 	defer cancelPool()

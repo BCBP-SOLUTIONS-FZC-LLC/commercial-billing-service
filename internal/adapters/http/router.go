@@ -49,6 +49,10 @@ type RouterConfig struct {
 	// Liveness are background loops /healthz checks (for example the
 	// platform-audit runner, which belongs in liveness, never readiness).
 	Liveness []Check
+	// Routes mount further route groups (B-W1 now; tenant, internal and
+	// operator groups in Phase 5). They run after the observability
+	// middlewares.
+	Routes []func(gin.IRouter)
 }
 
 // Router is the HTTP handler for the API listener (APP_PORT). Metrics are
@@ -83,6 +87,9 @@ func NewRouter(cfg RouterConfig) *Router {
 	h := &probes{readiness: cfg.Readiness, liveness: cfg.Liveness}
 	r.GET("/healthz", h.healthz)
 	r.GET("/readyz", h.readyz)
+	for _, mount := range cfg.Routes {
+		mount(r)
+	}
 	return &Router{engine: r}
 }
 

@@ -50,6 +50,31 @@ const (
 	ObjectPaymentMethod     ProviderObjectKind = "payment_method"
 )
 
+// ObjectKindFor returns the object a kind is about, for re-reading a
+// ledger row (the ledger stores the kind and the object id).
+func ObjectKindFor(k NormalisedKind) ProviderObjectKind {
+	switch k {
+	case KindCheckoutCompleted, KindPaymentMethodSet, KindCheckoutExpired:
+		return ObjectCheckoutSession
+	case KindInvoiceUpdated, KindInvoicePaid, KindInvoicePaymentFailed, KindPaymentActionRequired:
+		return ObjectInvoice
+	case KindSubscriptionUpdated, KindSubscriptionEnded:
+		return ObjectSubscription
+	case KindScheduleUpdated:
+		return ObjectSchedule
+	case KindRefundUpdated:
+		return ObjectRefund
+	case KindDisputeOpened, KindDisputeUpdated, KindDisputeClosed:
+		return ObjectDispute
+	case KindFraudWarning:
+		return ObjectEarlyFraudWarning
+	case KindCustomerUpdated:
+		return ObjectCustomer
+	default:
+		return ""
+	}
+}
+
 // ProviderObjectRef points at one provider object (ledger provider_object_ref).
 type ProviderObjectRef struct {
 	Kind ProviderObjectKind

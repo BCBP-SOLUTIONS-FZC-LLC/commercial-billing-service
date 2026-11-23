@@ -77,4 +77,9 @@ type LedgerRepo interface {
 	// Insert records a callback; inserted is false for a redelivery.
 	Insert(ctx context.Context, e domain.LedgerEntry) (inserted bool, err error)
 	Get(ctx context.Context, provider, providerEventID string) (domain.LedgerEntry, error)
+	// Claim moves up to limit due rows to processing for claimFor, one
+	// tenant's rows in provider_created_at order (§8.15, BIL-PAY-5).
+	Claim(ctx context.Context, limit int, claimFor time.Duration) ([]domain.LedgerEntry, error)
+	// Finish records the outcome. nextAttempt is set only for a retry.
+	Finish(ctx context.Context, provider, providerEventID string, status domain.LedgerStatus, outcome string, nextAttempt *time.Time) error
 }

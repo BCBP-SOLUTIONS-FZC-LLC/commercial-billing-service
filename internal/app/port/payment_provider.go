@@ -72,6 +72,27 @@ const (
 	ProrationFallback ProrationMode = "fallback" // Billing's calculator (§8.5.3); named in the certification record
 )
 
+// ProviderLookup finds the adapter of an existing account's provider. The
+// provider registry implements it (§3.5); loaded providers serve running
+// work whether or not they are certified (BIL-PROV-2).
+type ProviderLookup interface {
+	Loaded(name string) (PaymentProvider, bool)
+}
+
+// PaymentEventHandler applies one normalised callback to Billing's state,
+// using the provider object re-read just before (BIL-PAY-4). It runs inside
+// a tenant transaction and returns the ledger outcome ("applied:<what>").
+// Return an *IgnoredEvent to record ignored:<reason> (for example a
+// transition §8.14 does not allow from Billing's current state).
+type PaymentEventHandler interface {
+	Handle(ctx context.Context, tenantID string, ev domain.PaymentEvent, current domain.ProviderObjectState) (outcome string, err error)
+}
+
+// IgnoredEvent marks a callback that needs no change (ledger ignored:<reason>).
+type IgnoredEvent struct{ Reason string }
+
+func (e *IgnoredEvent) Error() string { return "ignored: " + e.Reason }
+
 // ProviderCapabilities is declared by each adapter and verified by the
 // certification suite (§14.7).
 type ProviderCapabilities struct {
