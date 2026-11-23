@@ -224,6 +224,33 @@ func (r *IdempotencyRepository) Release(ctx context.Context, tenantID, scope, ke
 	})
 }
 
+// Reclaim implements port.IdempotencyRepo.
+func (r *IdempotencyRepository) Reclaim(ctx context.Context, rec domain.IdempotencyRecord) (bool, error) {
+	var ok bool
+	err := inTx(ctx, r.pool, func(q querier) error {
+		tag, err := q.Exec(ctx, `
+			UPDATE idempotency_records
+			SET request_hash = $4, state = 'in_flight', status_code = NULL, response_body = NULL,
+			    locked_until = $5, expires_at = $6, created_at = now()
+			WHERE tenant_id = $1::uuid AND scope = $2 AND key = $3
+			  AND (expires_at < now()
+			       OR (state = 'in_flight' AND request_hash = $4 AND (locked_until IS NULL OR locked_until < now())))`,
+			rec.TenantID, rec.Scope, rec.Key, rec.RequestHash, rec.LockedUntil, rec.ExpiresAt)
+		ok = tag.RowsAffected() == 1
+		return err
+	})
+	return ok, err
+}
+
+// Unlock implements port.IdempotencyRepo.
+func (r *IdempotencyRepository) Unlock(ctx context.Context, tenantID, scope, key string) error {
+	return inTx(ctx, r.pool, func(q querier) error {
+		_, err := q.Exec(ctx, `UPDATE idempotency_records SET locked_until = now() - interval '1 millisecond'
+			WHERE tenant_id = $1::uuid AND scope = $2 AND key = $3 AND state = 'in_flight'`, tenantID, scope, key)
+		return err
+	})
+}
+
 // ledgerColumns is the select list shared by Get and Claim.
 const ledgerColumns = `provider, provider_event_id, event_type, normalised_kind, tenant_id::text, provider_object_ref, livemode,
   provider_created_at, received_at, payload, status, attempts, next_attempt_at, outcome`

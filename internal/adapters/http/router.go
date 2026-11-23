@@ -1,6 +1,7 @@
-// Package http is Billing's Gin adapter: router, handlers, DTOs and error
-// mapping (LLD §5). Phase 0 wires only the infrastructure probes; the tenant,
-// internal, webhook and operator groups are added in Phase 5.
+// Package http is Billing's Gin adapter (LLD §5): the router and probes,
+// the tenant, internal and operator route groups with their authorization
+// and idempotency middlewares, request validation (§10.4), RFC 9457 error
+// mapping (§17), and the generated OpenAPI document.
 package http
 
 import (

@@ -24,6 +24,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/api"
 	httpadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/http"
 	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/config"
@@ -78,6 +79,8 @@ func run() int {
 		Domain:         "commercial",
 		Environment:    cfg.AppEnv,
 		RequestTimeout: cfg.RequestTimeout,
+		// Problem type URIs: https://errors.bcbpsolutions.com/commercial/<error> (§5.1).
+		ProblemTypeBase: "https://errors.bcbpsolutions.com",
 	}
 
 	// Tracing with the same identity as metrics and logs (§11.3).
@@ -171,7 +174,11 @@ func run() int {
 			{Name: "database", Pinger: poolCheck(appPool)},
 			{Name: "sys_database", Pinger: poolCheck(sysPool)},
 		},
-		Routes: []func(gin.IRouter){webhookRoute(cfg, registry, sysPool, log)},
+		Routes: []func(gin.IRouter){
+			webhookRoute(cfg, registry, sysPool, log),
+			apiRoutes(cfg, ginCfg, appPool),
+			httpadapter.DocsRoutes(api.AsyncAPI),
+		},
 	})
 	// Event bus (§7): billing.events publisher (Glue schema versions are
 	// resolved here, so a deploy ahead of schema registration fails to
