@@ -8,7 +8,7 @@ Paste everything below the line into a coding agent (for example Claude Code) st
 
 You are implementing the **Commercial Billing service** (`commercial-billing`) in Go, from its Low-Level Design:
 
-- **Source of truth:** `docs/lld/commercial-lld-billing-service.md` (rev 0.30 or later, base HLD v0.65). Read it in full before writing any code. It defines the package layout, data model, API, events, flows, invariants, configuration, deployment and tests. **Implement what it says. Do not invent behaviour, endpoints, fields, events, statuses or configuration that it doesn't define.**
+- **Source of truth:** `docs/lld/commercial-lld-billing-service.md` (rev 0.31 or later, base HLD v0.65). Read it in full before writing any code. It defines the package layout, data model, API, events, flows, invariants, configuration, deployment and tests. **Implement what it says. Do not invent behaviour, endpoints, fields, events, statuses or configuration that it doesn't define.**
 - **Context documents** (read, don't implement from them): `docs/lld/billing-design-signoff-blockers.md` (why decisions were made), `docs/lld/billing-open-items-handoff.md` (what other teams still owe), `docs/lld/billing-iam-actions.md`, `docs/lld/billing-decided-items-entitlements-build.md`.
 - **Parent HLD:** `../commercial-hld-docs/hld-commercial-domain-v0.65.md`. Consult it only when the LLD points to it.
 
@@ -29,12 +29,12 @@ The repository today holds only `README.md`, `.gitignore` and `docs/`. You are b
    - every DB pool comes from `pgcommon.NewPool` (`BIL-OPS-1`);
    - there are no HTTP calls inside a DB transaction (`BIL-OPS-3`, `BIL-CONC-2`).
 4. **Platform libraries, not hand-rolled equivalents** (§3.1, §3.3):
-   - `platform-gincommon/v2`: HTTP, RFC 9457 errors, metrics.
+   - `platform-gincommon/v2` v2.7.0 or later: HTTP, RFC 9457 errors, metrics (earlier releases reject the `commercial` domain).
    - `platform-pgcommon/v2`: pools, GUC, transactions, migrations.
-   - `platform-events/v2` v2.1.0: outbox, SQS, inbox, Glue codecs.
+   - `platform-events/v2` v2.3.0: outbox, SQS, inbox, Glue codecs.
    - `platform-audit` v0.1.2: AL-5 in **outbox mode** only.
    - `stripe-go/v83`, pinned.
-   - Go 1.26.
+   - Go 1.26.11. Use the latest platform releases (see `/Users/vijayaragavan/XPertSharedLib/go`).
 
    They are private modules: set `GOPRIVATE=github.com/BCBP-SOLUTIONS-FZC-LLC/*`. If you can't fetch one, stop and say so. **Never stub or reimplement a platform library.**
 5. **Safe defaults.** Every feature flag defaults to off or its §12 default: `FEATURE_TOKEN_ADDONS=false`, `FEATURE_DIRECT_SIGNUP=false`, `AUTO_REVERT_ON_EFW=false`, `AUTO_PAUSE_ON_OPERATOR_SUSPENSION=true`; `FEATURE_SEAT_PURCHASE` as §12 says. Operator routes answer `403` until the operator path is live (`BIL-AUTH-6`). B-O17 requires the `pci_owner_reviewer` role (`BIL-PROV-4`).
@@ -61,7 +61,7 @@ The repository today holds only `README.md`, `.gitignore` and `docs/`. You are b
 
 | Quirk | What to do |
 |---|---|
-| §3 layout shows the root as `commercial-billing/`; the GitHub repo is `commercial-billing-service` | Use the **module path from the LLD header**: `github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing`. Service name, ServiceAccount, pod label, envelope `source` and metric prefix stay `commercial-billing` (CD-17, CD-19) |
+| Module path | `github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service` (LLD rev 0.31). Service name, ServiceAccount, pod label, envelope `source` and metric prefix stay `commercial-billing` (CD-17, CD-19) |
 | §3 layout's `cmd/jobs/jobs/` list predates two jobs | **§13.2 is authoritative.** Ten CronJobs, including `pii-minimisation` and `renewal-repricing` |
 | `BIL-PAY-1` is stated twice (§4.6 and §9.7) with the same meaning | Treat it as one invariant |
 | Entitlements' consumed schema isn't published yet (BL-OQ-3, 4, 20) | Build against LLD §7.3.6 and §18.4 with an `httptest` fake and recorded responses. Leave a contract-test slot (§14.3) for Entitlements' schema, marked pending |
