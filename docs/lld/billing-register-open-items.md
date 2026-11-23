@@ -2,13 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Source | `commercial-lld-billing-service.md` rev 0.27, §16.1 "Billing register" (base HLD v0.65) |
+| Source | `commercial-lld-billing-service.md` rev 0.30, §16.1 "Billing register" (base HLD v0.65) |
 | Date | 2026-11-23 |
 | From | Commercial Team (Billing) |
-| Scope | Every §16.1 row that is **not Closed**: 13 of the 26 rows. The 13 closed rows (BL-OQ-1, 2, 5, 6, 7, 10, 11, 13, 16, 17, 18, 21, 22) are left out |
+| Scope | Every §16.1 row that is **not Closed**: 12 of the 26 rows. The 14 closed rows (BL-OQ-1, 2, 5, 6, 7, 9, 10, 11, 13, 16, 17, 18, 21, 22) are left out |
 | Deployment state | No service is in production; all run in dev only. "Go-live" means promotion through dev → staging → production |
 
 **Closed since this list was first written:**
+- BL-OQ-9 (operator `HTTPRoute`), Commercial Team 2026-11-23: Billing's operator `HTTPRoute` now lists the complete operator surface, B-O1 to B-O17, as specified in §13.1 (Commercial Team, 2026-11-23). Gateway reachability is proven by the OP-G4 joint run once OP-G2 and OP-G3 are live (BL-OQ-14).
 - BL-OQ-18 (token packs), Product + Finance 2026-11-23: Product and Finance finalised the Phase 1 token-pack catalogue (pack sizes, prices and any caps); the pack records are loaded into the commercial catalogue (`token_packs`, B-O12). Billing's existing add-on purchase design supports it without code or design change.
 - BL-OQ-22 (final prices), Product 2026-11-23: Product completed the token-budget validation against PD-LLM-1 R-3 and ENT-D6 and finalised the Phase 1 commercial pricing; prices are loaded into `plan_prices`. Resolved through configuration/data only; no code or design change. Token-pack prices (`token_packs`) are not part of this closure and stay with BL-OQ-18.
 - BL-OQ-17 (Stripe UAE terms), Legal 2026-11-23: Legal reviewed the Stripe UAE data-location and processor terms and accepted them without required amendments. Billing may proceed with the planned Stripe UAE account configuration. No additional design, legal or implementation work remains.
@@ -21,7 +22,7 @@
 | Kind | Meaning | Items |
 |---|---|---|
 | **Decided, to build** | The decision is made; another team has to implement it | BL-OQ-3, 4, 20 |
-| **Go-live gate** | Another team has to build, configure or deploy something before a Billing feature can be switched on. Billing's design already handles "not yet" (a feature flag, a `403` or a `503`) | BL-OQ-8, 9, 12, 14, 19, 23, 24, 25, 26 |
+| **Go-live gate** | Another team has to build, configure or deploy something before a Billing feature can be switched on. Billing's design already handles "not yet" (a feature flag, a `403` or a `503`) | BL-OQ-8, 12, 14, 19, 23, 24, 25, 26 |
 | **Deferred** | Planned for a later phase | BL-OQ-15 |
 
 Each item has a **default**: what Billing does until the item closes. The system is safe in that state. It just can't offer the feature yet.
@@ -32,7 +33,6 @@ Each item has a **default**: what Billing does until the item closes. The system
 |---|---|---|---|---|---|
 | BL-OQ-14 | Operator path: gateway `jwt_authn` provider (OP-G2), then issuer config (OP-G3) and joint test (OP-G4) | Platform-edge; IAM | Go-live gate (**external**) | Every operator route answers `403` outside dev/test | **All operator routes**, including the Phase 1 conversion stub and provider certification |
 | BL-OQ-26 | IAM role `pci_owner_reviewer`, OP-G4 test and Audit type for B-O17 | IAM; PCI owner group | Go-live gate | B-O17 answers `403`; no provider can be certified | **Taking payments through Stripe** (an uncertified provider takes no new accounts) |
-| BL-OQ-9 | Billing's operator `HTTPRoute` lists every operator path | Billing | Go-live gate | Same `403` as BL-OQ-14 | Operator routes |
 | BL-OQ-25 | OP-G4 test and Audit type for B-O16 | IAM | Go-live gate | Audit entries wait in `pending_audit_entries` | Operator decision on invoices held during a suspension |
 | BL-OQ-8 | Signup BFF aligns to Billing's published contract | Web / growth | Go-live gate | `FEATURE_DIRECT_SIGNUP=false` | Direct paid signup |
 | BL-OQ-12 | Notification messages for seat, add-on, downgrade and price-change events | Notification + Commercial | Go-live gate | Only past-due and cancelled emails | Customer emails; notice of price increases |
@@ -48,7 +48,7 @@ Each item has a **default**: what Billing does until the item closes. The system
 
 | To launch | Needs closed |
 |---|---|
-| Paid subscriptions through Stripe | BL-OQ-14, BL-OQ-9, BL-OQ-26 (certification) |
+| Paid subscriptions through Stripe | BL-OQ-14, BL-OQ-26 (certification) |
 | Direct paid signup | The above, plus BL-OQ-8 |
 | Token add-ons | The above, plus BL-OQ-3, 4, 19 and 20; BL-OQ-23 for the correct refund audit label |
 | Price increases for existing customers | BL-OQ-12 (the renewal price-change message) |
@@ -89,16 +89,6 @@ The PCI owner group names who holds the role.
 **Why it matters.** The registry only lets a provider with a `passed` certification take new accounts. **No certification means no paid launch through Stripe.**
 
 **To close:** IAM action **A-10** in `billing-iam-actions.md` is done in each environment, and the PCI owner group has named the role holders.
-
-### BL-OQ-9 — Billing's operator `HTTPRoute` (remaining part)
-
-**What it is.** There's no IAM-side route list. Each service exposes its own operator paths through its own `HTTPRoute`. IAM's part, OP-G4 tests for B-O1 to B-O15, is merged ([iam-authz-enrichment#43](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-authz-enrichment/pull/43)).
-
-**Remaining.** Billing's own chart lists every operator path. That's **B-O1 to B-O17** (B-O16 added in LLD rev 0.16, B-O17 in rev 0.21; the LLD row was corrected in rev 0.23). A path missing from the `HTTPRoute` can't be reached through the gateway.
-
-**Billing's default.** Same `403` as BL-OQ-14.
-
-**To close:** Billing writes its Helm chart with the full list (LLD §13.1). The gateway half of OP-G4 runs under BL-OQ-14.
 
 ### BL-OQ-25 — IAM coverage for B-O16 (from BL-OQ-1)
 
@@ -232,7 +222,6 @@ SRE-6 and SRE-8 are closed.
 |---|---|---|---|
 | BL-OQ-14 | Platform-edge; IAM | Go-live gate | OP-G1 merged; **OP-G2 not started** |
 | BL-OQ-26 | IAM; PCI owner group | Go-live gate | Requested (A-10) |
-| BL-OQ-9 | Billing | Go-live gate | IAM part merged; Billing `HTTPRoute` when the chart is written |
 | BL-OQ-25 | IAM | Go-live gate | Requested (A-9) |
 | BL-OQ-8 | Web / growth | Go-live gate | Contract published |
 | BL-OQ-12 | Notification + Commercial | Go-live gate | Open |

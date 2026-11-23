@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document | Hand-off of every open item in the Billing LLD, by owning team and service |
-| Billing LLD | `commercial-lld-billing-service.md` rev 0.29 (base HLD v0.65) |
+| Billing LLD | `commercial-lld-billing-service.md` rev 0.30 (base HLD v0.65) |
 | Date | 2026-11-23 |
 | From | Commercial Team (Billing) |
 | Deployment state | No service is in production; all run in dev only. "Done" means merged **and** promoted with each environment (dev → staging → production) |
@@ -31,6 +31,7 @@
 ---
 
 **Closed since first issue:**
+- BL-OQ-9 (a) (operator `HTTPRoute`), Commercial Team 2026-11-23: Billing's operator `HTTPRoute` now lists the complete operator surface, B-O1 to B-O17, as specified in §13.1 (Commercial Team, 2026-11-23). Gateway reachability is proven by the OP-G4 joint run once OP-G2 and OP-G3 are live (BL-OQ-14).
 - Product decision memos: Product approved PD-LLM-1 (model tiers) and Entitlements approved ENT-D6 (trial profiles) on 2026-11-23. Billing continues to send plan selections only; no design or implementation change. The approvals validate the assumptions behind pricing and entitlement configuration.
 - BL-OQ-18 (token packs), Product + Finance 2026-11-23: Product and Finance finalised the Phase 1 token-pack catalogue (pack sizes, prices and any caps); the pack records are loaded into the commercial catalogue (`token_packs`, B-O12). Billing's existing add-on purchase design supports it without code or design change.
 - BL-OQ-22 (final prices), Product 2026-11-23: Product completed the token-budget validation against PD-LLM-1 R-3 and ENT-D6 and finalised the Phase 1 commercial pricing; prices are loaded into `plan_prices`. Resolved through configuration/data only; no code or design change. Token-pack prices (`token_packs`) are not part of this closure and stay with BL-OQ-18.
@@ -57,7 +58,7 @@
 | **Product** | — | — (acknowledgement received 2026-11-23) | — |
 | **Legal** | — | — (acknowledgement received 2026-11-23) | — |
 | **Commercial HLD owner** | `commercial-hld-docs` | Merge and tag HLD v0.65 | **Final sign-off** |
-| **Commercial Team (Billing)** | `commercial-billing` (`billing` / `commercial-billing`) | BL-OQ-9 (a); W-8 to W-10; contract-test gap; LLD housekeeping; push and PR; BL-OQ-15 (deferred) | Final sign-off (as approver); its own build |
+| **Commercial Team (Billing)** | `commercial-billing` (`billing` / `commercial-billing`) | W-8 to W-10; contract-test gap; LLD housekeeping; push and PR; BL-OQ-15 (deferred) | Final sign-off (as approver); its own build |
 
 ---
 
@@ -287,7 +288,6 @@ The work is probably unpushed. **These items stay open until the code can be see
 
 | # | What | Action | Done when |
 |---|---|---|---|
-| BL-OQ-9 (a) | Operator `HTTPRoute` lists every Billing operator path | Write the chart with **B-O1 to B-O17** (LLD §13.1) | Every operator path reachable through the gateway after OP-G3 |
 | W-8 | Publish `TenantQuotaAddOnChanged` (`purchase`, `refund`) through the outbox; register the schema in Glue `billing-events` | Build as LLD §7.3.6 (`BIL-ADD-2`, `BIL-ADD-4`) | Exactly one event per purchase and per refund; schema registered per environment |
 | W-9, W-10 | Read Entitlements eligibility (fresh on purchase, 60 s cache for the pack list, `503` fail-closed); egress to Entitlements on that `GET` only | Build as LLD §8.7 and §10 | Works against Entitlements in each environment |
 | Contract test | The CI contract test covers Core, Realm Provisioner and Audit consumed schemas, **not Entitlements** | Add Entitlements' consumed `TenantQuotaAddOnChanged` schema once pushed | CI fails if Billing and Entitlements disagree |
@@ -305,7 +305,7 @@ The work is probably unpushed. **These items stay open until the code can be see
 |---|---|
 | **Final sign-off** | §3.1 HLD v0.65 merged · §3.2 PCI re-confirmation (§3.3 acknowledgements received) |
 | **Any Billing event in an environment** | Commercial IaC topic, registry and queues · Entitlements consumer event names (or Entitlements misses every plan change) |
-| **Paid subscriptions through Stripe** | OP-G1 rollout · **OP-G2** · OP-G3 · OP-G4 · BL-OQ-9 (a) · A-10 role + named holders · first certification approved (B-O17) |
+| **Paid subscriptions through Stripe** | OP-G1 rollout · **OP-G2** · OP-G3 · OP-G4 · A-10 role + named holders · first certification approved (B-O17) |
 | **Direct paid signup** | All of the above · BL-OQ-8 · SRE-3 |
 | **Token add-ons** (`FEATURE_TOKEN_ADDONS=true`) | Stripe launch · Entitlements E-1, E-2, E-4, E-5 verified · W-8 to W-11 · BL-OQ-19 (AI-1, AI-3, AI-5) · A-5 deployed |
 | **Price increases for live subscribers** | BL-OQ-12 price-change message |
@@ -351,7 +351,7 @@ A-10 role + PCI names holders ────────────────�
 | BL-OQ-17 | UAE Stripe terms | Finance + Legal | — | **Closed** 2026-11-23: accepted without amendments |
 | BL-OQ-18 | Token packs | Product + Finance | — | **Closed** 2026-11-23: catalogue loaded into `token_packs` |
 | Memos | PD-LLM-1, ENT-D6 approval | Product; Entitlements | — | **Approved** 2026-11-23 |
-| BL-OQ-9 (a) | `HTTPRoute` B-O1 to B-O17 | Commercial Team (Billing) | `commercial-billing` | Open (with chart) |
+| BL-OQ-9 (a) | `HTTPRoute` B-O1 to B-O17 | Commercial Team (Billing) | `commercial-billing` | **Closed** 2026-11-23 |
 | W-8 to W-10 | Event publish, eligibility read, egress | Commercial Team (Billing) | `commercial-billing` | Designed; to build |
 | — | Contract test incl. Entitlements schema | Commercial Team (Billing) | `commercial-billing` | Open |
 | — | LLD housekeeping; push and PR | Commercial Team (Billing) | `commercial-billing` | Open |
