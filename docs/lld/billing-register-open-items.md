@@ -2,11 +2,13 @@
 
 | Field | Value |
 |---|---|
-| Source | `commercial-lld-billing-service.md` rev 0.23, §16.1 "Billing register" (base HLD v0.65) |
+| Source | `commercial-lld-billing-service.md` rev 0.24, §16.1 "Billing register" (base HLD v0.65) |
 | Date | 2026-11-23 |
 | From | Commercial Team (Billing) |
-| Scope | Every §16.1 row that is **not Closed**: 17 of the 26 rows. The 9 closed rows (BL-OQ-1, 2, 6, 7, 10, 11, 13, 16, 21) are left out |
+| Scope | Every §16.1 row that is **not Closed**: 16 of the 26 rows. The 10 closed rows (BL-OQ-1, 2, 5, 6, 7, 10, 11, 13, 16, 21) are left out |
 | Deployment state | No service is in production; all run in dev only. "Go-live" means promotion through dev → staging → production |
+
+**Closed since this list was first written:** BL-OQ-5 (launch currency), Finance 2026-11-23: USD remains the default currency. Market-specific currencies are configured through `plan_prices`; AED pricing can be introduced via B-O11 without application changes. No further design or implementation work is required.
 
 ## Read this first
 
@@ -16,7 +18,7 @@
 |---|---|---|
 | **Decided, to build** | The decision is made; another team has to implement it | BL-OQ-3, 4, 20 |
 | **Go-live gate** | Another team has to build, configure or deploy something before a Billing feature can be switched on. Billing's design already handles "not yet" (a feature flag, a `403` or a `503`) | BL-OQ-8, 9, 12, 14, 19, 23, 24, 25, 26 |
-| **Business decision or data** | A number, price, currency or contract term. Loaded as data or settled outside the code; no design change | BL-OQ-5, 17, 18, 22 |
+| **Business decision or data** | A number, price, currency or contract term. Loaded as data or settled outside the code; no design change | BL-OQ-17, 18, 22 |
 | **Deferred** | Planned for a later phase | BL-OQ-15 |
 
 Each item has a **default**: what Billing does until the item closes. The system is safe in that state. It just can't offer the feature yet.
@@ -29,7 +31,6 @@ Each item has a **default**: what Billing does until the item closes. The system
 | BL-OQ-26 | IAM role `pci_owner_reviewer`, OP-G4 test and Audit type for B-O17 | IAM; PCI owner group | Go-live gate | B-O17 answers `403`; no provider can be certified | **Taking payments through Stripe** (an uncertified provider takes no new accounts) |
 | BL-OQ-9 | Billing's operator `HTTPRoute` lists every operator path | Billing | Go-live gate | Same `403` as BL-OQ-14 | Operator routes |
 | BL-OQ-25 | OP-G4 test and Audit type for B-O16 | IAM | Go-live gate | Audit entries wait in `pending_audit_entries` | Operator decision on invoices held during a suspension |
-| BL-OQ-5 | Launch currency: USD, AED or both | Finance | Business decision | `DEFAULT_CURRENCY=USD` | **Price book** for launch |
 | BL-OQ-22 | Final plan and pack prices, after token-budget validation | Finance + Product | Business data | Phase 1 seed prices; no token packs | **Final prices** |
 | BL-OQ-17 | Stripe data location and processor terms, UAE account | Finance + Legal | Business decision | — | **UAE Stripe account** |
 | BL-OQ-8 | Signup BFF aligns to Billing's published contract | Web / growth | Go-live gate | `FEATURE_DIRECT_SIGNUP=false` | Direct paid signup |
@@ -47,7 +48,7 @@ Each item has a **default**: what Billing does until the item closes. The system
 
 | To launch | Needs closed |
 |---|---|
-| Paid subscriptions through Stripe | BL-OQ-14, BL-OQ-9, BL-OQ-26 (certification), BL-OQ-5 and BL-OQ-22 (prices), BL-OQ-17 (UAE account) |
+| Paid subscriptions through Stripe | BL-OQ-14, BL-OQ-9, BL-OQ-26 (certification), BL-OQ-22 (prices), BL-OQ-17 (UAE account) |
 | Direct paid signup | The above, plus BL-OQ-8 |
 | Token add-ons | The above, plus BL-OQ-3, 4, 18, 19 and 20; BL-OQ-23 for the correct refund audit label |
 | Price increases for existing customers | BL-OQ-12 (the renewal price-change message) |
@@ -110,16 +111,6 @@ The PCI owner group names who holds the role.
 ---
 
 ## Business decisions and data
-
-### BL-OQ-5 — Launch currency — Finance
-
-**Question.** HLD §6.3 lists prices in USD, but the provider capability bar requires AED pricing. Which currency for which market? Are both USD and AED offered in Phase 1?
-
-**Billing's default.** `DEFAULT_CURRENCY=USD`. AED price rows can be added later through the operator price-book route (B-O11). No code change either way.
-
-**Why it matters.** The launch price book can't be loaded until Finance decides. An account's currency is fixed once it has been charged.
-
-**To close:** Finance states the currency per market.
 
 ### BL-OQ-22 — Final prices wait on token-budget validation — Finance + Product
 
@@ -277,7 +268,6 @@ SRE-6 and SRE-8 are closed.
 | BL-OQ-26 | IAM; PCI owner group | Go-live gate | Requested (A-10) |
 | BL-OQ-9 | Billing | Go-live gate | IAM part merged; Billing `HTTPRoute` when the chart is written |
 | BL-OQ-25 | IAM | Go-live gate | Requested (A-9) |
-| BL-OQ-5 | Finance | Business decision | Open |
 | BL-OQ-22 | Finance + Product | Business data | Open |
 | BL-OQ-17 | Finance + Legal | Business decision | Open |
 | BL-OQ-18 | Product | Business data | Open |

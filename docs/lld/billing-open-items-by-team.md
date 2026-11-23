@@ -1,6 +1,6 @@
 # Billing Service — Open Items by Team
 
-Source: `commercial-lld-billing-service.md` rev 0.23 (2026-11-23; base HLD v0.65), updated with the team responses, the Commercial TL decisions and the AI team reply (draft) of 2026-11-19 (`billing-open-items-team-response.md` and `billing-reply-ai-team.md`, not yet in this repository), §16.1 register, §16.2 discrepancies, platform/SRE dependencies, and the ENT-D3 / ENT-D6 product memos. Item IDs match the LLD. **Deployment state:** no service is in production; every service, Billing included, runs in dev only. "Deploy" items below are environment-promotion steps, not production fixes. Where several teams share an item, it is listed under each, with the lead team first.
+Source: `commercial-lld-billing-service.md` rev 0.24 (2026-11-23; base HLD v0.65), updated with the team responses, the Commercial TL decisions and the AI team reply (draft) of 2026-11-19 (`billing-open-items-team-response.md` and `billing-reply-ai-team.md`, not yet in this repository), §16.1 register, §16.2 discrepancies, platform/SRE dependencies, and the ENT-D3 / ENT-D6 product memos. Item IDs match the LLD. **Deployment state:** no service is in production; every service, Billing included, runs in dev only. "Deploy" items below are environment-promotion steps, not production fixes. Where several teams share an item, it is listed under each, with the lead team first.
 
 **Status key:** **Decided** = TL decision made; owning team to implement · **Conflict** = a team answered, but the answer contradicts the HLD or Billing's need · **Open** = needs an answer · **Proposed** = Billing has a proposal; needs sign-off · **External** = depends on another team's delivery · **Deferred** = later phase.
 
@@ -12,7 +12,7 @@ Source: `commercial-lld-billing-service.md` rev 0.23 (2026-11-23; base HLD v0.65
 | IAM — Audit Log | BL-OQ-23 (SRE-8 filter, refund entry type) | Token add-on refund audit |
 | IAM — Operator path / platform-edge | BL-OQ-9 (b) OP-G4 coverage; BL-OQ-14; BL-OQ-25 (B-O16 test + Audit type); BL-OQ-26 (`pci_owner_reviewer` role, B-O17 test + Audit type); OP-G1, OP-G3, OP-G6 (IAM); **OP-G2 (Platform edge)** | Every operator route `403` until OP-G1 to OP-G3; OP-G2 is the external blocker |
 | Entitlements | BL-OQ-3, BL-OQ-4, BL-OQ-20, read-only access (all **decided**, to implement) | BL-OQ-3 (add-on purchase needs per-resource eligibility and access) |
-| Finance | BL-OQ-5, 15, 17, 22; PD-LLM-1 R-3; ENT-D6 budgets | BL-OQ-5 (launch currency), BL-OQ-22 (final prices) |
+| Finance | BL-OQ-15, 17, 22; PD-LLM-1 R-3; ENT-D6 budgets | BL-OQ-22 (final prices) |
 | Product | BL-OQ-18, 22; PD-LLM-1 and ENT-D6 approval; **PD-LLM-1 R-4 (Opus tier)**; R-1 model list; R-2 evaluation set and pass bar | BL-OQ-18 (token add-ons have no packs) |
 | Legal | BL-OQ-17 | BL-OQ-17 (UAE Stripe account) |
 | Security | — (BL-OQ-7 closed 2026-11-23) | — |
@@ -82,7 +82,7 @@ All Core-owned items closed on 2026-11-19.
 
 | ID | Item | Billing default until closed | Status |
 |---|---|---|---|
-| BL-OQ-5 | **Launch currency.** HLD lists USD; the capability bar needs AED. One currency per market? Both in Phase 1? | `DEFAULT_CURRENCY=USD`; AED rows via B-O11 | **Open — blocking** price book |
+| BL-OQ-5 | **Launch currency.** HLD lists USD; the capability bar needs AED. One currency per market? Both in Phase 1? | `DEFAULT_CURRENCY=USD`; AED rows via B-O11 | **Closed** (Finance, 2026-11-23; LLD rev 0.24): USD default; other currencies as `plan_prices` rows via B-O11, no application change |
 | BL-OQ-22 | **Final prices wait on token-budget validation** (PD-LLM-1 R-3: 500K / 5M / 25M quotas vs tier model cost; ENT-D6 trial budgets). Then set `plan_prices` and `token_packs` (with Product) | Phase 1 seed; `token_packs` empty → `ADDON_NOT_AVAILABLE` | Open |
 | BL-OQ-6 | Proration rule without a provider engine; behaviour below the minimum charge; renewal top-up kept on payment failure | Seconds-based, half-up; `free_until_renewal`; top-up kept | **Closed** (Finance approved 2026-11-23; LLD rev 0.15) |
 | BL-OQ-1 | **CD-24:** invoicing during operator suspension — auto-pause collection (`keep_as_draft`), resume on reactivation, operator decides drafts (with Billing) | `AUTO_PAUSE_ON_OPERATOR_SUSPENSION=true` | **Closed** (Finance approved 2026-11-23; LLD rev 0.16; follow-up BL-OQ-25) |

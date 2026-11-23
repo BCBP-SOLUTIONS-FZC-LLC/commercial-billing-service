@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document | Hand-off of every open item in the Billing LLD, by owning team and service |
-| Billing LLD | `commercial-lld-billing-service.md` rev 0.23 (base HLD v0.65) |
+| Billing LLD | `commercial-lld-billing-service.md` rev 0.24 (base HLD v0.65) |
 | Date | 2026-11-23 |
 | From | Commercial Team (Billing) |
 | Deployment state | No service is in production; all run in dev only. "Done" means merged **and** promoted with each environment (dev → staging → production) |
@@ -30,6 +30,8 @@
 
 ---
 
+**Closed since first issue:** BL-OQ-5 (launch currency), Finance 2026-11-23: USD remains the default currency. Market-specific currencies are configured through `plan_prices`; AED pricing can be introduced via B-O11 without application changes. No further design or implementation work is required.
+
 ## 2. Summary by team
 
 | Team | Service / repository | Open items | Holds back |
@@ -46,7 +48,7 @@
 | **Web / growth** | Signup BFF | BL-OQ-8 | Direct paid signup |
 | **Notification** | `hld-notification-service` | BL-OQ-12 | Customer emails; price increases for existing customers |
 | **Usage & Metering** | `commercial-usage-metering-service` | BL-OQ-24 | Billing's usage-record consumer |
-| **Finance** | — | BL-OQ-5, BL-OQ-22, BL-OQ-17 (with Legal); four acknowledgements | **Price book and launch** |
+| **Finance** | — | BL-OQ-22, BL-OQ-17 (with Legal); four acknowledgements | **Final prices and launch** |
 | **Product** | — | BL-OQ-18; BL-OQ-22 (with Finance); approve PD-LLM-1 and ENT-D6 memos; one acknowledgement | Token packs; final prices |
 | **Legal** | — | BL-OQ-17 (with Finance); one acknowledgement | UAE Stripe account |
 | **Commercial HLD owner** | `commercial-hld-docs` | Merge and tag HLD v0.65 | **Final sign-off** |
@@ -259,7 +261,6 @@ The work is probably unpushed. **These items stay open until the code can be see
 
 | # | What | Billing meanwhile | Action | Done when |
 |---|---|---|---|---|
-| BL-OQ-5 | **Launch currency.** The HLD lists USD; the provider capability bar needs AED. Which currency per market; both in Phase 1? | `DEFAULT_CURRENCY=USD` | Decide per market | Decision recorded. AED rows are loaded through B-O11 if needed; no code change |
 | BL-OQ-22 | **Final prices** after token-budget validation (PD-LLM-1 R-3: Starter 500K, Pro 5M, Enterprise 25M against model cost; ENT-D6 trial budgets). With Product | Phase 1 seed prices; no packs | Validate budgets; set plan and pack prices | Prices loaded (data only) |
 | BL-OQ-17 | Stripe UAE account: data location and processor terms. With Legal | — | Accept or negotiate the terms | Terms accepted |
 | Acks | S-2, S-3, S-5, S-6 interpretations (§3.3) | — | Reply | Acknowledged |
@@ -304,7 +305,7 @@ The work is probably unpushed. **These items stay open until the code can be see
 |---|---|
 | **Final sign-off** | §3.1 HLD v0.65 merged · §3.2 PCI re-confirmation · §3.3 four acknowledgements |
 | **Any Billing event in an environment** | Commercial IaC topic, registry and queues · Entitlements consumer event names (or Entitlements misses every plan change) |
-| **Paid subscriptions through Stripe** | OP-G1 rollout · **OP-G2** · OP-G3 · OP-G4 · BL-OQ-9 (a) · A-10 role + named holders · first certification approved (B-O17) · BL-OQ-5 · BL-OQ-22 · BL-OQ-17 |
+| **Paid subscriptions through Stripe** | OP-G1 rollout · **OP-G2** · OP-G3 · OP-G4 · BL-OQ-9 (a) · A-10 role + named holders · first certification approved (B-O17) · BL-OQ-22 · BL-OQ-17 |
 | **Direct paid signup** | All of the above · BL-OQ-8 · SRE-3 |
 | **Token add-ons** (`FEATURE_TOKEN_ADDONS=true`) | Stripe launch · Entitlements E-1, E-2, E-4, E-5 verified · W-8 to W-11 · BL-OQ-18 · BL-OQ-19 (AI-1, AI-3, AI-5) · A-5 deployed |
 | **Price increases for live subscribers** | BL-OQ-12 price-change message |
@@ -316,7 +317,7 @@ The work is probably unpushed. **These items stay open until the code can be see
 ```
 OP-G1 rollout ─► OP-G2 (platform-edge, not started) ─► OP-G3 ─► OP-G4 joint run ─┐
 A-10 role + PCI names holders ───────────────────────────────────────────────────┼─► first certification (B-O17) ─► Stripe live
-BL-OQ-5 currency ─► BL-OQ-22 prices (after PD-LLM-1 R-3) ──────────────────────────┘
+BL-OQ-22 prices (after PD-LLM-1 R-3) ───────────────────────────────────────────────┘
 BL-OQ-17 UAE terms ─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -347,7 +348,7 @@ BL-OQ-17 UAE terms ────────────────────�
 | BL-OQ-8 | BFF alignment | Web / growth | Signup BFF | Contract published |
 | BL-OQ-12 | NTF-3 messages | Notification + Commercial | Notification | Open |
 | BL-OQ-24 | `UsagePeriodClosed` contract | Usage & Metering | `commercial-usage-metering` | Open (known risk) |
-| BL-OQ-5 | Launch currency | Finance | — | Open |
+| BL-OQ-5 | Launch currency | Finance | — | **Closed** 2026-11-23: USD default; others via `plan_prices` / B-O11 |
 | BL-OQ-22 | Final prices | Finance + Product | — | Open |
 | BL-OQ-17 | UAE Stripe terms | Finance + Legal | — | Open |
 | BL-OQ-18 | Token packs | Product | — | Open |
