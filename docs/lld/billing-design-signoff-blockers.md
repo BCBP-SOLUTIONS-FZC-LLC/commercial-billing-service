@@ -2,7 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Document | `commercial-lld-billing-service.md` rev 0.14 (base HLD v0.64) |
+| Document | `commercial-lld-billing-service.md` rev 0.15 (base HLD v0.64) |
+| Progress | **1 of 9 closed** — S-1 approved by Finance 2026-11-23 |
 | From | Commercial Team (Billing) |
 | Date | 2026-11-23 |
 | Purpose | Lists the decisions other teams must make before the Billing LLD can be **signed off as a design** |
@@ -24,7 +25,7 @@ The Billing LLD tracks three kinds of open item. Only the first kind is in this 
 
 | # | Team | Item | Question in one line | Billing's proposal (current default) | If rejected |
 |---|---|---|---|---|---|
-| S-1 | Finance | BL-OQ-6 | How are mid-period seat purchases charged when the payment provider can't calculate proration? | Seconds-based, rounded half-up; below the minimum charge the seats are free until renewal; renewal top-up seats kept if payment fails | §8.5.3 / §8.6.3 change; golden tests rewritten |
+| S-1 | Finance | BL-OQ-6 | How are mid-period seat purchases charged when the payment provider can't calculate proration? | ✅ **Approved 2026-11-23, unchanged**, with three record-keeping additions (see S-1). Applied in LLD rev 0.15 | — |
 | S-2 | Finance | BL-OQ-1 (CD-24) | Do we keep charging a tenant that an operator suspended? | No: collection pauses automatically, invoices are kept as drafts, an operator decides | §8.10 reduced to "bill as normal"; config flag removed |
 | S-3 | Finance | BL-OQ-13 (BIZ-6) | Which roles can do which billing actions? | Six permissions, two added by the LLD (owner-only plan change and payment method) | §5.2 table and the permission code change |
 | S-4 | Finance + Security | BL-OQ-7 (CD-10) | When is a trial-to-paid conversion reversed for fraud? | Fraud dispute or early fraud warning on the conversion payment within 7 days → SEV-2 → operator approves; never automatic | §8.2 flow, B-O8 and the alert change |
@@ -49,7 +50,24 @@ The Billing LLD tracks three kinds of open item. Only the first kind is in this 
 2. **Below the provider's minimum charge.** The seats are added free for the rest of the period and billed from renewal, recorded as an adjustment. The alternative is to charge the minimum. Default: `PRORATION_BELOW_MINIMUM = free_until_renewal`.
 3. **Renewal top-up fails.** If members were added just before renewal and the top-up charge fails, the tenant **keeps the seats** and the unpaid invoice goes into normal dunning (LLD §8.6.3). Removing the seats would leave the tenant above its seat cap in IAM.
 
-**Decision needed:** approve rules 1 to 3, or give the alternative for any of them.
+**Decision: ✅ Approved by Finance, 2026-11-23. Rules 1, 2 and 3 approved with no changes.**
+
+Finance's reasons:
+- **Rule 1:** time-based proration doesn't depend on the provider. It handles month length, leap years, daylight-saving changes and custom periods, and matches how major billing platforms (Stripe, Chargebee) prorate.
+- **Rule 2:** charging a provider minimum (for example 0.50 for a 0.03 proration) over-bills the customer. The exposure is negligible because the seats are billed in full from the next renewal.
+- **Rule 3:** removing seats would leave IAM with more users than licensed seats, and automatic removal is complex and potentially destructive. An unpaid renewal is a receivable problem, not an entitlement reduction.
+
+Finance asked for three additions. All are in LLD rev 0.15:
+
+| Finance asked for | Where in the LLD |
+|---|---|
+| Store the raw unrounded calculation **and** the final rounded amount, for audit and disputes | `seat_purchases` stores the inputs (`unit_amount_minor`, `remaining_seconds`, `period_seconds`), `amount_unrounded_minor` and `amount_minor`. The database enforces it for every calculator-priced purchase (§4.2.10, `BIL-SEAT-5`) |
+| Below the minimum: record the seat addition, the deferred amount and `reason = below_provider_minimum`, visible in audit records and metrics | The purchase row has `amount_minor = 0`, `deferred_amount_minor` and `deferral_reason = below_provider_minimum`. `TenantSeatsChanged` carries both fields, so Audit's `tenant.seats_changed` entry records them. New metrics `commercial_billing_proration_deferred_total` and `..._deferred_amount_minor_total` (§8.5.3, §7.3.4, §11.2) |
+| State that the fallback calculator is used only for providers certified `Proration = fallback`; providers with their own engine (Stripe) remain the system of record | First paragraph of §8.5.3 |
+
+Rule 3's sequence is now written in §8.6.3: renewal invoice → payment fails → invoice overdue → standard dunning → suspension only under the existing lapse rules. Seats change only if the tenant schedules a reduction.
+
+**One design change follows from this.** The earlier text recorded a below-minimum purchase as an `adjustments` row. That table is for operator credits and debits on the provider balance, so it was the wrong place. The deferral is now recorded on the seat purchase itself.
 
 ### S-2 — Invoicing while an operator has suspended the tenant (BL-OQ-1, CD-24)
 
@@ -182,7 +200,7 @@ Tender admins and members get none of these.
 
 | # | Team | Approver | Reply | Date |
 |---|---|---|---|---|
-| S-1 | Finance | | | |
+| S-1 | Finance | Finance | ✅ Approved, rules 1–3 unchanged; three record-keeping additions applied (LLD rev 0.15) | 2026-11-23 |
 | S-2 | Finance | | | |
 | S-3 | Finance | | | |
 | S-4 | Finance | | | |

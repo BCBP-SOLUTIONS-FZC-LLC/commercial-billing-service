@@ -82,7 +82,7 @@ All Core-owned items closed on 2026-11-19.
 |---|---|---|---|
 | BL-OQ-5 | **Launch currency.** HLD lists USD; the capability bar needs AED. One currency per market? Both in Phase 1? | `DEFAULT_CURRENCY=USD`; AED rows via B-O11 | **Open — blocking** price book |
 | BL-OQ-22 | **Final prices wait on token-budget validation** (PD-LLM-1 R-3: 500K / 5M / 25M quotas vs tier model cost; ENT-D6 trial budgets). Then set `plan_prices` and `token_packs` (with Product) | Phase 1 seed; `token_packs` empty → `ADDON_NOT_AVAILABLE` | Open |
-| BL-OQ-6 | Proration rule without a provider engine; behaviour below the minimum charge; renewal top-up kept on payment failure | Seconds-based, half-up; `free_until_renewal`; top-up kept | Proposed |
+| BL-OQ-6 | Proration rule without a provider engine; behaviour below the minimum charge; renewal top-up kept on payment failure | Seconds-based, half-up; `free_until_renewal`; top-up kept | **Closed** (Finance approved 2026-11-23; LLD rev 0.15) |
 | BL-OQ-1 | **CD-24:** invoicing during operator suspension — auto-pause collection (`keep_as_draft`), resume on reactivation, operator decides drafts (with Billing) | `AUTO_PAUSE_ON_OPERATOR_SUSPENSION=true` | Proposed |
 | BL-OQ-7 | **CD-10:** conversion reversal on a fraud dispute or early fraud warning within 7 days, operator-approved (with Billing, Security) | Operator-approved; `AUTO_REVERT_ON_EFW=false` | Proposed |
 | BL-OQ-11 | **CD-14:** financial-record retention per jurisdiction; also sets Workflow history retention (with Legal, Billing) | No financial deletion job | Open |

@@ -7,7 +7,7 @@
 | Document type | Low-Level Design (LLD) |
 | Service | `commercial-billing` (Billing) |
 | Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing` |
-| Status | **Submitted for sign-off** (rev 0.14) — design stage; no code yet. Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
+| Status | **Submitted for sign-off** (rev 0.15) — design stage; no code yet. Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
 | Base HLD | Commercial Domain HLD **v0.64** (`hld-commercial-domain-v0.64.md`), the only HLD for the domain. Rebased from v0.51 in rev 0.14: v0.52 to v0.64 checked for Billing impact (§1.1, "HLD v0.52 to v0.64"); only v0.64 (`platform-audit`) changes Billing, already applied in rev 0.5. Parent: IAM HLD **v1.59** |
 | Supersedes | `hld-billing-service.md` v0.2 (draft Billing HLD, dropped in Commercial HLD v0.28). Its open items B-1 to B-13 are dispositioned in §16.3 and are never a source of requirements |
 | Sibling LLDs | Commercial: `commercial-lld-entitlements-service.md`, `commercial-lld-usage-metering-service.md` (to be written; until it exists the consumed `UsagePeriodClosed` contract is unverified, BL-OQ-24). IAM (contracts verified against these): Core `iam-lld-org-membership-service.md` rev 2.49 (I-11, I-18, `billing-orgm-q`, EVT-14/15/18, SEAT-2), Realm Provisioner `iam-lld-realm-provisioner-service.md` rev 1.46+ (RP-3, RP-4, RP-11, `billing-realm-q`, `iam.tenant.events` payloads), Audit Log `iam-lld-audit-log-service.md` rev 0.37 (AL-5, entry taxonomy, Billing admission since rev 0.34, `billing.token_addon.refunded` since rev 0.37), `platform-audit` `docs/lld/platform-lld-audit.md` rev 1.5 (§4, §11, §18.6, §19.2), AuthZ Enrichment `iam-lld-authz-enrichment.md` v1.50 (operator path, CD-52; §8.9.1 OP-G4 lists Billing B-O1 to B-O15). Edge: `signup-bff-lld.md` (Signup BFF, `BillingClient.AuthorizeAndCharge`) |
@@ -19,6 +19,7 @@
 
 | Rev | Date | Change |
 |---|---|---|
+| 0.15 | 2026-11-23 | **BL-OQ-6 closed — Finance approved proration rules 1 to 3 unchanged** (sign-off item S-1). (1) §8.5.3: fallback calculator used only for providers certified `Proration = fallback`; providers with their own engine (Stripe) stay the system of record. (2) Finance requirements added: `seat_purchases` stores calculator inputs, `amount_unrounded_minor` and the rounded amount (§4.2.10, new `BIL-SEAT-5`); a purchase below the provider minimum is confirmed free with `deferred_amount_minor` and `deferral_reason = below_provider_minimum`, replacing the earlier "`adjustments` row" wording, and carried in `TenantSeatsChanged` (additive fields, §7.3.4) and two new metrics (§11.2). (3) §8.6.3: renewal top-up failure sequence stated; seats never removed automatically. B-P6 response, §12, §14.1 golden table and §16.4 updated. |
 | 0.14 | 2026-11-23 | **Sign-off housekeeping.** Status set to "Submitted for sign-off" with named approvers. Base HLD rebased v0.51 → **v0.64**; v0.52 to v0.64 checked, none changes Billing beyond v0.64's `platform-audit` (already in rev 0.5) (§1.1 impact table, §1.2). Sibling revisions updated: AuthZ Enrichment v1.50 (OP-G4 covers B-O1–B-O15), Audit Log rev 0.37 (`billing.token_addon.refunded`). §16.4 corrected to B-O6–B-O15; Appendix A reserved-reasons row aligned with D-8. New BL-OQ-24: `UsagePeriodClosed` contract unverified until the Usage & Metering LLD exists. §1.2 lists the 19 Nov action and reply documents; two cited source files are not yet in the repository. No design change. |
 | 0.13 | 2026-11-19 | **IAM PRs merged.** [iam-authz-enrichment#43](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-authz-enrichment/pull/43) (OP-G4 AuthZ tests for B-O1–B-O15), [iam-audit-log#24](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-audit-log/pull/24) (`billing.token_addon.refunded`), [iam-realm-provisioner#60](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-realm-provisioner/pull/60) (OP-G1 platform realm `bcbp-platform`). BL-OQ-9: IAM part done, Billing's `HTTPRoute` remains. BL-OQ-23 (b) merged. BL-OQ-14: OP-G1 merged; OP-G2 (platform edge) is the remaining external blocker. |
 | 0.12 | 2026-11-19 | **IAM reply to the action list applied** (`billing-iam-actions-reply.md`). BL-OQ-9: IAM part done, [iam-authz-enrichment#43](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-authz-enrichment/pull/43) in review. BL-OQ-23 (a) and SRE-8 closed (Audit queues are catch-all); (b) [iam-audit-log#24](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-audit-log/pull/24) in review; (c) open, needs TL confirmation that Entitlements publishes no add-on event. CD-19 admission on I-11, I-18, RP-3, RP-4, RP-11 confirmed in dev, staging and prod charts. SRE-3 confirmed in Core's repo. BL-OQ-14 unchanged; OP-G6 date not set. |
@@ -913,6 +914,14 @@ CREATE TABLE seat_purchases (
   amount_minor             bigint NOT NULL CHECK (amount_minor >= 0),
   currency                 char(3) NOT NULL,
   amount_source            text NOT NULL CHECK (amount_source IN ('provider_preview','billing_calculator')),
+  -- Fallback calculator inputs and unrounded result (§8.5.3, BL-OQ-6); NULL when the provider prorates
+  unit_amount_minor        bigint,
+  remaining_seconds        bigint,
+  period_seconds           bigint,
+  amount_unrounded_minor   numeric(38,12),
+  -- Below the provider minimum (free_until_renewal): amount not charged, billed from renewal
+  deferred_amount_minor    bigint CHECK (deferred_amount_minor > 0),
+  deferral_reason          text CHECK (deferral_reason IN ('below_provider_minimum')),
   status                   purchase_status NOT NULL,
   provider_invoice_id      text,
   client_action            jsonb,
@@ -922,6 +931,14 @@ CREATE TABLE seat_purchases (
   created_at               timestamptz NOT NULL DEFAULT now(),
   updated_at               timestamptz NOT NULL DEFAULT now(),
   CHECK (seats_after = seats_before + seats_added),
+  CONSTRAINT chk_sp_calc_inputs CHECK (
+    (amount_source = 'billing_calculator') =
+    (unit_amount_minor IS NOT NULL AND remaining_seconds IS NOT NULL
+     AND period_seconds > 0 AND amount_unrounded_minor IS NOT NULL)),               -- BIL-SEAT-5
+  CONSTRAINT chk_sp_deferral CHECK (
+    (deferral_reason IS NULL AND deferred_amount_minor IS NULL)
+    OR (deferral_reason IS NOT NULL AND deferred_amount_minor IS NOT NULL
+        AND amount_minor = 0 AND amount_source = 'billing_calculator')),
   CONSTRAINT uq_sp_key UNIQUE (tenant_id, idempotency_key)
 );
 CREATE UNIQUE INDEX uq_sp_one_open ON seat_purchases (billing_subscription_id)
@@ -1348,6 +1365,7 @@ Applied `BEFORE UPDATE … FOR EACH ROW WHEN (OLD.* IS DISTINCT FROM NEW.*)` on 
 | BIL-SEAT-2 | One open seat change schedule per subscription (`uq_scs_one_open`). |
 | BIL-SEAT-3 | `renewal_seats = max(target_seats, seats_in_use)`; after the renewal top-up check the licensed count is never below I-11's `active_users + pending_invitations` (HLD §8.5.1). |
 | BIL-SEAT-4 | A seat change schedule never changes `licensed_seats` before the renewal and never blocks a purchase or a member addition (HLD §8.5.1 step 2). |
+| BIL-SEAT-5 | A seat purchase priced by Billing's fallback calculator stores its inputs, the unrounded amount and the rounded `amount_minor` (`chk_sp_calc_inputs`); a purchase below the provider minimum is confirmed with `amount_minor = 0` and records `deferred_amount_minor` and `deferral_reason = 'below_provider_minimum'` (`chk_sp_deferral`). Seats are never removed because a renewal top-up payment failed (§8.5.3, §8.6.3, BL-OQ-6). |
 | BIL-ADD-1 | A token add-on is sold only when: the subscription is `active` and not collection-paused; `iam_lifecycle = 'active'`; the tenant is not on trial (ENT-D6: a trial tenant who exhausts its trial token budget is prompted to convert through B-P2, or Sales assigns a larger trial profile in Entitlements; it never buys an add-on); the effective `llm_token_quota_monthly` is finite (§8.7). Read from Entitlements' per-resource eligibility for `llm_tokens` once shipped (BL-OQ-3); until then from `llm_token_quota_monthly`. A generic `addon_eligible` is not used. |
 | BIL-ADD-2 | `TenantQuotaAddOnChanged` is emitted exactly once per confirmed purchase, with `billing_ref = purchase_id` (`quota_addon_purchases.event_id`). |
 | BIL-ADD-4 | When a refund of an add-on invoice reaches `succeeded`, `TenantQuotaAddOnChanged {reason: "refund", delta: −addon_tokens, billing_ref: refund_id, purchase_ref: purchase_id}` is emitted exactly once in the same transaction (`refunds.addon_event_id`). Billing never computes the remaining balance: Entitlements removes at most the unused tokens of that grant, never below zero (Entitlements owns quota state; TL decision BL-OQ-20). |
@@ -1628,6 +1646,8 @@ Cancels a `scheduled` downgrade: `ReleaseSchedule` then request `cancelled`. `20
 { "preview_id": "0193…", "seats_before": 50, "seats_after": 55,
   "amount_due_now": { "amount_minor": 11500, "currency": "USD" },
   "amount_source": "provider_preview",                 // provider_preview | billing_calculator (§8.5.3)
+  // billing_calculator only: "amount_unrounded_minor": "11500.000000000000";
+  // below the provider minimum: amount_due_now 0, "deferred_amount": {...}, "deferral_reason": "below_provider_minimum"
   "proration_instant": "2026-11-13T10:05:00Z", "current_period_end": "2026-12-01T00:00:00Z",
   "next_renewal_amount": { "amount_minor": 379500, "currency": "USD" },
   "expires_at": "2026-11-13T10:15:00Z" }
@@ -2149,7 +2169,9 @@ SNS message attributes: `EventType`, `TenantID`, `Source`, `EventID`, `Subject`.
     "previous_licensed_seats": { "type": ["integer", "null"], "minimum": 0 },
     "reason":                  { "type": "string", "enum": ["conversion", "purchase", "renewal", "renewal_topup", "reactivation", "resync"] },
     "billing_ref":             { "type": ["string", "null"], "description": "seat_purchases.purchase_id, seat_change_schedules.schedule_id or billing_subscription_id" },
-    "billing_subscription_id": { "type": "string", "format": "uuid" }
+    "billing_subscription_id": { "type": "string", "format": "uuid" },
+    "deferred_amount_minor":   { "type": "integer", "minimum": 1, "description": "Additive (BL-OQ-6). Purchase only: prorated amount not charged because it was below the provider minimum; billed from renewal" },
+    "deferral_reason":         { "type": "string", "enum": ["below_provider_minimum"], "description": "Additive (BL-OQ-6). Present only with deferred_amount_minor" }
   }
 }
 ```
@@ -2604,20 +2626,27 @@ Core refuses with `409 seat_limit_reached` (SEAT-1; all four member-creation pat
 
 #### 8.5.3 Billing's proration calculator (adapters without a proration engine)
 
-Used only when the provider is certified with `Proration = fallback` (`BIL-PROV-3`; not Stripe). **LLD decision (CD-54), Finance to confirm (BL-OQ-6):**
+**Finance approved (BL-OQ-6, 2026-11-23), CD-54.** Fallback proration calculations are used only when the selected payment provider is certified with `Proration = fallback` (`BIL-PROV-3`). Providers that implement their own proration engine (for example Stripe) remain the system of record for prorated charges; Billing stores their amount (`amount_source = 'provider_preview'`) and never recalculates it.
 
 ```
 remaining_seconds = period_end − proration_instant            (UTC, whole seconds)
 period_seconds    = period_end − period_start
-amount_minor      = round_half_up( unit_amount_minor × seats_added × remaining_seconds / period_seconds )
+amount_unrounded  = unit_amount_minor × seats_added × remaining_seconds / period_seconds   (exact rational)
+amount_minor      = round_half_up( amount_unrounded )
 ```
 
-- Exact integer arithmetic (`math/big`) on the whole line, rounded half-up once to the currency's minor unit (ISO 4217 exponent; AED and USD: 2).
-- No day-count convention beyond actual seconds, so month lengths and leap years need no table; annual subscriptions use the annual price and the annual period.
+- Exact integer arithmetic (`math/big`) on the whole line at full precision, rounded half-up **once**, at the end, to the currency's minor unit (ISO 4217 exponent; AED fils and USD cents: 2).
+- No day-count convention beyond actual seconds, so month lengths, leap years and custom periods need no table; UTC instants make daylight-saving changes irrelevant. Annual subscriptions use the annual price and the annual period.
 - `proration_instant` is the preview's; the charge reuses it so preview and charge are identical.
-- **Below the provider's minimum charge** (`MIN_CHARGE_MINOR`): Finance chooses (a) charge the minimum or (b) add the seats free for the rest of the period and bill them from renewal, recorded as an `adjustments` row. Default until decided: (b), `PRORATION_BELOW_MINIMUM = free_until_renewal`.
+- **Both values are stored** (Finance requirement, for audit and disputes): the inputs (`unit_amount_minor`, `remaining_seconds`, `period_seconds`), the unrounded amount (`amount_unrounded_minor`, 12 decimal places; the inputs reproduce it exactly) and the final rounded `amount_minor` on `seat_purchases` (§4.2.10, `BIL-SEAT-5`).
+- **Below the provider's minimum charge** (`amount_minor < MIN_CHARGE_MINOR`): `PRORATION_BELOW_MINIMUM = free_until_renewal` (approved). The seats are added **without a charge** for the rest of the period and are billed from the next renewal as part of the subscription quantity. Billing does not charge the provider minimum. In one transaction:
+  1. the purchase is `confirmed` with `amount_minor = 0`, `deferred_amount_minor` = the rounded amount not charged, `deferral_reason = 'below_provider_minimum'`; no provider invoice is created and the provider subscription quantity is updated with proration off;
+  2. seat item `quantity = seats_after`, history row, and `TenantSeatsChanged {reason: "purchase", deferred_amount_minor, deferral_reason}` (§7.3.4). Audit stores the payload with the `tenant.seats_changed` entry, so the deferral is in the audit record;
+  3. metrics `commercial_billing_proration_deferred_total` and `commercial_billing_proration_deferred_amount_minor_total` (§11.2).
 
-Golden test table (§14.1) fixes the expected results, e.g. 5 seats × 6900 minor, 18 days left of a 30-day month → `round_half_up(6900 × 5 × 1555200 / 2592000) = 20700`.
+  B-P6 shows `amount_due_now: 0` with `deferral_reason`, and B-P7 answers `202 {status: confirmed}`. `charge_minimum` stays a configuration option but is not used.
+
+Golden test table (§14.1) fixes the expected results, e.g. 5 seats × 6900 minor, 18 days left of a 30-day month → `amount_unrounded = 6900 × 5 × 1555200 / 2592000 = 20700.000000000000`, `amount_minor = 20700`. Below minimum (`MIN_CHARGE_MINOR = 200`): 1 seat × 6900, 12 hours left of a 30-day month → `amount_unrounded = 115.000000000000`, `amount_minor = 0`, `deferred_amount_minor = 115`.
 
 ### 8.6 Scheduled seat reduction and renewal (HLD §8.5.1)
 
@@ -2656,7 +2685,7 @@ sequenceDiagram
 
 On the cycle `invoice.paid` for the new period:
 
-1. Fresh I-11 again. If `seats_in_use_now > renewal_seats` (members added inside the lead window) → **renewal top-up**: a `seat_purchases` row with `reason = renewal_topup`, `seats_added = seats_in_use_now − renewal_seats`, charged as a purchase (prorated over the new period, so almost the full price) through the same flow as §8.5. If the top-up payment fails, the seats are still kept (Core would otherwise be over cap) and the unpaid invoice follows the normal dunning path (§8.8.1) — **LLD decision**, Finance to confirm in BL-OQ-6.
+1. Fresh I-11 again. If `seats_in_use_now > renewal_seats` (members added inside the lead window) → **renewal top-up**: a `seat_purchases` row with `reason = renewal_topup`, `seats_added = seats_in_use_now − renewal_seats`, charged as a purchase (prorated over the new period, so almost the full price) through the same flow as §8.5. If the top-up payment fails, the seats are still kept (Core would otherwise be over cap) and the unpaid invoice follows the normal dunning path (§8.8.1) — **Finance approved (BL-OQ-6, 2026-11-23)**. An unpaid renewal is a receivable problem, not an entitlement reduction. Sequence: renewal invoice generated → payment fails → invoice overdue → standard dunning (§8.8.1) → suspension and lockout only by the existing lapse rules (§8.8.2, §8.8.3). Billing never removes seats automatically; the seat count changes only if the tenant schedules a reduction (§8.6.1).
 2. Commit: seat item `quantity = final_seats` (`renewal_seats` or top-up result); schedule `applied` with `final_seats`; history row; emit `TenantSeatsChanged {licensed_seats: final_seats, reason: "renewal"}`. If `final_seats > target_seats`, the owner is told (B-P1 banner, NTF-3 message).
 3. Example (HLD §8.5.1): 100 seats, target 60, 55 in use → 60. 75 in use → 75.
 4. Renewal without a schedule, same plan and quantity: invoice mirror and period update only; no IAM action (HLD §8.7 step 4).
@@ -3075,6 +3104,8 @@ Three tiers (IAM Platform Observability Standard, HLD §12.2); const labels `dom
 | `commercial_billing_downgrades_blocked_total` | Counter | `blocker` | I-18 blockers |
 | `commercial_billing_seat_changes_total` | Counter | `direction` (`purchase`\|`reduction`\|`renewal_topup`), `outcome` | Seats |
 | `commercial_billing_seat_projection_mismatches_total` | Counter | — | §8.6.4 |
+| `commercial_billing_proration_deferred_total` | Counter | `currency`, `reason` (`below_provider_minimum`) | Seat purchases added free until renewal (§8.5.3, BL-OQ-6) |
+| `commercial_billing_proration_deferred_amount_minor_total` | Counter | `currency` | Sum of `deferred_amount_minor` not charged (§8.5.3) |
 | `commercial_billing_addon_purchases_total` | Counter | `pack_code`, `outcome` | Token packs |
 | `commercial_billing_payment_failures_total` | Counter | `reason` (mapped decline) | Declines |
 | `commercial_billing_dunning_transitions_total` | Counter | `to` (`past_due`\|`cancelled`\|`active`) | Lapse flow |
@@ -3204,7 +3235,7 @@ Values from `deploy/helm/values.yaml` (`env:`) and OpenBao (`secretValues:` via 
 | `SAGA_POLL_INTERVAL` / `SAGA_ALERT_AFTER` / `SAGA_MAX_BACKOFF` | `2s` / `30m` / `5m` | 1–10 s / fixed 30 m / 1–15 m | §8.1.2 |
 | `SEATS_AFTER_CONVERSION_DELAY` | `120s` | 30–600 s | `BIL-EVT-6` |
 | `EMISSION_POLL_INTERVAL` | `5s` | 1–30 s | `scheduled_emissions` worker |
-| `PRORATION_BELOW_MINIMUM` | `free_until_renewal` | `free_until_renewal`\|`charge_minimum` | §8.5.3 (BL-OQ-6) |
+| `PRORATION_BELOW_MINIMUM` | `free_until_renewal` | `free_until_renewal`\|`charge_minimum` | §8.5.3 (BL-OQ-6, Finance approved `free_until_renewal`; change only with Finance) |
 | `MIN_CHARGE_MINOR` | `200` (per currency map) | ≥ 0 | Provider minimum |
 | `AUTO_PAUSE_ON_OPERATOR_SUSPENSION` | `true` | bool | CD-24 proposal (§8.10) |
 | `AUTO_REVERT_ON_EFW` | `false` | bool | CD-10 proposal (§8.2) |
@@ -3296,7 +3327,7 @@ Dev and staging use Stripe **test mode** keys and their own webhook endpoints; o
 | Subscription transitions (§8.14) | Every allowed and disallowed pair; callback in a disallowed state → `ignored` |
 | Saga (§9.3) | Every RP-3 answer of §9.3.2; `TenantConverted` before / after the RP response; backoff schedule with a fake clock; alert once at 30 min |
 | Seats | `max(target, in_use)`; top-up; one open purchase; preview stale / expired |
-| Proration calculator (§8.5.3) | Golden table: monthly and annual, 28/29/30/31-day months, leap year, `.5` minor-unit rounding, below-minimum both modes |
+| Proration calculator (§8.5.3) | Golden table: monthly and annual, 28/29/30/31-day months, leap year, `.5` minor-unit rounding, below-minimum both modes. Each row asserts the stored unrounded amount and inputs as well as `amount_minor`; below-minimum rows assert `amount_minor = 0`, `deferred_amount_minor`, `deferral_reason`, the event fields and the deferral metrics |
 | Permissions (§5.2) | Every route × role |
 | Add-on eligibility (`BIL-ADD-1`) | Each `ineligible_reason`; cap boundary |
 | I-18 outcomes | `allowed`, blocked, `400`, `404`, `503` → expected Billing answer |
@@ -3424,7 +3455,7 @@ Each item names the default the design runs with until it closes.
 | BL-OQ-3 | **Billing as an Entitlements caller** for `BIL-ADD-1` (finite token quota). Entitlements admits `billing` / `commercial-billing` on `GET /api/v1/internal/tenants/:id/entitlements` (NetworkPolicy + mTLS). Alternative: an `addon_eligible` field in the effective set | §5.2, §8.6.2 | Entitlements LLD | Purchase fails closed (`503`) if not admitted | **Decided** (TL, 2026-11-19): generic `addon_eligible` rejected; Entitlements exposes resource-level eligibility (`llm_tokens`, `api_requests`) on the effective set; Billing → Entitlements **read-only** access approved (`GET /api/v1/internal/tenants/:id/entitlements` only, NetworkPolicy + mTLS for `cluster.local/ns/billing/sa/commercial-billing`). Entitlements to implement |
 | BL-OQ-4 | **`purchased_at` on `TenantQuotaAddOnChanged`** (additive) as the 12-month expiry basis | §8.6.2, §9.4 | Entitlements LLD, Audit | Field emitted; envelope `time` equals it | **Decided** (TL, 2026-11-19): Billing is the only publisher of `TenantQuotaAddOnChanged` on `billing.events`; `purchased_at` stays Billing's (payment confirmation). Entitlements withdraws its `tenant_quota_add_on_changed` |
 | BL-OQ-5 | **Launch currency.** HLD §6.3 lists USD amounts; the capability bar requires AED pricing. Which currency per market; AED and USD both in Phase 1? | §6.3, §10.7.1, CD-56 | Finance | `DEFAULT_CURRENCY=USD`, AED rows added by B-O11 | Open |
-| BL-OQ-6 | **Proration rule without a provider engine** (§8.5.3); behaviour below the minimum charge; renewal top-up kept on payment failure (§8.6.3) | CD-54 | Finance | Seconds-based, half-up; `free_until_renewal`; top-up kept | Proposed |
+| BL-OQ-6 | **Proration rule without a provider engine** (§8.5.3); behaviour below the minimum charge; renewal top-up kept on payment failure (§8.6.3) | CD-54 | Finance | Seconds-based, half-up; `free_until_renewal`; top-up kept | **Closed** (Finance, 2026-11-23): rules 1 to 3 approved unchanged. Added on Finance's request: unrounded amount and inputs stored (`BIL-SEAT-5`); below-minimum deferral recorded with `deferral_reason = below_provider_minimum` in the purchase row, `TenantSeatsChanged` (audit) and metrics; fallback calculator never overrides a provider's own proration |
 | BL-OQ-7 | **CD-10 — conversion-reversal trigger.** Proposal §8.2: fraud dispute or early fraud warning on the conversion payment within 7 days → SEV-2 → operator-approved B-O8 → RP-4 | CD-10, BIZ-7 | Billing + Finance + Security | Operator-approved; `AUTO_REVERT_ON_EFW=false` | Proposed |
 | BL-OQ-8 | **BFF alignment (SGN-2).** Contract published in §5.4.2. BFF: `BILLING_TIMEOUT_MS ≥ 15000`; field mapping `PaymentToken → payment_method_ref`, `Plan → plan_code`, `Seats → licensed_seats`; 3-D Secure (`402 PAYMENT_ACTION_REQUIRED` → browser → same-key retry). Go-live order §18.7 | §10.6 | Web / growth (BFF) | `FEATURE_DIRECT_SIGNUP=false` | Open — contract published |
 | BL-OQ-9 | **Operator routes B-O6 to B-O15.** (a) Billing's operator `HTTPRoute` lists every operator path, B-O1 to B-O15 (Billing's own chart, §13.1). (b) IAM extends the end-to-end operator test (AuthZ Enrichment LLD §8.9.1 OP-G4), whose list covers only B-O1 to B-O5, to B-O6 to B-O15. No IAM gateway route list exists: Envoy Gateway is the only ingress, and the platform-realm `jwt_authn` provider and AuthZ Enrichment admit the whole `/api/v1/operator/` prefix | §11.4 | Billing (a); IAM + Commercial (b) | Today's `403` is the operator path being off (OP-G1 to OP-G3, `BIL-AUTH-6`), not a missing route | **Approved; IAM part merged** ([iam-authz-enrichment#43](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-authz-enrichment/pull/43), `f4af854`, 2026-11-19): AuthZ unit and e2e tests cover B-O1–B-O15. **Remaining:** (a) Billing's operator `HTTPRoute` lists B-O1 to B-O15 when Billing's chart is written. Gateway half of OP-G4 waits on BL-OQ-14 |
@@ -3488,7 +3519,7 @@ Each item names the default the design runs with until it closes.
 | §5.1 invoicing during operator suspension (CD-24) | Proposal (BL-OQ-1) |
 | §6.6 permission mapping | §5.2 (BIZ-6 to confirm) |
 | §8.4 downgrade timing | Period end |
-| §8.5.1 adapter rounding and day-count | §8.5.3 (Finance to confirm) |
+| §8.5.1 adapter rounding and day-count | §8.5.3 (Finance approved, BL-OQ-6) |
 | §10.6 authorize-and-charge incl. 3-D Secure | Published (§5.4.2) |
 | §10.7.1 adapter interface | §3.4 |
 | §11.4 Billing operator paths "finalised in the Billing LLD" | §5.3 (B-O1–B-O5 as HLD; B-O6–B-O15 added, B-O14 and B-O15 in rev 0.3) |
