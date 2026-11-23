@@ -93,7 +93,7 @@ The PCI owner group names who holds the role.
 
 **What it is.** There's no IAM-side route list. Each service exposes its own operator paths through its own `HTTPRoute`. IAM's part, OP-G4 tests for B-O1 to B-O15, is merged ([iam-authz-enrichment#43](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-authz-enrichment/pull/43)).
 
-**Remaining.** Billing's own chart lists every operator path. That's now **B-O1 to B-O17**, since B-O16 and B-O17 were added after this row was written. A path missing from the `HTTPRoute` can't be reached through the gateway.
+**Remaining.** Billing's own chart lists every operator path. That's **B-O1 to B-O17** (B-O16 added in LLD rev 0.16, B-O17 in rev 0.21; the LLD row was corrected in rev 0.23). A path missing from the `HTTPRoute` can't be reached through the gateway.
 
 **Billing's default.** Same `403` as BL-OQ-14.
 
