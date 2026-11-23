@@ -2,8 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Document | `commercial-lld-billing-service.md` rev 0.18 (base HLD v0.64) |
-| Progress | **4 of 9 closed** — S-1, S-2 and S-3 approved by Finance; S-4 approved by Finance and Security (all 2026-11-23) |
+| Document | `commercial-lld-billing-service.md` rev 0.19 (base HLD v0.64) |
+| Progress | **5 of 9 closed** — S-1, S-2 and S-3 approved by Finance; S-4 by Finance and Security; S-5 by Finance and Legal (all 2026-11-23) |
 | From | Commercial Team (Billing) |
 | Date | 2026-11-23 |
 | Purpose | Lists the decisions other teams must make before the Billing LLD can be **signed off as a design** |
@@ -29,7 +29,7 @@ The Billing LLD tracks three kinds of open item. Only the first kind is in this 
 | S-2 | Finance | BL-OQ-1 (CD-24) | Do we keep charging a tenant that an operator suspended? | ✅ **Approved 2026-11-23**, rules 1–4, auto-pause on. Adds new operator route B-O16 (see S-2). Applied in LLD rev 0.16 | — |
 | S-3 | Finance | BL-OQ-13 (BIZ-6) | Which roles can do which billing actions? | ✅ **Approved 2026-11-23, unchanged**, plus an overlap rule (see S-3). Applied in LLD rev 0.17 | — |
 | S-4 | Finance + Security | BL-OQ-7 (CD-10) | When is a trial-to-paid conversion reversed for fraud? | ✅ **Approved 2026-11-23 by Finance and Security, unchanged** (see S-4). Recorded in LLD rev 0.18 | — |
-| S-5 | Finance + Legal | BL-OQ-11 (CD-14) | How long must financial records be kept, per jurisdiction? | Keep everything; no financial deletion job; operational prunes only | Billing adds a retention/deletion job (new design work) |
+| S-5 | Finance + Legal | BL-OQ-11 (CD-14) | How long must financial records be kept, per jurisdiction? | ✅ **Approved 2026-11-23 by Finance and Legal**: keep indefinitely, no deletion or minimisation job (see S-5). Applied in LLD rev 0.19 | — |
 | S-6 | Product + Finance | BL-OQ-16 | When a price changes, when do existing subscribers pay it? | At their next renewal | Price rows need a grandfathering period; §4.2.2 / B-O11 change |
 | S-7 | PCI owner group | BL-OQ-21 + review | Who may mark a payment provider as certified? Plus PCI review of §4, §5.4.4, §10 | A Billing engineer submits, a PCI owner group member reviews; enforced in the database | `provider_certifications` constraint and B-O14 change |
 | S-8 | Commercial TL + Entitlements | BL-OQ-23 (c) | Does Entitlements publish any add-on balance event? | No; Audit gets those changes only through AL-5 | Audit Log needs a new LLD decision; event contracts change |
@@ -167,6 +167,30 @@ Nothing in the design changed. LLD rev 0.18 records the approval and reasons in 
 
 **Decision needed:** the retention period per jurisdiction, and whether records are deleted or only minimised at the end of it.
 
+**Decision: ✅ Approved by Finance and Legal, 2026-11-23. Financial records are kept indefinitely; no deletion or minimisation job.**
+
+| Area | Decision |
+|---|---|
+| UAE financial records, invoices, refunds, disputes and chargebacks, subscription history, operator adjustments | Keep indefinitely |
+| Workflow history supporting financial actions (subscription creation, conversion, cancellation, refunds, disputes, fraud reversals, operator overrides, reconciliation) | Keep indefinitely |
+| Automatic deletion job / automatic minimisation job | Not required |
+| Tenant purge | Financial records, payment events and audit evidence of financial decisions stay |
+| `FINANCIAL_RECORD_RETENTION_YEARS` | Reserved for a future jurisdiction-specific requirement; unused in Phase 1 |
+
+**Why.** *Finance:* records may be needed years later for audits, tax reviews, regulatory inquiries, disputes, chargebacks, fraud investigations, reconciliation and restatements; deleting them adds financial and audit risk for little benefit. *Legal:* for UAE-first operation, statutory periods set a minimum, not a maximum; the test is "can we still produce the record if required?", not "can we delete it after N years?".
+
+**Governance note, now in LLD §15.3:** *"If a future jurisdiction imposes a mandatory destruction or anonymization requirement after a specific period, Billing will introduce a dedicated retention/minimization workflow at that time. Until such a jurisdiction-specific requirement exists, Billing remains a permanent financial ledger and no financial-record retention job shall run."*
+
+**One interpretation, decided by the Commercial Team.** LLD §15.3 also had three personal-data rules waiting for this decision. We read the ruling as covering financial records, not personal contact data:
+
+| Rule | Before | Now |
+|---|---|---|
+| Billing contact name and email after offboarding | Nulled after 90 days | Unchanged; run by a new `pii-minimisation` CronJob |
+| Abandoned-checkout accounts with no paid invoice | Account deleted after 30 days | Contact name and email nulled after 30 days; account, subscription and history rows **kept** |
+| `payment_event_ledger` payloads | Emptied after 18 months | **Kept indefinitely** (payment events are financial evidence) |
+
+New invariant `BIL-OPS-9`: no job deletes or minimises a financial record; `pii-minimisation` only nulls contact fields and never deletes a row. If Finance or Legal intended the ruling to cover contact data too, the CronJob is removed and nothing else changes.
+
 ---
 
 ## Product (with Finance)
@@ -247,8 +271,8 @@ Nothing in the design changed. LLD rev 0.18 records the approval and reasons in 
 | S-3 | Finance | Finance | ✅ Approved unchanged; overlap rule and `BIL-AUTH-7` added (LLD rev 0.17) | 2026-11-23 |
 | S-4 | Finance | Finance | ✅ Approved unchanged: trigger, conversion-payment scope, 7-day window, refund rule (LLD rev 0.18) | 2026-11-23 |
 | S-4 | Security | Security | ✅ Approved unchanged: SEV-2, operator-only B-O8, `AUTO_REVERT_ON_EFW=false` (LLD rev 0.18) | 2026-11-23 |
-| S-5 | Finance | | | |
-| S-5 | Legal | | | |
+| S-5 | Finance | Finance | ✅ Approved: indefinite retention, no deletion or minimisation job, purge keeps financial records (LLD rev 0.19) | 2026-11-23 |
+| S-5 | Legal | Legal | ✅ Approved, with the governance note for future jurisdictions (LLD rev 0.19) | 2026-11-23 |
 | S-6 | Product | | | |
 | S-6 | Finance | | | |
 | S-7 | PCI owner group | | | |

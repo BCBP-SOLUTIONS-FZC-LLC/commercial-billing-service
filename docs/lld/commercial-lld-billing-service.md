@@ -7,7 +7,7 @@
 | Document type | Low-Level Design (LLD) |
 | Service | `commercial-billing` (Billing) |
 | Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing` |
-| Status | **Submitted for sign-off** (rev 0.18) — design stage; no code yet. Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
+| Status | **Submitted for sign-off** (rev 0.19) — design stage; no code yet. Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
 | Base HLD | Commercial Domain HLD **v0.64** (`hld-commercial-domain-v0.64.md`), the only HLD for the domain. Rebased from v0.51 in rev 0.14: v0.52 to v0.64 checked for Billing impact (§1.1, "HLD v0.52 to v0.64"); only v0.64 (`platform-audit`) changes Billing, already applied in rev 0.5. Parent: IAM HLD **v1.59** |
 | Supersedes | `hld-billing-service.md` v0.2 (draft Billing HLD, dropped in Commercial HLD v0.28). Its open items B-1 to B-13 are dispositioned in §16.3 and are never a source of requirements |
 | Sibling LLDs | Commercial: `commercial-lld-entitlements-service.md`, `commercial-lld-usage-metering-service.md` (to be written; until it exists the consumed `UsagePeriodClosed` contract is unverified, BL-OQ-24). IAM (contracts verified against these): Core `iam-lld-org-membership-service.md` rev 2.49 (I-11, I-18, `billing-orgm-q`, EVT-14/15/18, SEAT-2), Realm Provisioner `iam-lld-realm-provisioner-service.md` rev 1.46+ (RP-3, RP-4, RP-11, `billing-realm-q`, `iam.tenant.events` payloads), Audit Log `iam-lld-audit-log-service.md` rev 0.37 (AL-5, entry taxonomy, Billing admission since rev 0.34, `billing.token_addon.refunded` since rev 0.37), `platform-audit` `docs/lld/platform-lld-audit.md` rev 1.5 (§4, §11, §18.6, §19.2), AuthZ Enrichment `iam-lld-authz-enrichment.md` v1.50 (operator path, CD-52; §8.9.1 OP-G4 lists Billing B-O1 to B-O15). Edge: `signup-bff-lld.md` (Signup BFF, `BillingClient.AuthorizeAndCharge`) |
@@ -19,6 +19,7 @@
 
 | Rev | Date | Change |
 |---|---|---|
+| 0.19 | 2026-11-23 | **BL-OQ-11 (CD-14) closed — Finance and Legal approved indefinite retention of all financial records and of workflow history supporting financial actions** (sign-off item S-5). No financial deletion or minimisation job; tenant purge never removes financial records; `FINANCIAL_RECORD_RETENTION_YEARS` reserved and unused in Phase 1; governance note added (a future jurisdiction-specific destruction or anonymisation requirement gets its own workflow). §15.3 rewritten. Commercial Team interpretation: the ruling covers financial records, so GDPR minimisation of personal contact data stays, as a new `pii-minimisation` CronJob that only nulls contact fields and never deletes a row: offboarded accounts after 90 days (unchanged); abandoned-checkout accounts now have their contact data nulled after 30 days instead of being deleted; `payment_event_ledger` payloads are no longer emptied after 18 months. New invariant `BIL-OPS-9`; new settings `PII_MINIMISE_OFFBOARDED_DAYS` and `PII_MINIMISE_ABANDONED_DAYS`. §1.1, §13.2, §15.1, §15.2, §16.1 and §16.4 updated. |
 | 0.18 | 2026-11-23 | **BL-OQ-7 (CD-10) closed — Finance and Security approved the conversion-reversal proposal unchanged** (sign-off item S-4). Finance: trigger (dispute reason `fraudulent` or Stripe early fraud warning), conversion payment only, 7-day window, refund unless the dispute already returned the funds. Security: SEV-2 `BillingReversalDecisionNeeded`, operator-only approval through B-O8, `AUTO_REVERT_ON_EFW=false` in Phase 1. §8.2 heading and text record the approval and the reasons; §1.1, §16.1 and §16.4 updated. No flow, route, schema or config change. |
 | 0.17 | 2026-11-23 | **BL-OQ-13 (BIZ-6) closed — Finance approved the six permissions and role mapping unchanged** (sign-off item S-3): owner all six; tenant admin `subscription.manage`, `billing.view`, `billing.download_invoice`; tender roles none. §5.2: approval recorded; Finance's overlap rule added, with "new contractual commitment" defined by route (B-P2, B-P4, B-P5, B-P14) so seat and add-on purchases stay under `subscription.manage`; new invariant `BIL-AUTH-7`. No route or permission change. |
 | 0.16 | 2026-11-23 | **BL-OQ-1 (CD-24) closed — Finance approved rules 1 to 4, `AUTO_PAUSE_ON_OPERATOR_SUSPENSION=true`** (sign-off item S-2). §8.10 rewritten: scope sentence (a pause does not terminate the subscription, change entitlements, cancel the contract or waive amounts already due); retries on invoices already open at suspension are stopped and the dunning clock frozen (`PauseCollection` contract, Stripe `auto_advance = false`), restarted on resume; `409 COLLECTION_PAUSED` extended to seat reduction schedules and downgrades. **New operator route B-O16** (finalise or void a held draft, mandatory reason; 44 endpoint IDs), port `FinalizeInvoice`, `invoices.held_for_review` and disposition columns, invariant `BIL-SUB-7`, metrics, alert `BillingSuspensionDraftsAwaitingDecision`, error `INVOICE_NOT_HELD`. B-O10 reason mandatory. New BL-OQ-25 (IAM: OP-G4 coverage and Audit entry type for B-O16). |
@@ -129,7 +130,7 @@ Refined into an implementable spec, this document gives the database schema, the
 | CD-9 | Signup BFF, not Billing, calls RP-2 and I-1 | §8.3 |
 | CD-10 | Conversion-reversal trigger is Billing's: fraud dispute or early fraud warning on the conversion payment within 7 days, operator-approved (Finance and Security approved, BL-OQ-7) | §8.2, B-O8 |
 | CD-12 | Quota period = UTC month; Billing no longer announces its period; `BillingPeriodRolled` optional | §7.3.2 (not emitted) |
-| CD-14 (open) | Financial-record retention | §15.3, §16 BL-OQ-11 |
+| CD-14 | Financial records and financial workflow history kept indefinitely; no deletion or minimisation job; tenant purge keeps them (Finance and Legal approved, BL-OQ-11) | §15.3, §13.2 |
 | CD-17 | Envelope `source = commercial-billing`; metric prefix | §7.3, §11.2 |
 | CD-18 | `billing-notification-q` spelling | §7.3.9 |
 | CD-19 | `commercial-system` principal; five admitted routes | §10.2, §18.1, §18.2 |
@@ -3041,6 +3042,7 @@ stateDiagram-v2
 | BIL-OPS-6 | Every `failed` ledger row is retried to success, set `ignored` by an operator replay with a reason, or listed by the next reconciliation run. |
 | BIL-OPS-7 | Live and test provider keys never coexist in one environment (`livemode` check, startup check of the key prefix `rk_live_` vs `rk_test_` against `APP_ENV`). |
 | BIL-OPS-8 | A purchase confirmed by payment always produces its event (outbox in the same commit), so "paid but nothing happened" can only be downstream lag, which the 60 s alert covers. |
+| BIL-OPS-9 | No job deletes or minimises a financial record (CD-14, §15.3). The only scheduled data changes are the operational prunes (outbox, processed events, idempotency keys) and `pii-minimisation`, which nulls contact fields on `billing_accounts` and never deletes a row. |
 
 ---
 
@@ -3266,6 +3268,7 @@ Values from `deploy/helm/values.yaml` (`env:`) and OpenBao (`secretValues:` via 
 | `MAX_LIFECYCLE_EVENT_SKEW_SECONDS` | `300` | 60–900 | Future-time clamp (`BIL-EVT-3`) |
 | `OUTBOX_POLL_INTERVAL` / `OUTBOX_BATCH_SIZE` / `OUTBOX_MAX_ATTEMPTS` / `OUTBOX_RETENTION_DAYS` | `500ms` / `50` / `5` / `8` | 100 ms–5 s / 1–500 / 1–10 / 7–30 | HLD §9.3 |
 | `PROCESSED_EVENTS_TTL_DAYS` | `8` | > SQS retention (4 d) | PE-1 |
+| `PII_MINIMISE_OFFBOARDED_DAYS` / `PII_MINIMISE_ABANDONED_DAYS` | `90` / `30` | 30–365 / 7–90 | §15.3 (`pii-minimisation`) |
 | `DEFAULT_PAYMENT_PROVIDER` | `stripe` | must be in `ENABLED_PAYMENT_PROVIDERS` | New accounts (§3.4); if not certified, account creation answers `503 PROVIDER_NOT_ENABLED` |
 | `ENABLED_PAYMENT_PROVIDERS` | `stripe,manual` | comma list of compiled adapters | Providers the service loads. At startup each must satisfy `BIL-PROV-1` to take new accounts; one that does not is loaded for existing accounts only, logged at ERROR and alerted (§3.5). Startup fails only if a listed name has no compiled adapter |
 | `PROVIDER_CERT_SUITE_VERSION` | `cert-1.0` | suite tag (§14.7) | The suite version a certification record must match |
@@ -3352,6 +3355,7 @@ Node class `t3.small` share (HLD §14.2).
 | `downgrade-apply` | `*/15 * * * *` | Re-run I-18 for downgrades within `DOWNGRADE_RECHECK_LEAD` (§8.4.2) |
 | `purchase-expiry` | `*/5 * * * *` | Expire abandoned purchases, previews, checkout sessions, upgrades; void their open invoices |
 | `seat-projection-check` | `7,37 * * * *` | Compare Core's `licensed_seats` with Billing's; resync (§8.6.4) |
+| `pii-minimisation` | `0 5 * * *` | Null the billing-contact name and email (and clear the provider customer email) 90 days after `closed_at`, and 30 days after an abandoned checkout's subscription ended; set `pii_minimised_at`. Never deletes a row and never touches a financial record (`BIL-OPS-9`, §15.3) |
 | `outbox-prune` | `0 3 * * *` | `outbox.Runner.PrunePublished` (8 days) |
 | `processed-events-prune` | `0 4 * * *` | `inbox.Store.Prune` (8 days) |
 | `idempotency-prune` | `30 4 * * *` | `idempotency_records` past `expires_at` |
@@ -3462,7 +3466,7 @@ Results and evidence references go in `results`; a run with any required case fa
 
 | Scenario | Workflow |
 |---|---|
-| Trial never converts | No account unless a checkout was started; an abandoned checkout leaves an `ended` subscription and an account with contact data → minimised by the retention job (§15.3) |
+| Trial never converts | No account unless a checkout was started; an abandoned checkout leaves an `ended` subscription and an account with contact data → contact data nulled by `pii-minimisation` after 30 days; the rows are kept (§15.3) |
 | Paid tenant lapses | §8.8; records kept as financial records |
 | Tenant offboarded | §8.8.4; account closed; PII minimised after 90 days |
 | Customer returns after offboarding | New tenant, new account (`BIL-SUB-2`) |
@@ -3474,8 +3478,8 @@ Results and evidence references go in `results`; a run with any required case fa
 | Data | Where | Basis | Retention |
 |---|---|---|---|
 | Billing contact name and email | `billing_accounts`, provider customer | Contract (invoicing, dunning) | Account life; then minimised |
-| Company, country, tax id | `billing_accounts` | Contract / tax law | Financial-record period |
-| Actor ids (users, operators) | History, sagas, adjustments, refunds | Legitimate interest (audit) | Financial-record period |
+| Company, country, tax id | `billing_accounts` | Contract / tax law | Indefinite (financial record, CD-14) |
+| Actor ids (users, operators) | History, sagas, adjustments, refunds | Legitimate interest (audit) | Indefinite (financial record, CD-14) |
 | IP address, user agent | Event envelopes (API-driven changes) | Legitimate interest | Outbox 8 days; Audit tier |
 | Card data | **Never** (`BIL-PCI-2`) | — | — |
 
@@ -3483,13 +3487,20 @@ Results and evidence references go in `results`; a run with any required case fa
 
 | Record | Retention | Basis |
 |---|---|---|
-| Invoices, refunds, adjustments, disputes, subscriptions, items, history, sagas, purchases, usage period records | **Financial-record period — CD-14 open (Finance + Legal, BIZ-5)**. Implemented as setting `FINANCIAL_RECORD_RETENTION_YEARS`; no deletion job runs until CD-14 sets the value | HLD §13.3 |
-| `payment_event_ledger` | Payload set to `{}` after 18 months; row kept for the financial period | Disputes and reconciliation need about 120 days; 18 months covers annual cycles |
-| Billing contact name and email after offboarding | Nulled 90 days after `closed_at` (`pii_minimised_at`); company and tax id kept for the financial period; provider customer email cleared | Minimisation |
-| Accounts with no paid invoice (abandoned checkout) | Deleted 30 days after the subscription ended, unless the tenant converts again | Minimisation |
+| Invoices, refunds, adjustments, disputes, subscriptions, items, history, sagas, purchases, usage period records | **Indefinite.** No deletion or minimisation job. `FINANCIAL_RECORD_RETENTION_YEARS` is reserved for a future jurisdiction-specific requirement; it is not defined in §12 and nothing reads it in Phase 1 | HLD §13.3; CD-14 (Finance and Legal approved, BL-OQ-11) |
+| Workflow history supporting financial actions: `conversion_sagas`, `subscription_status_history`, `plan_change_requests`, `reconciliation_runs` and `reconciliation_findings`, and the decision columns on `refunds`, `disputes`, `adjustments` and `invoices`, covering conversion, cancellation, refund, dispute, reversal, operator-override and reconciliation flows | **Indefinite** | CD-14: without it, operators keep the outcome but lose the evidence of how it happened |
+| `payment_event_ledger` | **Indefinite, payload included** (the 18-month payload emptying was removed in rev 0.19) | CD-14: payment events are financial evidence for disputes, chargebacks, fraud investigations and reconciliation |
+| Billing contact name and email after offboarding | Nulled by `pii-minimisation` `PII_MINIMISE_OFFBOARDED_DAYS` (90) after `closed_at` (`pii_minimised_at`); company and tax id kept indefinitely; provider customer email cleared | GDPR minimisation of personal data (not a financial record) |
+| Contact data on accounts with no paid invoice (abandoned checkout) | Name and email nulled by `pii-minimisation` `PII_MINIMISE_ABANDONED_DAYS` (30) after the subscription ended, unless the tenant has started a new checkout; the account, subscription and history rows are **kept** (until rev 0.19 the account was deleted) | GDPR minimisation of personal data |
 | `idempotency_records` / `processed_events` / published outbox rows | 72 h / 8 days / 8 days | Operational |
 
-Billing does **not** consume `TenantMembershipsPurged`: its data are financial records that outlive tenant purge (HLD §8.8, §13.3). Minimisation is applied by a `retention` CronJob added when CD-14 fixes the values; until then only the operational prunes run.
+**Decision (CD-14, Finance and Legal, 2026-11-23).** Financial records, and the workflow history that supports financial actions, are kept indefinitely by default. No automatic deletion or minimisation runs at the end of any period. Legal's position: for UAE-first operation, statutory retention periods are a minimum, not a maximum; the question is whether Billing can still produce the record when required, not whether it can delete it after N years. Finance's position: records may be needed years later for audits, tax reviews, regulatory inquiries, customer disputes, chargebacks, fraud investigations, revenue reconciliation and restatements, while billing volume is small.
+
+**Tenant purge.** Billing does **not** consume `TenantMembershipsPurged`: its data are financial records that outlive tenant purge (HLD §8.8, §13.3). The tenant account may close, but invoices, refunds, disputes, adjustments, subscription history, payment events and the audit evidence of financial decisions stay intact.
+
+**Personal data (Commercial Team interpretation, 2026-11-23).** The ruling covers financial records. Billing-contact name and email are personal data, not ledger entries, so GDPR minimisation of them continues through `pii-minimisation` (§13.2). It only nulls contact fields and never deletes a row (`BIL-OPS-9`).
+
+**Governance note (Finance and Legal).** If a future jurisdiction imposes a mandatory destruction or anonymisation requirement after a specific period, Billing will introduce a dedicated retention/minimisation workflow at that time. Until such a jurisdiction-specific requirement exists, Billing remains a permanent financial ledger and no financial-record retention job shall run.
 
 ### 15.4 Compliance
 
@@ -3518,7 +3529,7 @@ Each item names the default the design runs with until it closes.
 | BL-OQ-8 | **BFF alignment (SGN-2).** Contract published in §5.4.2. BFF: `BILLING_TIMEOUT_MS ≥ 15000`; field mapping `PaymentToken → payment_method_ref`, `Plan → plan_code`, `Seats → licensed_seats`; 3-D Secure (`402 PAYMENT_ACTION_REQUIRED` → browser → same-key retry). Go-live order §18.7 | §10.6 | Web / growth (BFF) | `FEATURE_DIRECT_SIGNUP=false` | Open — contract published |
 | BL-OQ-9 | **Operator routes B-O6 to B-O15.** (a) Billing's operator `HTTPRoute` lists every operator path, B-O1 to B-O15 (Billing's own chart, §13.1). (b) IAM extends the end-to-end operator test (AuthZ Enrichment LLD §8.9.1 OP-G4), whose list covers only B-O1 to B-O5, to B-O6 to B-O15. No IAM gateway route list exists: Envoy Gateway is the only ingress, and the platform-realm `jwt_authn` provider and AuthZ Enrichment admit the whole `/api/v1/operator/` prefix | §11.4 | Billing (a); IAM + Commercial (b) | Today's `403` is the operator path being off (OP-G1 to OP-G3, `BIL-AUTH-6`), not a missing route | **Approved; IAM part merged** ([iam-authz-enrichment#43](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-authz-enrichment/pull/43), `f4af854`, 2026-11-19): AuthZ unit and e2e tests cover B-O1–B-O15. **Remaining:** (a) Billing's operator `HTTPRoute` lists B-O1 to B-O15 when Billing's chart is written. Gateway half of OP-G4 waits on BL-OQ-14 |
 | BL-OQ-10 | **Audit Log:** admit `cluster.local/ns/billing/sa/commercial-billing` to AL-5; add entry types `billing.conversion.stub`, `billing.conversion.reverted`, `billing.saga.resolved`, `billing.collection.paused`, `billing.price_book.changed`, `billing.provider.certified`, `billing.provider.certification_revoked` (tier `security_3y`) | §11.6, CD-21 | Audit Log | Entries held in `pending_audit_entries` | **Closed** (Audit Log rev 0.34: admitted; all seven types added) |
-| BL-OQ-11 | **CD-14 — financial-record retention** per jurisdiction (BIZ-5); also decides Workflow history retention | CD-14 | Finance + Legal + Billing | No financial deletion job; operational prunes only | Open |
+| BL-OQ-11 | **CD-14 — financial-record retention** per jurisdiction (BIZ-5); also decides Workflow history retention | CD-14 | Finance + Legal + Billing | No financial deletion job; operational prunes only | **Closed** (Finance and Legal, 2026-11-23): financial records and financial workflow history kept indefinitely; no deletion or minimisation job; tenant purge keeps them; `FINANCIAL_RECORD_RETENTION_YEARS` reserved. Added: governance note, `pii-minimisation` for contact data only, `BIL-OPS-9` |
 | BL-OQ-12 | **Notification messages (NTF-3):** seats added; reduction applied (incl. renewal above target); add-on purchased; downgrade blocked at renewal; renewal top-up charged. Add-on expiry reminder is Entitlements-driven | §10.5 | Notification + Commercial | Only past-due and cancelled emails (existing filter) | Open |
 | BL-OQ-13 | **Permission list (BIZ-6)** — six permissions in §5.2, two added here | §6.6, CD-54 | Finance + Billing | §5.2 as written | **Closed** (Finance, 2026-11-23): six permissions and role mapping approved unchanged. Added: Finance's overlap rule in §5.2 and invariant `BIL-AUTH-7` |
 | BL-OQ-14 | **CD-52 dependency** — operator path needs OP-G1 (Keycloak platform realm, IAM), **OP-G2** (gateway `jwt_authn` provider, platform-edge), OP-G3 (`OPERATOR_REALM_ISSUER` set and deployed, IAM), then the OP-G4 joint end-to-end test (numbering per AuthZ Enrichment LLD §8.9.1; HLD numbers differ, D-9) | CD-52 | Platform-edge (OP-G2); IAM (OP-G1, OP-G3) | Operator routes `403` outside dev/test | Open (external). **OP-G1 merged** ([iam-realm-provisioner#60](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-realm-provisioner/pull/60), `9e8fcab`): realm `bcbp-platform`, issuer `https://auth.bcbpsolutions.com/realms/bcbp-platform`, created on Realm Provisioner's next deploy; operator users still to be created by hand. **OP-G2** requested from platform edge (`op-g2-platform-edge-request.md`), not started, sole external blocker. OP-G3 after OP-G2. OP-G6 date not set |
@@ -3583,7 +3594,7 @@ Each item names the default the design runs with until it closes.
 | §11.4 Billing operator paths "finalised in the Billing LLD" | §5.3 (B-O1–B-O5 as HLD; B-O6–B-O15 added, B-O14 and B-O15 in rev 0.3) |
 | §13.1 RTO/RPO "confirm in each service LLD" | 30 min / 5 min confirmed (§11.1, §20.6) |
 | CD-10 | §8.2 (Finance and Security approved, BL-OQ-7) |
-| CD-14 | Setting and placeholders (BL-OQ-11) |
+| CD-14 | §15.3: indefinite retention (Finance and Legal approved, BL-OQ-11) |
 | CD-56 per-tenant selection, payment-method migration | Designed (§19.3), deferred (BL-OQ-15) |
 | CD-56 (5) provider capability certification | **Closed by this LLD:** §3.4, §3.5, §4.2.24 (`BIL-PROV-1` to `BIL-PROV-3`), §12, §14.7, §19.3, §19.6 |
 
