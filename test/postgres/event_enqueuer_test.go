@@ -79,7 +79,7 @@ func TestEventEnqueuer(t *testing.T) {
 	err := runner.RunInTenantTx(ctx, tenant, func(ctx context.Context) error {
 		// BIL-EVT-5: seat event first, status event last.
 		for _, p := range []domain.EventPayload{seats, react, seats} {
-			if err := enq.Enqueue(ctx, p, meta); err != nil {
+			if _, err := enq.Enqueue(ctx, p, meta); err != nil {
 				return err
 			}
 		}
@@ -125,7 +125,8 @@ func TestEventEnqueuer(t *testing.T) {
 	// System defaults.
 	tenant2 := newID()
 	if err := runner.RunInTenantTx(ctx, tenant2, func(ctx context.Context) error {
-		return enq.Enqueue(ctx, domain.TenantSeatsChanged{TenantID: tenant2, LicensedSeats: 3, Reason: domain.SeatsResync}, port.EventMeta{})
+		_, err := enq.Enqueue(ctx, domain.TenantSeatsChanged{TenantID: tenant2, LicensedSeats: 3, Reason: domain.SeatsResync}, port.EventMeta{})
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +146,7 @@ func TestEventEnqueuerAtomicity(t *testing.T) {
 
 	boom := errors.New("business failure")
 	err := runner.RunInTenantTx(ctx, tenant, func(ctx context.Context) error {
-		if err := enq.Enqueue(ctx, ok, port.EventMeta{}); err != nil {
+		if _, err := enq.Enqueue(ctx, ok, port.EventMeta{}); err != nil {
 			return err
 		}
 		return boom
@@ -157,11 +158,12 @@ func TestEventEnqueuerAtomicity(t *testing.T) {
 		t.Fatalf("rolled-back event persisted: %d", len(r))
 	}
 
-	if err := enq.Enqueue(ctx, ok, port.EventMeta{}); err == nil {
+	if _, err := enq.Enqueue(ctx, ok, port.EventMeta{}); err == nil {
 		t.Error("enqueue outside a transaction accepted")
 	}
 	err = runner.RunInTenantTx(ctx, tenant, func(ctx context.Context) error {
-		return enq.Enqueue(ctx, domain.TenantSeatsChanged{TenantID: tenant, LicensedSeats: 0, Reason: domain.SeatsPurchase}, port.EventMeta{})
+		_, err := enq.Enqueue(ctx, domain.TenantSeatsChanged{TenantID: tenant, LicensedSeats: 0, Reason: domain.SeatsPurchase}, port.EventMeta{})
+		return err
 	})
 	var de *domain.DomainError
 	if !errors.As(err, &de) {

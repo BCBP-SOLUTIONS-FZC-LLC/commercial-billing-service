@@ -36,11 +36,22 @@ func TestSchemasLoadAndValidate(t *testing.T) {
 	if err := s.Validate("TenantConverted", []byte(`{}`)); !errors.Is(err, ErrNoSchema) {
 		t.Errorf("unknown type: %v", err)
 	}
+	// Consumed: RP's TenantReactivated is a different schema from Billing's.
+	rp := `{"tenant_id":"` + tenant + `","realm":"r","source":"operator"}`
+	if err := s.ValidateConsumed(TypeTenantReactivated, []byte(rp)); err != nil {
+		t.Errorf("consumed RP TenantReactivated: %v", err)
+	}
+	if err := s.Validate(TypeTenantReactivated, []byte(rp)); err == nil {
+		t.Error("RP payload passed Billing's produced TenantReactivated schema")
+	}
+	if err := s.ValidateConsumed(TypeTenantSuspended, []byte(`{"tenant_id":"`+tenant+`","realm":"r","source":"other","suspended_at":"2026-11-20T09:14:03Z"}`)); err == nil {
+		t.Error("bad suspension source accepted")
+	}
 }
 
 func TestLoadSchemasFailsClosed(t *testing.T) {
 	stray := fstest.MapFS{"schemas/other.json": {Data: []byte(`{}`)}}
-	if _, err := loadSchemas(stray); err == nil || !strings.Contains(err.Error(), "schemaFileNames") {
+	if _, err := loadSchemas(stray); err == nil || !strings.Contains(err.Error(), "producedFiles") {
 		t.Errorf("unmapped file: %v", err)
 	}
 	one := fstest.MapFS{"schemas/tenant_reactivated.json": {Data: []byte(`{"type":"object"}`)}}
@@ -123,7 +134,7 @@ func TestDefinitionMatchesSchemaGov(t *testing.T) {
 	if err != nil {
 		t.Skip("python3 not installed")
 	}
-	for file, name := range schemaFileNames {
+	for file, name := range producedFiles {
 		got, err := definition(schemasFS, name)
 		if err != nil {
 			t.Fatal(err)

@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UsagePeriodClosedPayload",
+  "type": "object",
+  "required": [
+    "tenant_id",
+    "period_start",
+    "period_end",
+    "tokens_total",
+    "api_requests_total",
+    "limits"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "period_start": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "period_end": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "tokens_total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "api_requests_total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "addon_consumed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "limits": {
+      "type": "object"
+    }
+  }
+}

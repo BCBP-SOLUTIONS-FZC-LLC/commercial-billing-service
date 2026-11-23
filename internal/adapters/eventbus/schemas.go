@@ -32,10 +32,12 @@ const Source = "commercial-billing"
 // SpecVersion is the envelope specversion (§7.3.1).
 const SpecVersion = "1"
 
-// schemaFileNames maps every embedded file to its envelope type / Glue
-// schema name. A new schema file needs one entry here; TestSchemaFiles
-// fails on a file without one.
-var schemaFileNames = map[string]string{
+// producedFiles and consumedFiles map every embedded file to its envelope
+// type (and, for produced types, Glue schema name). The two sets are kept
+// apart because RP's TenantReactivated (consumed) and Billing's own
+// (produced) share a type name. A new schema file needs one entry here;
+// loading fails on a file without one.
+var producedFiles = map[string]string{
 	"tenant_plan_changed.json":           string(domain.EventTenantPlanChanged),
 	"tenant_seats_changed.json":          string(domain.EventTenantSeatsChanged),
 	"tenant_payment_past_due.json":       string(domain.EventTenantPaymentPastDue),
@@ -44,17 +46,34 @@ var schemaFileNames = map[string]string{
 	"tenant_quota_add_on_changed.json":   string(domain.EventTenantQuotaAddOnChanged),
 }
 
+// Consumed event types (LLD §7.1).
+const (
+	TypeTenantConverted   = "TenantConverted"
+	TypeTenantSuspended   = "TenantSuspended"
+	TypeTenantReactivated = "TenantReactivated"
+	TypeTenantOffboarded  = "TenantOffboarded"
+	TypeUsagePeriodClosed = "UsagePeriodClosed"
+)
+
+var consumedFiles = map[string]string{
+	"iam_tenant_converted.json":   TypeTenantConverted,
+	"iam_tenant_suspended.json":   TypeTenantSuspended,
+	"iam_tenant_reactivated.json": TypeTenantReactivated,
+	"iam_tenant_offboarded.json":  TypeTenantOffboarded,
+	"usage_period_closed.json":    TypeUsagePeriodClosed,
+}
+
 // ErrNoSchema is returned (wrapped) by Validate for a type without a schema.
 var ErrNoSchema = errors.New("no schema for event type")
 
 // Schemas is the compiled set of embedded schemas, keyed by event type.
 type Schemas struct {
-	byType map[string]*jsonschema.Schema
+	produced, consumed map[string]*jsonschema.Schema
 }
 
-// LoadSchemas compiles every embedded schema. A file missing from
-// schemaFileNames, or a produced type without a file, is an error: an event
-// can never reach the outbox unvalidated (BIL-EVT-2).
+// LoadSchemas compiles every embedded schema. A file in neither map, or a
+// produced type without a file, is an error: an event can never reach the
+// outbox unvalidated (BIL-EVT-2).
 func LoadSchemas() (*Schemas, error) { return loadSchemas(schemasFS) }
 
 func loadSchemas(fsys fs.FS) (*Schemas, error) {
@@ -62,48 +81,61 @@ func loadSchemas(fsys fs.FS) (*Schemas, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read embedded schemas: %w", err)
 	}
-	s := &Schemas{byType: map[string]*jsonschema.Schema{}}
+	s := &Schemas{produced: map[string]*jsonschema.Schema{}, consumed: map[string]*jsonschema.Schema{}}
 	compiler := jsonschema.NewCompiler()
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		name, ok := schemaFileNames[e.Name()]
-		if !ok {
-			return nil, fmt.Errorf("schema file %s has no entry in schemaFileNames", e.Name())
+		into, name := s.produced, producedFiles[e.Name()]
+		if name == "" {
+			into, name = s.consumed, consumedFiles[e.Name()]
+		}
+		if name == "" {
+			return nil, fmt.Errorf("schema file %s has no entry in producedFiles or consumedFiles", e.Name())
 		}
 		raw, err := fs.ReadFile(fsys, path.Join("schemas", e.Name()))
 		if err != nil {
 			return nil, err
 		}
-		doc, err := jsonschema.UnmarshalJSON(strings.NewReader(string(raw)))
+		doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
 		if err != nil {
 			return nil, fmt.Errorf("parse schema %s: %w", e.Name(), err)
 		}
-		if err := compiler.AddResource(name, doc); err != nil {
+		if err := compiler.AddResource(e.Name(), doc); err != nil {
 			return nil, fmt.Errorf("register schema %s: %w", e.Name(), err)
 		}
-		sch, err := compiler.Compile(name)
+		sch, err := compiler.Compile(e.Name())
 		if err != nil {
 			return nil, fmt.Errorf("compile schema %s: %w", e.Name(), err)
 		}
-		s.byType[name] = sch
+		into[name] = sch
 	}
 	for _, t := range domain.ProducedEventTypes {
-		if _, ok := s.byType[string(t)]; !ok {
+		if _, ok := s.produced[string(t)]; !ok {
 			return nil, fmt.Errorf("produced event type %s has no embedded schema", t)
 		}
 	}
 	return s, nil
 }
 
-// Validate checks payload against eventType's schema.
+// Validate checks a produced payload against eventType's schema.
 func (s *Schemas) Validate(eventType string, payload []byte) error {
-	sch, ok := s.byType[eventType]
+	return validate(s.produced, eventType, payload)
+}
+
+// ValidateConsumed checks a consumed payload against eventType's schema.
+// ErrNoSchema means the type is not one Billing consumes.
+func (s *Schemas) ValidateConsumed(eventType string, payload []byte) error {
+	return validate(s.consumed, eventType, payload)
+}
+
+func validate(set map[string]*jsonschema.Schema, eventType string, payload []byte) error {
+	sch, ok := set[eventType]
 	if !ok {
 		return fmt.Errorf("validate %s: %w", eventType, ErrNoSchema)
 	}
-	doc, err := jsonschema.UnmarshalJSON(strings.NewReader(string(payload)))
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("validate %s: payload is not JSON: %w", eventType, err)
 	}
@@ -128,7 +160,7 @@ func ProducedSchemaNames() []string {
 // uploads it (Python json.dumps(separators=(",", ":")), ensure_ascii), so
 // GetSchemaByDefinition matches byte for byte.
 func definition(fsys fs.FS, schemaName string) (string, error) {
-	for file, name := range schemaFileNames {
+	for file, name := range producedFiles {
 		if name != schemaName {
 			continue
 		}

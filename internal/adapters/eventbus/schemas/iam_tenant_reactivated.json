@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "IamTenantReactivatedPayload",
+  "type": "object",
+  "required": [
+    "tenant_id",
+    "realm",
+    "source"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "realm": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "operator"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    }
+  }
+}

@@ -25,7 +25,7 @@ type EventMeta struct {
 // state change and its event commit together. Events are keyed by tenant
 // (BIL-EVT-5) and stamped with Billing's clock in that transaction, strictly
 // increasing within it (BIL-EVT-1). A payload failing its schema is
-// rejected and the transaction must roll back.
+// rejected and the transaction must roll back. It returns the envelope id.
 type EventEnqueuer interface {
-	Enqueue(ctx context.Context, payload domain.EventPayload, meta EventMeta) error
+	Enqueue(ctx context.Context, payload domain.EventPayload, meta EventMeta) (eventID string, err error)
 }

@@ -5,8 +5,10 @@ info:
   version: "1.0.0"
   description: |
     Events produced by commercial-billing on billing.events, and the events it
-    consumes (LLD §7). Source of truth for the produced JSON Schemas under
-    internal/adapters/eventbus/schemas/ (generated with `make extract-schemas`).
+    consumes (LLD §7). Source of truth for the JSON Schemas under
+    internal/adapters/eventbus/schemas/ (generated with `make schema-extract`):
+    the six produced types, and the consumed tenant-billing-q (Iam*) and
+    usage-billing-q payloads.
 
     Topic            Glue registry    Produced events
     ──────────────────────────────────────────────────────────────────────
@@ -65,6 +67,34 @@ channels:
       TenantQuotaAddOnChanged:
         $ref: '#/components/messages/TenantQuotaAddOnChanged'
 
+  tenantBilling:
+    address: tenant-billing-q
+    servers:
+      - $ref: '#/servers/tenantBillingQueue'
+    description: |
+      Billing's queue on iam-tenant-events; SNS filter EventType IN
+      [TenantConverted, TenantSuspended, TenantReactivated, TenantOffboarded]
+      (LLD §7.1). Payloads per iam-realm-provisioner/api/asyncapi.yaml.
+    messages:
+      IamTenantConverted:
+        $ref: '#/components/messages/IamTenantConverted'
+      IamTenantSuspended:
+        $ref: '#/components/messages/IamTenantSuspended'
+      IamTenantReactivated:
+        $ref: '#/components/messages/IamTenantReactivated'
+      IamTenantOffboarded:
+        $ref: '#/components/messages/IamTenantOffboarded'
+  usageBilling:
+    address: usage-billing-q
+    servers:
+      - $ref: '#/servers/usageBillingQueue'
+    description: |
+      Billing's queue on usage-events; SNS filter EventType IN [UsagePeriodClosed].
+      Contract taken from the HLD until the Usage & Metering LLD exists (BL-OQ-24).
+    messages:
+      UsagePeriodClosed:
+        $ref: '#/components/messages/UsagePeriodClosed'
+
 operations:
   publishBillingEvents:
     action: send
@@ -78,12 +108,32 @@ operations:
       - $ref: '#/channels/billingEvents/messages/TenantSubscriptionCancelled'
       - $ref: '#/channels/billingEvents/messages/TenantReactivated'
       - $ref: '#/channels/billingEvents/messages/TenantQuotaAddOnChanged'
+  receiveTenantLifecycle:
+    action: receive
+    channel:
+      $ref: '#/channels/tenantBilling'
+    summary: IAM tenant lifecycle projected onto billing_accounts; TenantConverted confirms the conversion saga (LLD §7.1).
+    messages:
+      - $ref: '#/channels/tenantBilling/messages/IamTenantConverted'
+      - $ref: '#/channels/tenantBilling/messages/IamTenantSuspended'
+      - $ref: '#/channels/tenantBilling/messages/IamTenantReactivated'
+      - $ref: '#/channels/tenantBilling/messages/IamTenantOffboarded'
+  receiveUsagePeriodClosed:
+    action: receive
+    channel:
+      $ref: '#/channels/usageBilling'
+    summary: Period totals kept for reference; nothing is priced from them (LLD §7.1, §8.12).
+    messages:
+      - $ref: '#/channels/usageBilling/messages/UsagePeriodClosed'
 
 components:
   tags:
     published:
       name: published
       description: commercial-billing is the producer, on billing-events.
+    consumed:
+      name: consumed
+      description: Produced by another service; commercial-billing consumes it.
 
   messageTraits:
     glueWireFormat:
@@ -181,6 +231,82 @@ components:
         - $ref: '#/components/messageTraits/glueWireFormat'
       payload:
         $ref: '#/components/schemas/TenantQuotaAddOnChangedEnvelope'
+
+    IamTenantConverted:
+      name: TenantConverted
+      x-lifecycle:
+        status: active
+      x-owner:
+        team: iam
+      title: TenantConverted (iam-tenant-events)
+      summary: Consumed only — Realm Provisioner's conversion result; confirms the saga matched by billing_subscription_id.
+      tags:
+        - $ref: '#/components/tags/consumed'
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/glueWireFormat'
+      payload:
+        $ref: '#/components/schemas/IamTenantConvertedPayload'
+    IamTenantSuspended:
+      name: TenantSuspended
+      x-lifecycle:
+        status: active
+      x-owner:
+        team: iam
+      title: TenantSuspended (iam-tenant-events)
+      summary: Consumed only — tenant suspended for billing lapse or by an operator.
+      tags:
+        - $ref: '#/components/tags/consumed'
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/glueWireFormat'
+      payload:
+        $ref: '#/components/schemas/IamTenantSuspendedPayload'
+    IamTenantReactivated:
+      name: TenantReactivated
+      x-lifecycle:
+        status: active
+      x-owner:
+        team: iam
+      title: TenantReactivated (iam-tenant-events)
+      summary: Consumed only — Realm Provisioner's operator reactivation, distinct from Billing's own TenantReactivated on billing-events.
+      tags:
+        - $ref: '#/components/tags/consumed'
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/glueWireFormat'
+      payload:
+        $ref: '#/components/schemas/IamTenantReactivatedPayload'
+    IamTenantOffboarded:
+      name: TenantOffboarded
+      x-lifecycle:
+        status: active
+      x-owner:
+        team: iam
+      title: TenantOffboarded (iam-tenant-events)
+      summary: Consumed only — closes the billing account. export_s3_key is never read, logged or copied.
+      tags:
+        - $ref: '#/components/tags/consumed'
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/glueWireFormat'
+      payload:
+        $ref: '#/components/schemas/IamTenantOffboardedPayload'
+    UsagePeriodClosed:
+      name: UsagePeriodClosed
+      x-lifecycle:
+        status: active
+      x-owner:
+        team: commercial-usage-metering
+      title: UsagePeriodClosed (usage-events)
+      summary: Consumed only — one per tenant per UTC month (HLD §8.7).
+      tags:
+        - $ref: '#/components/tags/consumed'
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/glueWireFormat'
+      payload:
+        $ref: '#/components/schemas/UsagePeriodClosedPayload'
 
   schemas:
     # ── Envelope (platform-events; LLD §7.3.1) ──────────────────────────────
@@ -431,3 +557,107 @@ components:
         pack_quantity:
           type: integer
           minimum: 1
+
+    # ── Consumed payloads (open; copied from RP's AsyncAPI, and the HLD for
+    #    UsagePeriodClosed until BL-OQ-24 closes) ──────────────────────────
+    IamTenantConvertedPayload:
+      type: object
+      additionalProperties: true
+      required: [tenant_id, realm, plan, users_migrated, direct_signup]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        realm:
+          type: string
+        plan:
+          type: string
+          enum: [starter, pro, enterprise]
+        billing_subscription_id:
+          type: string
+        users_migrated:
+          type: integer
+          minimum: 0
+        direct_signup:
+          type: boolean
+
+    IamTenantSuspendedPayload:
+      type: object
+      additionalProperties: true
+      required: [tenant_id, realm, suspended_at, source]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        realm:
+          type: string
+        cancelled_at:
+          type: string
+          format: date-time
+        suspended_at:
+          type: string
+          format: date-time
+        source:
+          type: string
+          enum: [billing_lapse, operator]
+        reason:
+          type: string
+
+    IamTenantReactivatedPayload:
+      type: object
+      additionalProperties: true
+      required: [tenant_id, realm, source]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        realm:
+          type: string
+        source:
+          type: string
+          enum: [operator]
+        reason:
+          type: string
+
+    IamTenantOffboardedPayload:
+      type: object
+      additionalProperties: true
+      required: [tenant_id, realm, offboarded_at]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        realm:
+          type: string
+        export_s3_key:
+          type: string
+          description: Never read, logged or copied by Billing.
+        offboarded_at:
+          type: string
+          format: date-time
+
+    UsagePeriodClosedPayload:
+      type: object
+      additionalProperties: true
+      required: [tenant_id, period_start, period_end, tokens_total, api_requests_total, limits]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        period_start:
+          type: string
+          format: date-time
+        period_end:
+          type: string
+          format: date-time
+        tokens_total:
+          type: integer
+          minimum: 0
+        api_requests_total:
+          type: integer
+          minimum: 0
+        addon_consumed:
+          type: integer
+          minimum: 0
+        limits:
+          type: object

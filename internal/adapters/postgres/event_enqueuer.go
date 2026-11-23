@@ -33,26 +33,26 @@ func NewEventEnqueuer(source, specVersion string, validate func(eventType string
 }
 
 // Enqueue implements port.EventEnqueuer.
-func (e *EventEnqueuer) Enqueue(ctx context.Context, p domain.EventPayload, meta port.EventMeta) error {
+func (e *EventEnqueuer) Enqueue(ctx context.Context, p domain.EventPayload, meta port.EventMeta) (string, error) {
 	st, ok := txStateFrom(ctx)
 	if !ok {
 		// BIL-EVT-2: an event is only ever written with its state change.
-		return domain.NewError(domain.ErrInternal, "event enqueued outside a transaction")
+		return "", domain.NewError(domain.ErrInternal, "event enqueued outside a transaction")
 	}
 	if err := p.Validate(); err != nil {
-		return domain.NewError(domain.ErrInternal, err.Error())
+		return "", domain.NewError(domain.ErrInternal, err.Error())
 	}
 	typ := string(p.EventType())
 	data, err := json.Marshal(p)
 	if err != nil {
-		return fmt.Errorf("marshal %s: %w", typ, err)
+		return "", fmt.Errorf("marshal %s: %w", typ, err)
 	}
 	if err := e.validate(typ, data); err != nil {
-		return domain.NewError(domain.ErrInternal, err.Error())
+		return "", domain.NewError(domain.ErrInternal, err.Error())
 	}
 	at, err := nextEventTime(ctx, st)
 	if err != nil {
-		return mapDBError(err)
+		return "", mapDBError(err)
 	}
 
 	actor, ip, ua := meta.Actor, meta.IPAddress, meta.UserAgent
@@ -80,7 +80,10 @@ func (e *EventEnqueuer) Enqueue(ctx context.Context, p domain.EventPayload, meta
 	// BIL-EVT-5: ordered per tenant. Callers hold the tenant's subscription
 	// row lock (SubscriptionRepo.Transition / ForUpdate) before enqueuing,
 	// so two transactions for one tenant cannot interleave their inserts.
-	return mapDBError(outbox.EnqueueOrdered(ctx, st.tx, env, p.Tenant()))
+	if err := outbox.EnqueueOrdered(ctx, st.tx, env, p.Tenant()); err != nil {
+		return "", mapDBError(err)
+	}
+	return env.ID, nil
 }
 
 // nextEventTime is BIL-EVT-1: Billing's clock read in this transaction,
