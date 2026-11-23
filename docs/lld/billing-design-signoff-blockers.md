@@ -2,8 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Document | `commercial-lld-billing-service.md` rev 0.21 (base HLD v0.64) |
-| Progress | **7 of 9 closed** — S-1, S-2 and S-3 approved by Finance; S-4 by Finance and Security; S-5 by Finance and Legal; S-6 by Product and Finance; S-7 by the PCI owner group (all 2026-11-23) |
+| Document | `commercial-lld-billing-service.md` rev 0.22 (base HLD v0.64) |
+| Progress | **8 of 9 closed** — S-1, S-2 and S-3 approved by Finance; S-4 by Finance and Security; S-5 by Finance and Legal; S-6 by Product and Finance; S-7 by the PCI owner group; S-8 by the Commercial TL and Entitlements (all 2026-11-23). Only S-9 remains |
 | From | Commercial Team (Billing) |
 | Date | 2026-11-23 |
 | Purpose | Lists the decisions other teams must make before the Billing LLD can be **signed off as a design** |
@@ -32,7 +32,7 @@ The Billing LLD tracks three kinds of open item. Only the first kind is in this 
 | S-5 | Finance + Legal | BL-OQ-11 (CD-14) | How long must financial records be kept, per jurisdiction? | ✅ **Approved 2026-11-23 by Finance and Legal**: keep indefinitely, no deletion or minimisation job (see S-5). Applied in LLD rev 0.19 | — |
 | S-6 | Product + Finance | BL-OQ-16 | When a price changes, when do existing subscribers pay it? | ✅ **Approved 2026-11-23 by Product and Finance**: next renewal, no grandfathering (see S-6). Applied in LLD rev 0.20 | — |
 | S-7 | PCI owner group | BL-OQ-21 + review | Who may mark a payment provider as certified? Plus PCI review of §4, §5.4.4, §10 | ✅ **Approved 2026-11-23**, review complete with no blocking findings; reviewer now approves through new route B-O17 (see S-7). Applied in LLD rev 0.21 | — |
-| S-8 | Commercial TL + Entitlements | BL-OQ-23 (c) | Does Entitlements publish any add-on balance event? | No; Audit gets those changes only through AL-5 | Audit Log needs a new LLD decision; event contracts change |
+| S-8 | Commercial TL + Entitlements | BL-OQ-23 (c) | Does Entitlements publish any add-on balance event? | ✅ **Approved 2026-11-23 by the TL and Entitlements**: option 1, no event; AL-5 only (see S-8). Recorded in LLD rev 0.22 | — |
 | S-9 | Commercial HLD owner | D-1, D-5, D-8, D-9 | Will the HLD be corrected where the LLD knowingly differs? | LLD follows the source system or TL decision; HLD notes requested | Until fixed, the signed LLD contradicts the signed HLD |
 
 ---
@@ -282,6 +282,19 @@ New invariant `BIL-PROV-4`. The PCI owner group may want to glance at B-O17 (LLD
 
 **Decision needed:** confirm option 1. Details: `billing-open-items-entitlements.md` E-3.
 
+**Decision: ✅ Option 1 approved by the Commercial TL and Entitlements, 2026-11-23, with no changes.** No `TenantAddOnBalanceChanged` (or equivalent) on `entitlement-events`. Goodwill grants, balance corrections, expiry and similar balance changes are recorded through AL-5 only.
+
+| Reason | Detail |
+|---|---|
+| No duplicate audit records | Audit's catch-all queue would store such an event as `entitlement.unknown`, alarm, and duplicate the AL-5 entry |
+| Clean ownership | Entitlements owns entitlement state, Audit owns the audit record (via AL-5), Billing owns purchases. One authoritative audit path per action |
+| No consumer | Nobody needs the event; publishing it would add a contract to maintain for no benefit |
+| No Audit Log work | Option 2 would need a new Audit decision, mapping or suppression rule across three teams |
+
+**Statement approved for LLD §7.3.6 and §8.11, now in rev 0.22:** *"Entitlements does not publish add-on balance change events on `entitlement-events`. Audit visibility for goodwill grants, corrections, expiries and similar balance changes is provided exclusively through AL-5 audit submissions."*
+
+§8.11 previously said Entitlements' corrections were "published on Entitlements' own event"; that wording is removed. No event, Audit Log or consumer change. BL-OQ-23 is now fully closed, and E-3 is closed in `billing-open-items-entitlements.md`.
+
 ---
 
 ## Commercial HLD owner
@@ -321,6 +334,6 @@ New invariant `BIL-PROV-4`. The PCI owner group may want to glance at B-O17 (LLD
 | S-6 | Product | Product | ✅ Approved: next renewal, no grandfathering; notice required before a higher price (LLD rev 0.20) | 2026-11-23 |
 | S-6 | Finance | Finance | ✅ Approved: next renewal, no grandfathering (LLD rev 0.20) | 2026-11-23 |
 | S-7 | PCI owner group | PCI owner group | ✅ Approved; PCI review of §4, §5.4.4, §10 complete, no blocking findings. B-O17 and `trg_pc_guard` added for its recommendations (LLD rev 0.21) | 2026-11-23 |
-| S-8 | Commercial TL | | | |
-| S-8 | Entitlements | | | |
+| S-8 | Commercial TL | Commercial TL | ✅ Option 1 approved: no add-on balance event; AL-5 only (LLD rev 0.22) | 2026-11-23 |
+| S-8 | Entitlements | Entitlements | ✅ Option 1 approved (LLD rev 0.22) | 2026-11-23 |
 | S-9 | Commercial HLD owner | | | |

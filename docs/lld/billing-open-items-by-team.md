@@ -1,6 +1,6 @@
 # Billing Service — Open Items by Team
 
-Source: `commercial-lld-billing-service.md` rev 0.21 (2026-11-23; base HLD v0.64), updated with the team responses, the Commercial TL decisions and the AI team reply (draft) of 2026-11-19 (`billing-open-items-team-response.md` and `billing-reply-ai-team.md`, not yet in this repository), §16.1 register, §16.2 discrepancies, platform/SRE dependencies, and the ENT-D3 / ENT-D6 product memos. Item IDs match the LLD. **Deployment state:** no service is in production; every service, Billing included, runs in dev only. "Deploy" items below are environment-promotion steps, not production fixes. Where several teams share an item, it is listed under each, with the lead team first.
+Source: `commercial-lld-billing-service.md` rev 0.22 (2026-11-23; base HLD v0.64), updated with the team responses, the Commercial TL decisions and the AI team reply (draft) of 2026-11-19 (`billing-open-items-team-response.md` and `billing-reply-ai-team.md`, not yet in this repository), §16.1 register, §16.2 discrepancies, platform/SRE dependencies, and the ENT-D3 / ENT-D6 product memos. Item IDs match the LLD. **Deployment state:** no service is in production; every service, Billing included, runs in dev only. "Deploy" items below are environment-promotion steps, not production fixes. Where several teams share an item, it is listed under each, with the lead team first.
 
 **Status key:** **Decided** = TL decision made; owning team to implement · **Conflict** = a team answered, but the answer contradicts the HLD or Billing's need · **Open** = needs an answer · **Proposed** = Billing has a proposal; needs sign-off · **External** = depends on another team's delivery · **Deferred** = later phase.
 
@@ -22,7 +22,7 @@ Source: `commercial-lld-billing-service.md` rev 0.21 (2026-11-23; base HLD v0.64
 | AI team | BL-OQ-19; PD-LLM-1 R-1, R-2, R-4 (none can close without another team) | Token add-ons (`FEATURE_TOKEN_ADDONS=false`) — waits on a cluster |
 | Platform / SRE | SRE-1, SRE-3, SRE-7, SRE-8, Commercial IaC, audit DB setup; **cluster for Gateway tests; Bedrock access in `ap-south-1`** | Deploy prerequisites; BL-OQ-19 test cluster |
 | Usage & Metering | BL-OQ-24 (`UsagePeriodClosed` contract; LLD not written) | — (reference-only records; known risk) |
-| Commercial HLD owner / TL | D-1, D-5, D-8, D-9 (HLD notes); BL-OQ-23 (c) confirmation | — (BL-OQ-3/4/20 decided 2026-11-19) |
+| Commercial HLD owner / TL | D-1, D-5, D-8, D-9 (HLD notes) | — (BL-OQ-3/4/20 decided 2026-11-19) |
 | Commercial Team (Billing) | BL-OQ-15 (co-owner) | — |
 
 ---
@@ -66,7 +66,7 @@ All Core-owned items closed on 2026-11-19.
 | ID | Decision | Entitlements action | Status |
 |---|---|---|---|
 | BL-OQ-4 | Billing is the only publisher of `TenantQuotaAddOnChanged` on `billing.events` | Withdraw `tenant_quota_add_on_changed`; keep consuming Billing's event on `billing-entitlements-q`, idempotent on `billing_ref` | **Decided** — to implement |
-| BL-OQ-20 | Billing owns the `purchase` and `refund` reasons; Entitlements owns correction and expiry | Apply `reason: refund` (negative `delta`, `purchase_ref`): remove at most the grant's unused tokens, never below zero. Publish corrections and expiry on Entitlements' own event (for example `TenantAddOnBalanceChanged` on `entitlement.events`), never as `TenantQuotaAddOnChanged` | **Decided** — to implement |
+| BL-OQ-20 | Billing owns the `purchase` and `refund` reasons; Entitlements owns correction and expiry | Apply `reason: refund` (negative `delta`, `purchase_ref`): remove at most the grant's unused tokens, never below zero. Record corrections and expiry through AL-5 only: no bus event, never `TenantQuotaAddOnChanged` (BL-OQ-23 c, 2026-11-23) | **Decided** — to implement |
 | BL-OQ-3 | Generic `addon_eligible` rejected; eligibility per resource | Replace `addon_eligible: bool` with per-resource eligibility (`llm_tokens`, `api_requests`, each with a reason) | **Decided** — to implement |
 | Access | Billing → Entitlements read-only access approved | Admit `cluster.local/ns/billing/sa/commercial-billing` on `GET /api/v1/internal/tenants/:id/entitlements` only (NetworkPolicy + Istio AuthorizationPolicy) | **Decided** — to implement |
 
@@ -76,7 +76,7 @@ All Core-owned items closed on 2026-11-19.
 |---|---|---|---|
 | BL-OQ-23 (a) / SRE-8 | `billing-audit-q` filter policy adds **Billing's** `TenantQuotaAddOnChanged` (TL decision). Not Entitlements' event | Purchases not audited from the bus | **Closed** — catch-all queue, no change (IAM reply) |
 | BL-OQ-23 (b) | Map `TenantQuotaAddOnChanged` with `reason: refund` to new entry type `billing.token_addon.refunded` (`security_3y`); `reason: purchase` stays `billing.token_addon.purchased` | Refund events stored as `billing.token_addon.purchased` (Audit's existing mapping ignores `reason`): mislabelled as a purchase, not lost; the payload (`reason`, negative `delta`) is kept in metadata | **Merged** — [iam-audit-log#24](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-audit-log/pull/24); live per environment on Audit Log deploy |
-| BL-OQ-23 (c) | Do not subscribe to any Entitlements add-on event: Entitlements' corrections and expiry already arrive through AL-5 (`billing.token_addon.granted` / `.adjusted` / `.revoked` / `.expired`) | — | Open — Audit adds no subscription; TL to confirm Entitlements publishes no add-on event (`entitlement-audit-q` is catch-all) |
+| BL-OQ-23 (c) | Do not subscribe to any Entitlements add-on event: Entitlements' corrections and expiry already arrive through AL-5 (`billing.token_addon.granted` / `.adjusted` / `.revoked` / `.expired`) | — | **Closed** (Commercial TL and Entitlements approved option 1, 2026-11-23; LLD rev 0.22): no add-on balance event on `entitlement-events`; AL-5 only |
 
 ## Finance
 
@@ -182,7 +182,7 @@ Limiting the evidence to AI-1 and AI-3, as the AI team proposed, would leave the
 |---|---|---|
 | D-1 | HLD §9.4 says `tenant_id` rides only the envelope; RP's consumed payload requires `data.tenant_id`. Billing sends both. HLD note requested | Open |
 | D-5 | HLD §3.3 lists `platform-gincommon` v1.6.0; Billing uses v2 (same RFC 9457 wire format). HLD note requested | Open |
-| D-8 | HLD §9.4 lists reserved correction reasons on `TenantQuotaAddOnChanged`. After the TL decision Billing's enum is `purchase` \| `refund`; correction reasons move to Entitlements' own event. HLD note requested | Open |
+| D-8 | HLD §9.4 lists reserved correction reasons on `TenantQuotaAddOnChanged`. After the TL decision Billing's enum is `purchase` \| `refund`; correction reasons move to Entitlements' own operator actions, audited through AL-5 with no bus event (BL-OQ-23 c). HLD note requested | Open |
 | D-9 | HLD CD-52 row numbers the gateway provider OP-G3 and the end-to-end test OP-G5; AuthZ Enrichment LLD §8.9.1 (source) uses OP-G2 and OP-G4. Billing LLD follows the AuthZ LLD from rev 0.11. HLD note requested | Open |
 
 ## Usage & Metering

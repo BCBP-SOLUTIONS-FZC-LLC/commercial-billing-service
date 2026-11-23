@@ -5,7 +5,7 @@
 | From | Commercial Team (Billing) |
 | To | Commercial Entitlements; Commercial TL (one decision, E-3) |
 | Date | 2026-11-23 |
-| Billing LLD | `commercial-lld-billing-service.md` rev 0.14 (base HLD v0.64) |
+| Billing LLD | `commercial-lld-billing-service.md` rev 0.22 (base HLD v0.64) |
 | Background | TL decisions of 2026-11-19 (LLD rev 0.8); corrections C-4 to C-7 in `billing-open-items-corrections.md`; IAM caveat on A-6 in `billing-iam-actions-reply.md` |
 | Deployment state | No service is in production; all run in dev only. "Done" means merged and promoted with the environment |
 | Status source | Status reflects the last Entitlements reply (2026-11-19). The Entitlements repository has no code yet, so nothing below could be checked against an implementation |
@@ -27,14 +27,14 @@
 |---|---|---|---|---|---|
 | E-1 | Withdraw Entitlements' `tenant_quota_add_on_changed`; consume Billing's `TenantQuotaAddOnChanged` (`reason: purchase`) | BL-OQ-4 | Code | Token add-on sales | **Decided**, to implement |
 | E-2 | Apply `TenantQuotaAddOnChanged {reason: "refund"}` | BL-OQ-20 | Code | Add-on refunds (B-O3) | **Decided**, to implement |
-| E-3 | Should Entitlements publish **any** add-on balance event on `entitlement-events`? | BL-OQ-23 (c) | **Decision** (TL + Entitlements) | Billing design sign-off (Section B) | **Open**: recommend "no" |
+| E-3 | Should Entitlements publish **any** add-on balance event on `entitlement-events`? | BL-OQ-23 (c) | **Decision** (TL + Entitlements) | Billing design sign-off (Section B) | **Closed** 2026-11-23: no (option 1) |
 | E-4 | Replace `addon_eligible: bool` with per-resource eligibility | BL-OQ-3 | Code (API) | Correct add-on eligibility | **Decided**, to implement |
 | E-5 | Give Billing read-only access to the effective entitlements route | BL-OQ-3 (access) | Config | Add-on purchase (fails closed `503` otherwise) | **Decided**, to implement |
 | E-6 | Joint OP-G4 operator test in each environment | BL-OQ-14 (A-3) | Test | Operator routes per environment | Waits on OP-G2 (platform edge) and OP-G3 (IAM) |
 | E-7 | Entitlements LLD text: reserved reasons move off `TenantQuotaAddOnChanged` | D-8 | Docs | — | Open |
 | E-8 | Staff role `commercial_trial_manager` | OP-G5 | Config | — | Only if Product asks (CD-51) |
 
-E-3 is the only item that blocks **design sign-off**. E-1, E-2, E-4 and E-5 are **go-live gates** for token add-ons, which already sit behind `FEATURE_TOKEN_ADDONS=false` (BL-OQ-19).
+E-3 was the only item that blocked **design sign-off**; it was closed on 2026-11-23 (option 1). Nothing left here blocks design sign-off. E-1, E-2, E-4 and E-5 are **go-live gates** for token add-ons, which already sit behind `FEATURE_TOKEN_ADDONS=false` (BL-OQ-19).
 
 ---
 
@@ -83,7 +83,7 @@ Billing never computes the remaining balance (`BIL-ADD-4`). Refunds of add-on in
 
 **Done when:** a refund event reduces that grant's unused balance and replays are no-ops.
 
-## E-3 — Does Entitlements publish an add-on balance event? (BL-OQ-23 c) — decision needed
+## E-3 — Does Entitlements publish an add-on balance event? (BL-OQ-23 c) — closed
 
 **Conflict to resolve.** Correction C-5 (19 Nov) suggested that Entitlements *may* publish its own `TenantAddOnBalanceChanged` on `entitlement.events`. IAM's reply (A-6) then flagged that Audit's `entitlement-audit-q` is catch-all (AL-EVT-2). Any add-on event there would be stored as `entitlement.unknown`, raise an alarm (AL-EVT-4) and duplicate the AL-5 entries (`billing.token_addon.granted` / `.adjusted` / `.revoked` / `.expired`) that Entitlements already writes.
 
@@ -93,6 +93,8 @@ Billing never computes the remaining balance (`BIL-ADD-4`). Refunds of add-on in
 | 2. Publish one | Audit needs a new LLD decision: an explicit skip, or a new entry type. Needs a named consumer to justify it |
 
 **Asked of the TL and Entitlements:** confirm option 1, or name the consumer that needs option 2 and raise it with Audit Log.
+
+**Decision: ✅ Option 1 approved by the Commercial TL and Entitlements, 2026-11-23.** No `TenantAddOnBalanceChanged` (or equivalent) on `entitlement-events`; AL-5 is the only audit path. No Audit Log change and no new consumer. Billing LLD §7.3.6 and §8.11 (rev 0.22) now say: *"Entitlements does not publish add-on balance change events on `entitlement-events`. Audit visibility for goodwill grants, corrections, expiries and similar balance changes is provided exclusively through AL-5 audit submissions."* **For the Entitlements LLD:** please state the same, and keep writing the AL-5 entries (`billing.token_addon.granted` / `.adjusted` / `.revoked` / `.expired`) for those actions.
 
 ## E-4 — Per-resource eligibility instead of `addon_eligible` (BL-OQ-3, C-6)
 
@@ -152,7 +154,7 @@ Only needed if Product asks for staff, other than platform operators, to assign 
 
 - [ ] E-1: withdraw `tenant_quota_add_on_changed`; consume Billing's purchase event, idempotent on `billing_ref`; expiry from `purchased_at`
 - [ ] E-2: consume `reason: refund` (unused tokens of `purchase_ref` only, never below zero)
-- [ ] E-3: TL + Entitlements confirm option 1 (no add-on event on `entitlement-events`)
+- [x] E-3: TL + Entitlements confirmed option 1 (no add-on event on `entitlement-events`), 2026-11-23
 - [ ] E-4: `addon_eligibility` per resource on the effective set
 - [ ] E-5: admit `commercial-billing` read-only on the entitlements GET route, in each environment
 - [ ] E-6: joint OP-G4 run in each environment (after OP-G2 / OP-G3)

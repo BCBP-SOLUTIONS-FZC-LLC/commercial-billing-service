@@ -20,7 +20,7 @@
 | A-3 | Run OP-G4 jointly with Commercial in each environment as it is promoted | AuthZ Enrichment + Commercial | BL-OQ-14 | Test | Operator routes per environment | Not started (needs A-2) |
 | A-4 | Confirm `billing-audit-q` receives Billing's `TenantQuotaAddOnChanged` | Audit Log / IAM SRE | BL-OQ-23 (a), SRE-8 | Config confirm | Add-on purchase audit | **Done** — catch-all, no change |
 | A-5 | Add entry type `billing.token_addon.refunded`, mapping by `reason` | Audit Log | BL-OQ-23 (b) | Code (taxonomy) | Add-on refund audit | **Done** — [iam-audit-log#24](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-audit-log/pull/24) merged (`0e12f2c`); live per environment on Audit Log deploy |
-| A-6 | Confirm no subscription to Entitlements add-on events | Audit Log | BL-OQ-23 (c) | Confirm | — | Confirmed, caveat: TL to confirm Entitlements publishes no add-on event |
+| A-6 | Confirm no subscription to Entitlements add-on events | Audit Log | BL-OQ-23 (c) | Confirm | — | **Done** — caveat resolved: TL and Entitlements confirmed no add-on event (2026-11-23) |
 | A-7 | Deploy Core `000004` and `parked-events-replay` before direct signup, in each environment | Core + Platform/SRE | SRE-3 | Deploy ordering | Direct paid signup per environment | **Done** — confirmed in Core's repo and chart |
 | A-8 | Confirm Billing's admission on the five IAM routes | Core, Realm Provisioner | CD-19 | Confirm | Conversion, downgrade, seats, reversal | **Done** — admitted in dev, staging, prod |
 | A-9 | **New.** Cover Billing's new operator route B-O16 in OP-G4, and add AL-5 entry type `billing.invoice.suspension_disposition` | AuthZ Enrichment + Commercial (a); Audit Log (b) | BL-OQ-25 (from BL-OQ-1 / CD-24) | Test (a); Code, taxonomy (b) | B-O16 through the gateway; its audit entries | **Requested 2026-11-23** |
@@ -100,6 +100,8 @@ Schema changes in Billing's `TenantQuotaAddOnChanged.json`: `delta` is a non-zer
 ## A-6 — No subscription to Entitlements add-on events (BL-OQ-23 c)
 
 Entitlements' corrections and expiry already reach Audit through AL-5 (`billing.token_addon.granted`, `.adjusted`, `.revoked`, `.expired`). Please confirm Audit adds no bus subscription for the same changes, so nothing is recorded twice.
+
+**Caveat resolved (2026-11-23).** The Commercial TL and Entitlements confirmed that Entitlements publishes no add-on balance event on `entitlement-events` (Billing BL-OQ-23 c, option 1). Nothing reaches `entitlement-audit-q` as `entitlement.unknown` from this; no Audit Log change.
 
 ## A-7 — Core migration ordering per environment (SRE-3)
 
