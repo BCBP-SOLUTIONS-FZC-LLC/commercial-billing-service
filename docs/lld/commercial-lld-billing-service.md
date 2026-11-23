@@ -6,8 +6,8 @@
 |---|---|
 | Document type | Low-Level Design (LLD) |
 | Service | `commercial-billing` (Billing) |
-| Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing` |
-| Status | **Submitted for sign-off** (rev 0.30) — design stage; no code yet. **All nine partner-team design decisions approved (S-1 to S-9, 2026-11-23)**, and the Commercial Team's additions to S-2, S-3, S-5 and S-6 acknowledged by Finance, Product and Legal; awaiting final sign-off (HLD v0.65 merge; PCI re-confirmation of §4 and §5.4.4). Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
+| Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service` (the repository name, as in the IAM services). Service name, ServiceAccount, pod label, envelope `source` and metric prefix stay `commercial-billing` (CD-17, CD-19) |
+| Status | **Submitted for sign-off** (rev 0.31) — design stage; no code yet. **All nine partner-team design decisions approved (S-1 to S-9, 2026-11-23)**, and the Commercial Team's additions to S-2, S-3, S-5 and S-6 acknowledged by Finance, Product and Legal; awaiting final sign-off (HLD v0.65 merge; PCI re-confirmation of §4 and §5.4.4). Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
 | Base HLD | Commercial Domain HLD **v0.65** (`hld-commercial-domain-v0.65.md`), the only HLD for the domain. Rebased from v0.51 in rev 0.14 (to v0.64) and to v0.65 in rev 0.23: v0.52 to v0.65 checked for Billing impact (§1.1, "HLD v0.52 to v0.65"); v0.64 (`platform-audit`) changes Billing, already applied in rev 0.5; v0.65 is text-only and adopts this LLD's D-1, D-5, D-8 and D-9. Parent: IAM HLD **v1.59** |
 | Supersedes | `hld-billing-service.md` v0.2 (draft Billing HLD, dropped in Commercial HLD v0.28). Its open items B-1 to B-13 are dispositioned in §16.3 and are never a source of requirements |
 | Sibling LLDs | Commercial: `commercial-lld-entitlements-service.md`, `commercial-lld-usage-metering-service.md` (to be written; until it exists the consumed `UsagePeriodClosed` contract is unverified, BL-OQ-24). IAM (contracts verified against these): Core `iam-lld-org-membership-service.md` rev 2.49 (I-11, I-18, `billing-orgm-q`, EVT-14/15/18, SEAT-2), Realm Provisioner `iam-lld-realm-provisioner-service.md` rev 1.46+ (RP-3, RP-4, RP-11, `billing-realm-q`, `iam.tenant.events` payloads), Audit Log `iam-lld-audit-log-service.md` rev 0.37 (AL-5, entry taxonomy, Billing admission since rev 0.34, `billing.token_addon.refunded` since rev 0.37), `platform-audit` `docs/lld/platform-lld-audit.md` rev 1.5 (§4, §11, §18.6, §19.2), AuthZ Enrichment `iam-lld-authz-enrichment.md` v1.50 (operator path, CD-52; §8.9.1 OP-G4 lists Billing B-O1 to B-O15). Edge: `signup-bff-lld.md` (Signup BFF, `BillingClient.AuthorizeAndCharge`) |
@@ -19,6 +19,7 @@
 
 | Rev | Date | Change |
 |---|---|---|
+| 0.31 | 2026-11-23 | **Implementation baseline corrected (Phase 0).** Go module path is `commercial-billing-service`, the repository name (service identity unchanged). §3.1 pins the current platform releases: Go 1.26.11, `platform-gincommon/v2` v2.7.0 (first release with the `commercial` observability domain; v2.6.1 panicked on it), `platform-events/v2` v2.3.0, `platform-pgcommon/v2` v2.0.2, `platform-audit` v0.1.2. The note that IAM "still runs v1.6.0" is removed: IAM services run `gincommon/v2`. §3 layout root renamed. No design change. |
 | 0.30 | 2026-11-23 | **BL-OQ-9 closed.** Billing's operator `HTTPRoute` now lists the complete operator surface, B-O1 to B-O17, as specified in §13.1 (Commercial Team, 2026-11-23). Gateway reachability is proven by the OP-G4 joint run once OP-G2 and OP-G3 are live (BL-OQ-14). IAM's part was already merged (#43). No design change. |
 | 0.29 | 2026-11-23 | **Partner acknowledgements received.** Finance, Product and Legal acknowledged the Commercial Team's additions and interpretations without correction: S-2 (B-O16; retries stopped on already-open invoices while paused) by Finance; S-3 ("new contractual commitment" = B-P2, B-P4, B-P5, B-P14) by Finance; S-5 (`pii-minimisation` for contact data only) by Finance and Legal; S-6 (`renewal-repricing`; no minimum notice) by Product and Finance. §5.2, §8.10, §8.16 and §15.3 now stand as acknowledged. No design change. |
 | 0.28 | 2026-11-23 | **Product decision memos approved.** Product approved PD-LLM-1 (model tiers) and Entitlements approved ENT-D6 (trial profiles) on 2026-11-23. Billing continues to send plan selections only; no design or implementation change. The approvals validate the assumptions behind pricing and entitlement configuration. §1.1 and §1.2 now show the memos as approved instead of proposed. |
@@ -263,7 +264,7 @@ Billing **never writes another service's database**, never calls Keycloak, and m
 The service follows the platform hexagonal (ports-and-adapters) layout. Dependencies point inward: `internal/domain` imports nothing outside the standard library; `internal/app` (use cases and ports) imports `domain`; adapters implement the ports. The binaries under `cmd/` are the only composition roots.
 
 ```
-commercial-billing/
+commercial-billing-service/
 ├── cmd/
 │   ├── server/
 │   │   ├── main.go                         # composition root: pools, gincommon v2 middlewares, router, workers, shutdown
@@ -353,18 +354,19 @@ commercial-billing/
 
 ```
 require (
-    github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2  v2.x   // RFC 9457 problem (errorCode, validationErrors, traceId), middlewares, metrics
-    github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events/v2     v2.1.0 // outbox, SQS consumer, inbox, Glue codecs
-    github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2   v2.0.x // pools, GUC, TxRunner, migrate.Runner, SQLSTATE helpers
+    github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2  v2.7.0 // RFC 9457 problem (errorCode, validationErrors, traceId), middlewares, metrics; first release with domain "commercial"
+    github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events/v2     v2.3.0 // outbox, SQS consumer, inbox, Glue codecs
+    github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2   v2.0.2 // pools, GUC, TxRunner, migrate.Runner, SQLSTATE helpers
     github.com/BCBP-SOLUTIONS-FZC-LLC/platform-audit         v0.1.2 // AL-5 direct-write, outbox mode (pkg/auditoutbox)
     github.com/stripe/stripe-go/v83                          v83.x  // pinned at first build; one major per release
 )
 ```
 
-- `platform-gincommon/v2` is used from the first release because Billing is new and the domain moves to RFC 9457 under CD-31; IAM still runs v1.6.0 with RFC 9457 bodies through `AbortWithProblem`, so the wire format is the same.
+- `platform-gincommon/v2` is used from the first release, as in the IAM services; errors are RFC 9457 problems (CD-31). v2.7.0 is the minimum: it is the first release whose observability registry accepts `domain="commercial"` (earlier releases panic at startup on it).
+- Versions track the latest platform releases at build time (the IAM services' practice); the values above are those of Phase 0 (2026-11-23).
 - `platform-audit` v0.1.2 is used **only** for AL-5 direct-write (HLD v0.64 §11.6). Billing builds no AL-5 adapter of its own; the in-repo `auditclient` planned in rev 0.4 is dropped. `pkg/auditoutbox` (outbox mode) is the only delivery mode used; `auditbuffer` is not.
 - `platform-schemagov` is a Python CLI used in CI (`schema-gov validate | extract --check | diff | register`), not a Go dependency, exactly as in IAM.
-- Go 1.26, the newest patch IAM pins at repo creation (HLD §3.3). Billing never imports `iam-keycloakclient` (HLD §15.2).
+- Go 1.26.11, the patch the IAM services pin (HLD §3.3). Billing never imports `iam-keycloakclient` (HLD §15.2).
 
 ### 3.2 Dependency rules (enforced in CI)
 
