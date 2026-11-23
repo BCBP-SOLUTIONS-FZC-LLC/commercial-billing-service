@@ -200,6 +200,19 @@ R = does the work · A = accountable for sign-off · C = consulted · I = inform
 | W-11 `billing-entitlements-q` | I | C | R, A | | |
 | W-12 deploy refund entry type | | I | | R, A | |
 
+## Related IAM items
+
+IAM has one item tied to this work, now resolved, and two follow-ups from the sign-off that are **not** part of it. They're listed here so readers know where they're tracked.
+
+| IAM item | Register | Relation to this document | Status | Tracked in |
+|---|---|---|---|---|
+| **A-6:** Audit adds no bus subscription to Entitlements add-on events | BL-OQ-23 (c) | **Related.** It underpins W-6: corrections and expiry reach Audit only through AL-5. IAM confirmed it on condition that Entitlements publishes no add-on event | **Done.** The condition was met when the TL and Entitlements approved option 1 (sign-off S-8, 2026-11-23). No Audit Log change | `billing-iam-actions.md` A-6 |
+| **A-5:** Audit entry type `billing.token_addon.refunded` | BL-OQ-23 (b) | **Related.** It is W-12 here | Merged ([iam-audit-log#24](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-audit-log/pull/24)); deploy per environment | `billing-iam-actions.md` A-5 |
+| **A-9:** B-O16 in the OP-G4 test; Audit type `billing.invoice.suspension_disposition` | BL-OQ-25 | **Not related.** From S-2: the operator's decision on invoices held during a suspension | Requested | `billing-iam-actions.md` A-9; `billing-register-open-items.md` |
+| **A-10:** role `pci_owner_reviewer`; B-O17 in the OP-G4 test; Audit type `billing.provider.certification_reviewed` | BL-OQ-26 | **Not related.** From S-7: payment-provider certification approval | Requested | `billing-iam-actions.md` A-10; `billing-register-open-items.md` |
+
+The operator path (BL-OQ-14: OP-G1 to OP-G4) also affects Entitlements' own operator routes, including the add-on correction route in W-6. That joint test is Entitlements item E-6 in `billing-open-items-entitlements.md`, not a Billing build item.
+
 ## Order of work
 
 1. **Entitlements LLD (W-7)** written with these contracts, so the code follows the decision rather than the old reply.
