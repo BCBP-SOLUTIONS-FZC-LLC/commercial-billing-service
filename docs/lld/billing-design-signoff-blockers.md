@@ -2,8 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Document | `commercial-lld-billing-service.md` rev 0.22 (base HLD v0.64) |
-| Progress | **8 of 9 closed** — S-1, S-2 and S-3 approved by Finance; S-4 by Finance and Security; S-5 by Finance and Legal; S-6 by Product and Finance; S-7 by the PCI owner group; S-8 by the Commercial TL and Entitlements (all 2026-11-23). Only S-9 remains |
+| Document | `commercial-lld-billing-service.md` rev 0.23 (base HLD v0.65) |
+| Progress | **9 of 9 closed — all design sign-off blockers approved (2026-11-23).** S-1, S-2, S-3 by Finance; S-4 by Finance and Security; S-5 by Finance and Legal; S-6 by Product and Finance; S-7 by the PCI owner group; S-8 by the Commercial TL and Entitlements; S-9 by the Commercial HLD owner (HLD v0.65). Next: final sign-off by the Commercial Team and the PCI owner group |
 | From | Commercial Team (Billing) |
 | Date | 2026-11-23 |
 | Purpose | Lists the decisions other teams must make before the Billing LLD can be **signed off as a design** |
@@ -33,7 +33,7 @@ The Billing LLD tracks three kinds of open item. Only the first kind is in this 
 | S-6 | Product + Finance | BL-OQ-16 | When a price changes, when do existing subscribers pay it? | ✅ **Approved 2026-11-23 by Product and Finance**: next renewal, no grandfathering (see S-6). Applied in LLD rev 0.20 | — |
 | S-7 | PCI owner group | BL-OQ-21 + review | Who may mark a payment provider as certified? Plus PCI review of §4, §5.4.4, §10 | ✅ **Approved 2026-11-23**, review complete with no blocking findings; reviewer now approves through new route B-O17 (see S-7). Applied in LLD rev 0.21 | — |
 | S-8 | Commercial TL + Entitlements | BL-OQ-23 (c) | Does Entitlements publish any add-on balance event? | ✅ **Approved 2026-11-23 by the TL and Entitlements**: option 1, no event; AL-5 only (see S-8). Recorded in LLD rev 0.22 | — |
-| S-9 | Commercial HLD owner | D-1, D-5, D-8, D-9 | Will the HLD be corrected where the LLD knowingly differs? | LLD follows the source system or TL decision; HLD notes requested | Until fixed, the signed LLD contradicts the signed HLD |
+| S-9 | Commercial HLD owner | D-1, D-5, D-8, D-9 | Will the HLD be corrected where the LLD knowingly differs? | ✅ **Approved 2026-11-23**: all four notes accepted and applied in HLD v0.65 §17.8 (see S-9). LLD rev 0.23 | — |
 
 ---
 
@@ -312,6 +312,17 @@ New invariant `BIL-PROV-4`. The PCI owner group may want to glance at B-O17 (LLD
 
 **Decision needed:** accept the four notes and schedule them into the next HLD revision. The notes can follow sign-off, but the acceptance cannot.
 
+**Decision: ✅ All four notes accepted by the Commercial HLD owner, 2026-11-23, and applied in Commercial HLD v0.65** (`commercial-hld-docs/hld-commercial-domain-v0.65.md`, new §17.8). The HLD owner's assessment: these are documentation reconciliation items, not open design choices; none adds functionality, security exposure, financial impact or an API break.
+
+| # | Accepted HLD note (now in HLD v0.65) | Where |
+|---|---|---|
+| D-1 | Events continue to carry `tenant_id` in the envelope. Where required by downstream consumers, including Realm Provisioner, `data.tenant_id` may also be present within the payload | HLD §9.4 |
+| D-5 | References to `platform-gincommon` v1.6.0 are superseded by v2. The external RFC 9457 problem-details contract is unchanged | HLD §3.3, §15 |
+| D-8 | `TenantQuotaAddOnChanged` is limited to commercial purchase and refund activity. Entitlement balance corrections are owned and audited by Entitlements | HLD §9.4 |
+| D-9 | References to OP-G3 and OP-G5 are corrected to OP-G2 and OP-G4, consistent with the AuthZ Enrichment LLD | HLD §17.2 (CD-52 row) |
+
+The HLD owner scheduled the notes for the next HLD revision; at the Commercial Team's request they are already written into v0.65, so the LLD is not signed against conflicting HLD text. The Billing LLD's base HLD is now v0.65. No LLD design change.
+
 ---
 
 ## Suggested order
@@ -336,4 +347,4 @@ New invariant `BIL-PROV-4`. The PCI owner group may want to glance at B-O17 (LLD
 | S-7 | PCI owner group | PCI owner group | ✅ Approved; PCI review of §4, §5.4.4, §10 complete, no blocking findings. B-O17 and `trg_pc_guard` added for its recommendations (LLD rev 0.21) | 2026-11-23 |
 | S-8 | Commercial TL | Commercial TL | ✅ Option 1 approved: no add-on balance event; AL-5 only (LLD rev 0.22) | 2026-11-23 |
 | S-8 | Entitlements | Entitlements | ✅ Option 1 approved (LLD rev 0.22) | 2026-11-23 |
-| S-9 | Commercial HLD owner | | | |
+| S-9 | Commercial HLD owner | Commercial HLD owner | ✅ Accepted D-1, D-5, D-8, D-9; applied in HLD v0.65 §17.8 (LLD rev 0.23) | 2026-11-23 |

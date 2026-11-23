@@ -1,6 +1,6 @@
 # Billing Service — Open Items by Team
 
-Source: `commercial-lld-billing-service.md` rev 0.22 (2026-11-23; base HLD v0.64), updated with the team responses, the Commercial TL decisions and the AI team reply (draft) of 2026-11-19 (`billing-open-items-team-response.md` and `billing-reply-ai-team.md`, not yet in this repository), §16.1 register, §16.2 discrepancies, platform/SRE dependencies, and the ENT-D3 / ENT-D6 product memos. Item IDs match the LLD. **Deployment state:** no service is in production; every service, Billing included, runs in dev only. "Deploy" items below are environment-promotion steps, not production fixes. Where several teams share an item, it is listed under each, with the lead team first.
+Source: `commercial-lld-billing-service.md` rev 0.23 (2026-11-23; base HLD v0.65), updated with the team responses, the Commercial TL decisions and the AI team reply (draft) of 2026-11-19 (`billing-open-items-team-response.md` and `billing-reply-ai-team.md`, not yet in this repository), §16.1 register, §16.2 discrepancies, platform/SRE dependencies, and the ENT-D3 / ENT-D6 product memos. Item IDs match the LLD. **Deployment state:** no service is in production; every service, Billing included, runs in dev only. "Deploy" items below are environment-promotion steps, not production fixes. Where several teams share an item, it is listed under each, with the lead team first.
 
 **Status key:** **Decided** = TL decision made; owning team to implement · **Conflict** = a team answered, but the answer contradicts the HLD or Billing's need · **Open** = needs an answer · **Proposed** = Billing has a proposal; needs sign-off · **External** = depends on another team's delivery · **Deferred** = later phase.
 
@@ -22,7 +22,7 @@ Source: `commercial-lld-billing-service.md` rev 0.22 (2026-11-23; base HLD v0.64
 | AI team | BL-OQ-19; PD-LLM-1 R-1, R-2, R-4 (none can close without another team) | Token add-ons (`FEATURE_TOKEN_ADDONS=false`) — waits on a cluster |
 | Platform / SRE | SRE-1, SRE-3, SRE-7, SRE-8, Commercial IaC, audit DB setup; **cluster for Gateway tests; Bedrock access in `ap-south-1`** | Deploy prerequisites; BL-OQ-19 test cluster |
 | Usage & Metering | BL-OQ-24 (`UsagePeriodClosed` contract; LLD not written) | — (reference-only records; known risk) |
-| Commercial HLD owner / TL | D-1, D-5, D-8, D-9 (HLD notes) | — (BL-OQ-3/4/20 decided 2026-11-19) |
+| Commercial HLD owner / TL | — (D-1, D-5, D-8, D-9 closed in HLD v0.65) | — (BL-OQ-3/4/20 decided 2026-11-19) |
 | Commercial Team (Billing) | BL-OQ-15 (co-owner) | — |
 
 ---
@@ -39,7 +39,7 @@ All Core-owned items closed on 2026-11-19.
 
 **How the operator path works (IAM HLD v1.59 §4.2, §5.4, §10.9).** The ingress Envoy Gateway, owned by **Platform edge**, is the only way in. It authenticates with `jwt_authn`, then calls AuthZ Enrichment (`ext_authz`). A token whose `iss` equals `OPERATOR_REALM_ISSUER` (the platform realm) skips tenant resolution and is allowed only on `/api/v1/operator/*` with the `platform_operator` realm role. On Allow, AuthZ injects `x-tenant-roles: platform_operator`, `x-user-id` = the operator `sub`, and `x-tenant-id` = the tenant in `/api/v1/operator/tenants/{id}/…` or the nil UUID; every decision is logged as `operator_access`. Admission is by prefix: there is no per-route list in IAM. Each service exposes its paths with its own `HTTPRoute`. **Today the path is off** (`OPERATOR_REALM_ISSUER` empty), so no operator route, IAM's or Commercial's, works through the gateway.
 
-**Go-live items (IAM HLD §17.2, AuthZ Enrichment LLD §8.9.1, AE-46).** Numbering as in IAM's documents; the Commercial HLD numbers them differently (D-9).
+**Go-live items (IAM HLD §17.2, AuthZ Enrichment LLD §8.9.1, AE-46).** Numbering as in IAM's documents; the Commercial HLD uses the same numbering from v0.65 (D-9, closed).
 
 | ID | Item | Owner | Status |
 |---|---|---|---|
@@ -180,10 +180,10 @@ Limiting the evidence to AI-1 and AI-3, as the AI team proposed, would leave the
 
 | ID | Item | Status |
 |---|---|---|
-| D-1 | HLD §9.4 says `tenant_id` rides only the envelope; RP's consumed payload requires `data.tenant_id`. Billing sends both. HLD note requested | Open |
-| D-5 | HLD §3.3 lists `platform-gincommon` v1.6.0; Billing uses v2 (same RFC 9457 wire format). HLD note requested | Open |
-| D-8 | HLD §9.4 lists reserved correction reasons on `TenantQuotaAddOnChanged`. After the TL decision Billing's enum is `purchase` \| `refund`; correction reasons move to Entitlements' own operator actions, audited through AL-5 with no bus event (BL-OQ-23 c). HLD note requested | Open |
-| D-9 | HLD CD-52 row numbers the gateway provider OP-G3 and the end-to-end test OP-G5; AuthZ Enrichment LLD §8.9.1 (source) uses OP-G2 and OP-G4. Billing LLD follows the AuthZ LLD from rev 0.11. HLD note requested | Open |
+| D-1 | HLD §9.4 says `tenant_id` rides only the envelope; RP's consumed payload requires `data.tenant_id`. Billing sends both. HLD note requested | **Closed** (accepted 2026-11-23; corrected in HLD v0.65 §17.8) |
+| D-5 | HLD §3.3 lists `platform-gincommon` v1.6.0; Billing uses v2 (same RFC 9457 wire format). HLD note requested | **Closed** (accepted 2026-11-23; corrected in HLD v0.65 §17.8) |
+| D-8 | HLD §9.4 lists reserved correction reasons on `TenantQuotaAddOnChanged`. After the TL decision Billing's enum is `purchase` \| `refund`; correction reasons move to Entitlements' own operator actions, audited through AL-5 with no bus event (BL-OQ-23 c). HLD note requested | **Closed** (accepted 2026-11-23; corrected in HLD v0.65 §17.8) |
+| D-9 | HLD CD-52 row numbers the gateway provider OP-G3 and the end-to-end test OP-G5; AuthZ Enrichment LLD §8.9.1 (source) uses OP-G2 and OP-G4. Billing LLD follows the AuthZ LLD from rev 0.11. HLD note requested | **Closed** (accepted 2026-11-23; corrected in HLD v0.65 §17.8) |
 
 ## Usage & Metering
 
