@@ -7,10 +7,10 @@
 | Document type | Low-Level Design (LLD) |
 | Service | `commercial-billing` (Billing) |
 | Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing` |
-| Status | Draft for review — design stage; no code yet. Approval authority: Commercial Team (CD-4); PCI owner group reviews §4, §5.4.4, §10 |
-| Base HLD | Commercial Domain HLD **v0.51** (`hld-commercial-domain-v0.51.md`), the only HLD for the domain. Parent: IAM HLD **v1.59** |
+| Status | **Submitted for sign-off** (rev 0.14) — design stage; no code yet. Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
+| Base HLD | Commercial Domain HLD **v0.64** (`hld-commercial-domain-v0.64.md`), the only HLD for the domain. Rebased from v0.51 in rev 0.14: v0.52 to v0.64 checked for Billing impact (§1.1, "HLD v0.52 to v0.64"); only v0.64 (`platform-audit`) changes Billing, already applied in rev 0.5. Parent: IAM HLD **v1.59** |
 | Supersedes | `hld-billing-service.md` v0.2 (draft Billing HLD, dropped in Commercial HLD v0.28). Its open items B-1 to B-13 are dispositioned in §16.3 and are never a source of requirements |
-| Sibling LLDs | Commercial: `commercial-lld-entitlements-service.md`, `commercial-lld-usage-metering-service.md` (to be written). IAM (contracts verified against these): Core `iam-lld-org-membership-service.md` rev 2.49 (I-11, I-18, `billing-orgm-q`, EVT-14/15/18, SEAT-2), Realm Provisioner `iam-lld-realm-provisioner-service.md` rev 1.46+ (RP-3, RP-4, RP-11, `billing-realm-q`, `iam.tenant.events` payloads), Audit Log `iam-lld-audit-log-service.md` rev 0.33 (AL-5, entry taxonomy), AuthZ Enrichment rev 1.44 (operator path, CD-52). Edge: `signup-bff-lld.md` (Signup BFF, `BillingClient.AuthorizeAndCharge`) |
+| Sibling LLDs | Commercial: `commercial-lld-entitlements-service.md`, `commercial-lld-usage-metering-service.md` (to be written; until it exists the consumed `UsagePeriodClosed` contract is unverified, BL-OQ-24). IAM (contracts verified against these): Core `iam-lld-org-membership-service.md` rev 2.49 (I-11, I-18, `billing-orgm-q`, EVT-14/15/18, SEAT-2), Realm Provisioner `iam-lld-realm-provisioner-service.md` rev 1.46+ (RP-3, RP-4, RP-11, `billing-realm-q`, `iam.tenant.events` payloads), Audit Log `iam-lld-audit-log-service.md` rev 0.37 (AL-5, entry taxonomy, Billing admission since rev 0.34, `billing.token_addon.refunded` since rev 0.37), `platform-audit` `docs/lld/platform-lld-audit.md` rev 1.5 (§4, §11, §18.6, §19.2), AuthZ Enrichment `iam-lld-authz-enrichment.md` v1.50 (operator path, CD-52; §8.9.1 OP-G4 lists Billing B-O1 to B-O15). Edge: `signup-bff-lld.md` (Signup BFF, `BillingClient.AuthorizeAndCharge`) |
 | Repository | Interim home `BCBP-SOLUTIONS-FZC-LLC/commercial-hld-docs` (`commercial-lld-billing-service.md`); moves to `commercial-billing/docs/lld/` when the service repo exists (CD-3a) |
 | Owner | Commercial Team. Production changes to Billing need a second reviewer from the PCI owner group (HLD §15.4) |
 | Deployment stage | Not built; nothing deployed to any environment. Phase 1 (MVP) scope per HLD §16 |
@@ -19,6 +19,17 @@
 
 | Rev | Date | Change |
 |---|---|---|
+| 0.14 | 2026-11-23 | **Sign-off housekeeping.** Status set to "Submitted for sign-off" with named approvers. Base HLD rebased v0.51 → **v0.64**; v0.52 to v0.64 checked, none changes Billing beyond v0.64's `platform-audit` (already in rev 0.5) (§1.1 impact table, §1.2). Sibling revisions updated: AuthZ Enrichment v1.50 (OP-G4 covers B-O1–B-O15), Audit Log rev 0.37 (`billing.token_addon.refunded`). §16.4 corrected to B-O6–B-O15; Appendix A reserved-reasons row aligned with D-8. New BL-OQ-24: `UsagePeriodClosed` contract unverified until the Usage & Metering LLD exists. §1.2 lists the 19 Nov action and reply documents; two cited source files are not yet in the repository. No design change. |
+| 0.13 | 2026-11-19 | **IAM PRs merged.** [iam-authz-enrichment#43](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-authz-enrichment/pull/43) (OP-G4 AuthZ tests for B-O1–B-O15), [iam-audit-log#24](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-audit-log/pull/24) (`billing.token_addon.refunded`), [iam-realm-provisioner#60](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-realm-provisioner/pull/60) (OP-G1 platform realm `bcbp-platform`). BL-OQ-9: IAM part done, Billing's `HTTPRoute` remains. BL-OQ-23 (b) merged. BL-OQ-14: OP-G1 merged; OP-G2 (platform edge) is the remaining external blocker. |
+| 0.12 | 2026-11-19 | **IAM reply to the action list applied** (`billing-iam-actions-reply.md`). BL-OQ-9: IAM part done, [iam-authz-enrichment#43](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-authz-enrichment/pull/43) in review. BL-OQ-23 (a) and SRE-8 closed (Audit queues are catch-all); (b) [iam-audit-log#24](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-audit-log/pull/24) in review; (c) open, needs TL confirmation that Entitlements publishes no add-on event. CD-19 admission on I-11, I-18, RP-3, RP-4, RP-11 confirmed in dev, staging and prod charts. SRE-3 confirmed in Core's repo. BL-OQ-14 unchanged; OP-G6 date not set. |
+| 0.11 | 2026-11-19 | **BL-OQ-9 reframed; OP-G numbering corrected.** Envoy Gateway is the only ingress; there is no IAM gateway route list. The platform-realm `jwt_authn` provider and AuthZ Enrichment admit the whole `/api/v1/operator/` prefix. So B-O6 to B-O15 are exposed by Billing's own operator `HTTPRoute` (§13.1), and IAM's part is extending the end-to-end operator test OP-G4 to them. Today's `403` is the operator path being off (OP-G1 to OP-G3), not a missing route. OP-G references renumbered to the AuthZ Enrichment LLD §8.9.1 (OP-G2 gateway provider, OP-G3 issuer, OP-G4 end-to-end test); D-9 records the HLD's different numbering. |
+| 0.10 | 2026-11-19 | **BL-OQ-9 approved.** IAM adds operator routes B-O6 to B-O13 (and, as requested, B-O14 and B-O15) to the operator gateway route list and OP-G5; closes on IAM confirmation and test update. All IAM actions listed in `billing-iam-actions.md`. SRE-3 reworded as a per-environment go-live ordering rule (every service is dev-only). |
+| 0.9 | 2026-11-19 | **AI team reply (draft, not signed off) applied.** BL-OQ-19 not proven: per-tenant limit reload and fail-open shown only outside a cluster; no Gateway v1.2.0 run. Gate stays closed (`FEATURE_TOKEN_ADDONS=false`). Go-live evidence confirmed by Billing: AI-1, AI-3 and AI-5 on the pinned Gateway v1.2.0 image on a named cluster (AI-5 required: it is the only test that proves a sold add-on raises the allowance). Recorded (§8.7): the Gateway's monthly allowance window is not the billing period, and Gateway fail-open (CD-57a) leaves outage tokens unmetered at the edge; neither changes Billing. PD-LLM-1 R-1, R-2, R-4 are memo items, not Billing's (open-items file). |
+| 0.8 | 2026-11-19 | **Commercial TL decisions on the add-on items** (principle: Billing owns commercial transactions, Entitlements owns quota state; an event originates in the service that owns the business action). (1) **BL-OQ-4:** Billing is the only publisher of `TenantQuotaAddOnChanged` on `billing.events` (HLD v0.64 unchanged). (2) **BL-OQ-20:** Billing owns the `purchase` and **`refund`** reasons; Entitlements owns correction and expiry (its own event, not this one). New: a succeeded refund of an add-on invoice emits `TenantQuotaAddOnChanged {reason: refund, delta < 0}`; Entitlements removes the unused tokens (§4.6 `BIL-ADD-4`, §7.3.6, §8.11, B-O3, `refunds.addon_event_id`). Reserved reasons removed from Billing's schema; HLD note D-8. (3) **BL-OQ-3:** generic `addon_eligible` rejected; Entitlements to expose per-resource eligibility; Billing reads `llm_tokens` eligibility. (4) Billing → Entitlements read-only access approved. (5) **SRE-8:** `billing-audit-q` listens to Billing's `TenantQuotaAddOnChanged`; refund maps to a new Audit type `billing.token_addon.refunded` (requested from IAM, BL-OQ-23). |
+| 0.7 | 2026-11-19 | **Team responses to the open-items list applied.** Closed (IAM Core): BL-OQ-2 (separate `seats_last_event_at` watermark), D-3, D-4, SRE-6. Entitlements replies recorded but **not** accepted as written: BL-OQ-3 partly answered (`addon_eligible` mixes token and API-request quotas), BL-OQ-4 and BL-OQ-20 reopened (reply makes Entitlements the producer of the add-on event, which contradicts HLD v0.64 and `BIL-ADD-2`). SRE-3: code in Core's repo; deployed before direct signup in each environment, all services dev-only today (§16.1). |
+| 0.6 | 2026-11-19 | **Product decision memos ENT-D3 (PD-LLM-1, model tiers) and ENT-D6 (trial profiles) checked for Billing impact.** Both are proposed, awaiting Product approval, and need no Billing design change: model tiers and trial limits are Catalog / Entitlements / Usage & Metering data, and Billing's plan, price and add-on rules already hold. Recorded: (1) inputs (§1.2); (2) ownership rows for `model_tier` and trial-profile assignment (§2.2); (3) plan-change effect on the model tier, the tier following `TenantPlanChanged` (§8.4.3); (4) trial exhaustion leads to conversion (B-P2), never an add-on, with ENT-D6 named as the reason for `BIL-ADD-1`'s trial rule (§4.6, §8.7); (5) BL-OQ-22: Finance's token-quota validation (PD-LLM-1 R-3, ENT-D6) precedes final `plan_prices` and `token_packs` values. |
+| 0.5 | 2026-11-19 | **`platform-audit` v0.1.2 replaces the in-repo AL-5 adapter (HLD v0.64 §3.3, §11.6).** The library is used only for AL-5 direct-write: operator actions and the cross-tenant job entry, which cannot be derived from `billing.events` (those already reach Audit on `billing-audit-q` and are not re-sent). (1) **Outbox mode** (`pkg/auditoutbox`): `Enqueuer.Enqueue` writes into the library's `pending_audit_entries` inside the business transaction; `auditoutbox.Runner` drains to AL-5 asynchronously (§3.3, §10.6). (2) `go.mod` gains `platform-audit v0.1.2` (§3.1); package tree drops `adapters/auditclient` (§2). (3) Config: `AUDIT_SOURCE_SERVICE=commercial-billing`, `AUDIT_LOG_BASE_URL`, `AUDIT_CALLER_DOMAIN=commercial`, `AUDIT_DELIVERY_INTERVAL`; `AUDIT_BASE_URL` and `AUDIT_DRAIN_INTERVAL` removed (library LLD §18.6) (§12). (4) NetworkPolicy egress from namespace `billing` to `iam-audit-log` port 8080; admission confirmed in Audit Log rev 0.34 (§10.2). (5) Table, RLS, grants and drainer role per library LLD §4.3 (§4.2); drainer pool settings `PG_AUDIT_DRAINER_*` (PgBouncer mode, as the other pools) and `MIGRATION_DATABASE_URL` stated as a direct, non-PgBouncer endpoint (§4, §12). (6) Metric `commercial_billing_audit_pending` replaced by the library's `platform_audit_*` (§11.2). (7) BL-OQ-10 closed: admitted and all seven types in the taxonomy (Audit Log rev 0.34). (8) D-7 resolved. |
+| 0.4 | 2026-11-14 | **AL-5 client moved in-repo.** `platform-audit` (proposed in Audit Log LLD §18.2) does not exist and no IAM service uses it, so it is removed from `go.mod` (§3.1); `internal/adapters/auditclient` is Billing's own AL-5 adapter, same outbox-relay contract (§2, §3.3). New discrepancy D-7 (§16.2). |
 | 0.3 | 2026-11-14 | **Provider capability certification (HLD v0.51, CD-56 follow-up 5).** Applies `billing-lld-changes-for-hld-v0.51.md` to rev 0.2 (the change list was written against rev 0.1; its section numbers are mapped to this layout). (1) `ProviderCapabilities` now declares every certified capability, with `ProrationMode` `native` \| `fallback` replacing the `ProrationPreview` flag (§3.4). (2) **Certification gate** (§3.4, §3.5): an adapter is used for new billing accounts only with a `passed` (or, for `manual`, `exempt`) record for its `provider` and deployed `adapter_version`. (3) New global table `provider_certifications` and enum `certification_status` (§4.2.24), migration `000004_provider_certifications` (§4.4), invariants **BIL-PROV-1 to BIL-PROV-3** (the change list's PROV-1 to PROV-3, renamed to this LLD's `BIL-` scheme) (§4.6). (4) Operator routes **B-O14** (record a certification run) and **B-O15** (revoke) (§5.3, §5.4.4); endpoint count 43. (5) `ENABLED_PAYMENT_PROVIDERS`, `PROVIDER_CERT_SUITE_VERSION`, `PROVIDER_REGISTRY_REFRESH` and the startup check (§12). (6) Metric `commercial_billing_provider_certified` and alert `BillingProviderNotCertified` (§11.2, §11.5). (7) **Certification suite** `cmd/certify` (§14.7) and the CI gate on adapter and pinned-API-version changes (§14.6). (8) Provider onboarding with certification (§19.3), certification record format (§19.6), runbook "certification lapsed" (§20.9). (9) Error codes `PROVIDER_NOT_ENABLED`, `CERTIFICATION_INCOMPLETE`, `SUITE_VERSION_MISMATCH`, `CERTIFICATION_NOT_FOUND` (§17). (10) §1.1, §16.1 (BL-OQ-21 who signs a run; BL-OQ-10 adds `billing.provider.certified` / `billing.provider.certification_revoked`), §16.4, §18.8, Appendix A updated. Base HLD moved to v0.51; no other v0.51 change touches Billing. |
 | 0.2 | 2026-11-13 | **Brought to HLD v0.50 and deepened to the Org & Membership LLD's level.** (1) **HLD v0.49/v0.50 applied:** `TenantQuotaAddOnChanged.resource` is the HLD §9.4 enum `llm_tokens` \| `api_requests`; Billing emits only `llm_tokens` in v1 (CD-55 scope). No other v0.49/v0.50 change touches Billing (the rest is the AI team's usage feed). (2) **IAM contracts verified against the IAM LLDs and AsyncAPI files**, which changed four statements of the 0.1 draft: (a) Core's EVT-14 recency guard runs on **every** `billing-orgm-q` and `tenant-orgm-q` handler, `TenantSeatsChanged` included, so a Billing event stamped later than an in-flight `TenantConverted` can make Core skip the conversion. Billing now orders its own events per tenant, delays the post-conversion seat event (`BIL-EVT-6`), self-heals seat drift (`seat-projection-check`, §8.6.4) and raises the root fix with IAM as blocking item **BL-OQ-2**; (b) Realm Provisioner's `billing-realm-q` consumer **requires `data.tenant_id`**, so every Billing payload carries `tenant_id` in `data` as well as the envelope (§7.3, discrepancy D-1 in §16.2); (c) RP-3 runs detached up to `CONVERT_TIMEOUT` (10 min) and answers `409 operation_in_progress` to a caller whose request ended first — the saga treats that as "retry with the same key", and treats `502 conversion_failed`, `409 realm_already_dedicated` and `409 tenant_offboarded` as specified in §9.3.2; (d) AL-5 entry types are Audit's frozen names `billing.adjustment.issued`, `billing.refund.issued`, `commercial.cross_tenant_job.ran` (0.1 invented names); new types Billing needs are requested in BL-OQ-10. (3) **Prompt structure adopted:** package layout `internal/{domain,app,adapters/…}`; invariants renumbered `BIL-<AREA>-n`; tables renamed to the HLD §7.1 names (`seat_change_schedules`, `quota_addon_purchases`) and `subscription_items`, `invoice_links`, `plan_prices`, `token_packs`, `seat_purchases`, `plan_change_requests` specified in full DDL. (4) **Every endpoint fully specified** (§5.4): request and response JSON, headers, validation, status codes, idempotency, side effects and events. (5) **New:** saga state machine with every transition (§9.3); provider-replacement and saved-payment-method migration (§19.3); runbooks for webhook backlog, reconciliation deltas and provider outage (§20); HLD coverage check (Appendix A). (6) Caching changed: I-11 results are cached in-process for display only (30 s), never for a renewal decision (§6). (7) Kept from 0.1: provider interface (CD-56), authorize-and-charge contract with 3-D Secure (SGN-2), period-end downgrades with I-18 re-check, proration calculator for adapters without a proration engine, CD-10 and CD-24 proposals, `BillingPeriodRolled` not emitted. |
 | 0.1 | 2026-11-13 | Initial LLD from Commercial HLD v0.48 (≈1,960 lines). Superseded by 0.2. |
@@ -126,20 +137,36 @@ Refined into an implementable spec, this document gives the database schema, the
 | CD-31 | RFC 9457 errors, frozen codes | §5.1, §17 |
 | CD-49 | `tenant-billing-q` filter adds `TenantConverted`, `TenantOffboarded` | §7.1 |
 | CD-50 | Core parks early events; `IAMParkedTenantEventsStale` routed to Billing on-call | §8.3, §11.5, §20.1 |
-| CD-52 | Operator routes depend on the platform realm (OP-G3) | §5.2, §16 BL-OQ-14 |
+| CD-52 | Operator routes depend on the platform realm (AuthZ Enrichment LLD §8.9.1 OP-G1 to OP-G3) | §5.2, §16 BL-OQ-14 |
 | CD-54 | Prepaid seats, provider proration, scheduled advisory reductions, `max(target, in use)` | §8.5, §8.6 |
 | CD-55 | Token add-ons: prepaid, non-refundable, `TenantQuotaAddOnChanged`, 12-month expiry in Entitlements | §8.7, §7.3.6 |
 | CD-56 | Provider abstraction; Stripe primary; capability bar; `payment_event_ledger`; follow-up (5) certification before enablement | §3.4, §3.5, §4.2.15, §4.2.24, §14.7, §19.3, §19.6 |
+
+**HLD v0.52 to v0.64 → Billing impact (rebase check, rev 0.14)**
+
+| HLD rev | Change | Effect on Billing |
+|---|---|---|
+| v0.52, v0.53 | ENT-D1 / ENT-D4: `PlanCatalogChanged` fan-out and override expiry as Temporal workflows | None (Entitlements internals) |
+| v0.54 | ENT-D7: trial assignment and trial overrides deleted at conversion | None; Billing's conversion saga (§8.1.2) is unchanged |
+| v0.55, v0.61, v0.62 | ENT-D6 trial-profile values; ENT-D3 / PD-LLM-1 model tiers (proposed) | No design change; recorded in rev 0.6 (§1.2, §2.2, §8.4.3); final prices wait on Finance validation (BL-OQ-22) |
+| v0.56 to v0.59 | ENT-D9 / D11 / D12 / D8: add-on drawdown shortfalls, resolution policy, tolerances, deferred pack expiry | None to Billing's data, routes or events. Shortfalls are Entitlements records; the "billing escalation" disposition is a Commercial Team process, actioned with existing operator routes (B-O2 adjustment) if it results in a charge or credit |
+| v0.60 | B-2: `entitlement_override_history` kept on tenant purge | None |
+| v0.63 | Entitlements adopts `platform-audit` v0.1.2 | None |
+| v0.64 | `platform-audit` v0.1.2 for all Commercial services; Billing audit settings renamed per library LLD §18.6 | Applied in rev 0.5 (§3.1, §3.3, §10.6, §12) |
 
 ### 1.2 Inputs used
 
 | Source | Used for |
 |---|---|
-| Commercial HLD v0.50 | All requirements and decisions |
+| Commercial HLD v0.64 (earlier revs v0.50, v0.51 for the original draft) | All requirements and decisions |
+| Product decision memos `product-decision-memo-ent-d3-model-tiers.md` (PD-LLM-1, ENT-D3 / CD-41) and `product-decision-memo-ent-d6-trial-profiles.md` (ENT-D6), both 18 Nov 2026, proposed | Plan → `model_tier` mapping (Starter `basic`, Pro `standard`, Enterprise `premium`) and downgrade behaviour; trial profile limits, trial lengths (14 / 30 / 30 days) and "trial tenants cannot buy token add-ons"; Finance validation of the 500K / 5M / 25M token quotas. No Billing design change (rev 0.6) |
 | Core LLD rev 2.49 and `iam-org-membership/api/asyncapi.yaml` | I-11 response (`active_users`, `pending_invitations`, `licensed_seats`, optional `over_cap`), I-18 contract and errors, `billing-orgm-q` handlers, EVT-14 / EVT-15 / EVT-18, consumed envelope base (`id`, `type`, `subject`, `source`, `tenant_id`, `time` required), Billing's Istio path rules |
 | Realm Provisioner LLD rev 1.46 and `iam-realm-provisioner/api/asyncapi.yaml` | RP-3 / RP-4 / RP-11 routes, bodies, responses and error codes; detached conversion and `CONVERT_TIMEOUT`; published payloads of `TenantConverted`, `TenantSuspended`, `TenantReactivated`, `TenantOffboarded`; the `billing-realm-q` consumed schema (`tenant_id` required in `data`) |
-| Audit Log LLD rev 0.33 | AL-5 request contract and responses; `billing-audit-q` mapping; entry types `tenant.plan_changed`, `tenant.payment_past_due`, `tenant.subscription_cancelled`, `tenant.reactivated`, `tenant.seats_changed`, `billing.token_addon.*`, `billing.adjustment.issued`, `billing.refund.issued`, `commercial.cross_tenant_job.ran` |
+| Audit Log LLD rev 0.33, updated to rev 0.37 (Billing admission rev 0.34; `billing.token_addon.refunded` rev 0.37) | AL-5 request contract and responses; `billing-audit-q` mapping; entry types `tenant.plan_changed`, `tenant.payment_past_due`, `tenant.subscription_cancelled`, `tenant.reactivated`, `tenant.seats_changed`, `billing.token_addon.*`, `billing.adjustment.issued`, `billing.refund.issued`, `commercial.cross_tenant_job.ran` |
 | Commercial sibling-team change list (13 Nov 2026) and replies | SGN-1 / SGN-2, IAM-1 to IAM-11, SRE-3, SRE-6 to SRE-8, NTF-3, FE-1, FE-4, FE-10, BIZ-1 / BIZ-5 to BIZ-7 |
+| `billing-iam-actions.md`, `billing-iam-actions-reply.md`, `billing-open-items-corrections.md`, `op-g2-platform-edge-request.md` (this folder, 19 Nov 2026) | IAM actions A-1 to A-8 and IAM's reply; TL corrections to the Entitlements and Audit Log responses; OP-G2 request to platform edge |
+| AuthZ Enrichment LLD v1.50 | Operator path (CD-52), OP-G1 to OP-G5 numbering (§8.9.1), operator header contract, OP-G4 coverage of B-O1 to B-O15 |
+| Team responses of 19 Nov 2026 (`billing-open-items-team-response.md`) and AI team reply (`billing-reply-ai-team.md`, draft, not signed off) | Entitlements and IAM Core answers (rev 0.7); BL-OQ-19 and PD-LLM-1 R-1, R-2, R-4 status (rev 0.9). **Not in this repository**; to be added to `docs/lld/` so the citations resolve |
 | Signup BFF LLD and `internal/core/port/billing.go` | `ChargeRequest {TenantID, PaymentToken, Plan, Seats, IdempotencyKey}` and `ChargeResponse {BillingSubscriptionID}` |
 | Org & Membership LLD (structure) | Section layout, depth, invariant and error-taxonomy style |
 | `hld-billing-service.md` v0.2 | Disposition of B-1 to B-13 only (§16.3) |
@@ -176,6 +203,8 @@ Billing owns and is the sole writer for:
 | Realm conversion, direct provisioning, suspension, offboarding, the 90-day clock | Realm Provisioner, Core | Billing triggers (RP-3, RP-4) or reacts; never calls RP-10 or RP-14 (HLD §8.9) |
 | Direct-signup orchestration (RP-2, I-1) | Signup BFF | Billing authorizes and charges only (CD-9) |
 | Plan grants (`plans` catalog, `plan_trial_profiles`) | Catalog / Admin Config | CD-1; Billing's `plan_prices` holds only the price |
+| Trial profile values and assignment (Trial-Specific, Reduced, Full; ENT-D6), trial-length per plan | Catalog (`plan_trial_profiles`, `PATCH /api/v1/operator/plans/:code/trial-profiles/:profile`), Entitlements (assignment, recompute on `PlanCatalogChanged`) | Trial tenants have no billing account; Billing prices nothing during a trial. Sales assigning a larger profile is not a Billing action |
+| Model tier per plan (`model_tier`: `basic` / `standard` / `premium`; PD-LLM-1), Model Profiles and the Gateway allow-list | Catalog (seeded tier), Entitlements (serves it), Usage & Metering (renders the allow-list), AI team (profiles) | Billing sells plans, not tiers: no tier price, no tier field in `plan_prices` or events. The tier follows the plan Billing publishes in `TenantPlanChanged` (§8.4.3) |
 | Effective entitlements, numeric overrides, token add-on balance, draw-down, 12-month expiry and forfeiture | Entitlements | Billing emits `TenantQuotaAddOnChanged`; never stores a balance (HLD §5.2) |
 | Manual add-on balance corrections (add, remove unused, goodwill, reverse duplicate, migration) | Entitlements operator route `POST /api/v1/operator/tenants/:id/quota-addons` | HLD §8.6.2, §11.4. Billing's part is the money side only (§8.11) |
 | Consumption, quota events, period close | Usage & Metering | Billing keeps totals for reference only |
@@ -222,7 +251,7 @@ commercial-billing/
 │   ├── server/
 │   │   ├── main.go                         # composition root: pools, gincommon v2 middlewares, router, workers, shutdown
 │   │   ├── wiring.go                       # provider registry, Glue codec + topic publisher, IAM / Entitlements / Audit clients
-│   │   ├── workers.go                      # in-pod workers: outbox runner, webhook processor, saga worker, audit drainer,
+│   │   ├── workers.go                      # in-pod workers: outbox runner, webhook processor, saga worker, auditoutbox.Runner,
 │   │   │                                   #   2 SQS consumers, delayed-emission worker, metric exporter (§13.1)
 │   │   └── identity.go                     # resolveAppEnv / loggerEnv (one resolved environment for metrics, traces, logs)
 │   ├── migrate/main.go                     # Helm pre-install / pre-upgrade hook Job (§19.1)
@@ -260,7 +289,7 @@ commercial-billing/
 │   │   │   │                               #   LedgerRepo, IdempotencyRepo, ReconRepo, UsageRecordRepo
 │   │   │   ├── iam.go                      # CoreClient (I-11, I-18), RealmProvisionerClient (RP-3, RP-4, RP-11)
 │   │   │   ├── entitlements.go             # EntitlementsReader (add-on eligibility, BL-OQ-3)
-│   │   │   ├── audit.go                    # AuditWriter (AL-5 through pending_audit_entries)
+│   │   │   ├── audit.go                    # AuditWriter port; implemented by platform-audit auditoutbox.Enqueuer (§3.3)
 │   │   │   ├── events.go                   # EventEnqueuer (ordered outbox, BIL-EVT-5)
 │   │   │   └── tx.go / clock.go / ids.go / logger.go
 │   │   ├── subscription_service.go         # read, cancel, resume, collection pause
@@ -288,7 +317,6 @@ commercial-billing/
 │       │   └── manual/                     # Phase 1 stub adapter; no external calls
 │       ├── iamclient/                      # Core (I-11, I-18), Realm Provisioner (RP-3, RP-4, RP-11) as commercial-system
 │       ├── entitlementsclient/             # GET /api/v1/internal/tenants/:id/entitlements
-│       ├── auditclient/                    # platform-audit AL-5 client + pending_audit_entries drainer
 │       ├── httpx/                          # otelhttp client factory used by every outbound HTTP client
 │       └── metrics/                        # Tier 1 / 2 / 3 registration (§11.2)
 ├── pkg/requestctx/                         # RequestContext{UserID, TenantID, Roles, ClientIP, UserAgent}; GUC binding
@@ -311,12 +339,13 @@ require (
     github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2  v2.x   // RFC 9457 problem (errorCode, validationErrors, traceId), middlewares, metrics
     github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events/v2     v2.1.0 // outbox, SQS consumer, inbox, Glue codecs
     github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2   v2.0.x // pools, GUC, TxRunner, migrate.Runner, SQLSTATE helpers
-    github.com/BCBP-SOLUTIONS-FZC-LLC/platform-audit         v0.x   // AL-5 client (pinned at first build)
+    github.com/BCBP-SOLUTIONS-FZC-LLC/platform-audit         v0.1.2 // AL-5 direct-write, outbox mode (pkg/auditoutbox)
     github.com/stripe/stripe-go/v83                          v83.x  // pinned at first build; one major per release
 )
 ```
 
 - `platform-gincommon/v2` is used from the first release because Billing is new and the domain moves to RFC 9457 under CD-31; IAM still runs v1.6.0 with RFC 9457 bodies through `AbortWithProblem`, so the wire format is the same.
+- `platform-audit` v0.1.2 is used **only** for AL-5 direct-write (HLD v0.64 §11.6). Billing builds no AL-5 adapter of its own; the in-repo `auditclient` planned in rev 0.4 is dropped. `pkg/auditoutbox` (outbox mode) is the only delivery mode used; `auditbuffer` is not.
 - `platform-schemagov` is a Python CLI used in CI (`schema-gov validate | extract --check | diff | register`), not a Go dependency, exactly as in IAM.
 - Go 1.26, the newest patch IAM pins at repo creation (HLD §3.3). Billing never imports `iam-keycloakclient` (HLD §15.2).
 
@@ -341,7 +370,6 @@ components:
   registry:      { in: adapters/provider/registry.go }
   iamclient:     { in: adapters/iamclient/** }
   entclient:     { in: adapters/entitlementsclient/** }
-  auditclient:   { in: adapters/auditclient/** }
   httpx:         { in: adapters/httpx/** }
   metrics:       { in: adapters/metrics/** }
 vendors:
@@ -360,7 +388,6 @@ deps:
   registry:    { mayDependOn: [port, stripe, manual] }
   iamclient:   { mayDependOn: [domain, port, httpx] }
   entclient:   { mayDependOn: [domain, port, httpx] }
-  auditclient: { mayDependOn: [domain, port, httpx] }
 ```
 
 | # | Rule | Enforcement |
@@ -378,7 +405,7 @@ deps:
 | `platform-gincommon/v2` | `ObservabilityMiddlewares(cfg)` (panic recovery → request ID → tracing → correlation → metrics → logging → 30 s request deadline, innermost); `ProtectedMiddlewares` (RequireAuth → ContextMiddleware) on tenant and operator groups; `AbortWithProblem` for every error (§17); `NewShared*Vec` for Tier 1/2 metrics and `NewCounterVec`/`NewHistogramVec`/`NewGauge` for Tier 3; `MetricsHandler` on port 9090. `Config{ServiceName: "commercial-billing", Domain: "commercial", Environment, BuildVersion}` |
 | `platform-pgcommon/v2` | App pool (`billing_app`, `GUCProvider = GUCSetFromContext`, transaction-local `app.tenant_id` on every checkout); `sysPool` (`billing_system`, BYPASSRLS) for the webhook pre-resolution, cron tenant listing and reconciliation; `RunInTxWithRetryOpts` (retries 40P01 / 40001) for writes, `RunInTx` for reads; SQLSTATE helpers for error mapping (§9.4); `migrate.Runner` in `cmd/migrate`; `Pool.Health` in `/readyz`; `Pool.DrainAndClose` at shutdown |
 | `platform-events/v2` | `outbox.EnqueueOrdered(tx, rec, orderingKey=tenant_id)` in the state-change transaction (`BIL-EVT-5`); `outbox.Runner` (500 ms poll, batch 50, max attempts 5, `PrunePublished` 8 days); SQS consumer with `eventcfg` env loading, `GlueDecodeCodec`, `WithDLQForwarding` (receive 4); `pkg/inbox` `Store.Process` / `Prune` for `processed_events`; Glue `ValidatingCodec` against registry `billing-events` |
-| `platform-audit` | AL-5 client in outbox-relay mode: a `pending_audit_entries` row is written in the business transaction; the in-pod drainer posts it with `Idempotency-Key = uuidv5(billing-namespace, <entry natural key>)`; `5xx` / timeout → retry with backoff; never blocks the business write (Audit AUDIT-CALLER-1) |
+| `platform-audit` v0.1.2 (`pkg/audit`, `pkg/auditoutbox`, `pkg/config`) | AL-5 direct-write in **outbox mode** (library LLD §7.1). `cmd/migrate`: `auditoutbox.ApplySchema` before Billing's RLS migration (§4.4). `main`: `auditconfig.FromEnv("")` (fails fast on a malformed `AUDIT_*`); `audit.InitMetrics(MetricsIdentity{Domain: "commercial", Service: "commercial-billing"}, gincommon.MetricsRegisterer())`; `auditoutbox.CheckEnqueueAccess(ctx, appPool)` fails startup if `billing_app` cannot INSERT; one `Enqueuer` (`NewEnqueuer(cfg.EnqueueConfig(log))`) behind the `AuditWriter` port; `auditoutbox.NewRunner(cfg.RunnerConfig(drainerPool, client, enq, log))` started as an in-pod worker and stopped at shutdown. In the business transaction: `enq.Enqueue(ctx, tx, entry, enq.NewKeyStrict(<source_event_type>, <natural id>))`, `OccurredAt` from the change. The runner claims with `SKIP LOCKED`, posts to AL-5 with `Idempotency-Key`, retries `429`/`5xx`/timeouts with backoff and `Retry-After`, holds `422 UNKNOWN_ENTRY_TYPE` (deploy skew) and `401`/`403` (not admitted) without spending attempts, and parks other `4xx` for operator disposition. Caller identity `AUDIT_CALLER_DOMAIN=commercial`: `x-tenant-roles: commercial-system`, `x-user-id …00c1`, `CommercialSystemActor()` for automated entries. Never blocks the business write (AUDIT-CALLER-1) |
 
 ### 3.4 Payment provider abstraction (CD-56)
 
@@ -546,7 +573,7 @@ An adapter is usable for **new** billing accounts only when `provider_certificat
 
 ## 4. Data Model
 
-Database: `billing`, a separate logical database on the platform RDS PostgreSQL Multi-AZ pattern (HLD §7.1), the only Commercial database in PCI-adjacent scope. Fronted by PgBouncer in transaction-pooling mode. App pool `pgcommon.NewPool(… PGBouncerMode: true, GUCProvider: pgcommon.GUCSetFromContext, MinConns: 0, MaxConns: 10 …)` (HLD §7.1 starting point); sysPool `MaxConns: 4`.
+Database: `billing`, a separate logical database on the platform RDS PostgreSQL Multi-AZ pattern (HLD §7.1), the only Commercial database in PCI-adjacent scope. Fronted by PgBouncer in transaction-pooling mode. App pool `pgcommon.NewPool(… PGBouncerMode: true, GUCProvider: pgcommon.GUCSetFromContext, MinConns: 0, MaxConns: 10 …)` (HLD §7.1 starting point); sysPool `MaxConns: 4`; audit drainer pool (`billing_audit_drainer`, `PGBouncerMode: true`, `MaxConns: 2`) used only by `platform-audit`'s `auditoutbox.Runner` (§3.3). Migrations (`cmd/migrate`, including `auditoutbox.ApplySchema`) connect directly to RDS, never through PgBouncer: golang-migrate's advisory lock is session-scoped and does not survive transaction pooling.
 
 | # | Invariant |
 |---|---|
@@ -1063,6 +1090,9 @@ CREATE TABLE refunds (
   reason              text NOT NULL CHECK (length(reason) BETWEEN 10 AND 1000),
   status              text NOT NULL CHECK (status IN ('pending','succeeded','failed')),
   provider_refund_id  text,
+  addon_purchase_id   uuid REFERENCES quota_addon_purchases(purchase_id), -- set when the invoice is a token add-on invoice
+  addon_tokens        bigint CHECK (addon_tokens > 0),                     -- tokens reversed: floor(tokens_total × amount_minor / purchase amount_minor)
+  addon_event_id      uuid,                                                -- envelope id of the emitted TenantQuotaAddOnChanged (reason refund)
   actor_id            uuid NOT NULL,
   idempotency_key     text NOT NULL,
   created_at          timestamptz NOT NULL DEFAULT now(),
@@ -1198,7 +1228,7 @@ CREATE TABLE reconciliation_findings (
 |---|---|---|
 | `outbox_events`, `outbox_dead_letters` | `platform-events/v2` schema (`outbox.MigrateSchema`) | Ordered on `ordering_key = tenant_id` (`BIL-EVT-5`); published rows pruned after 8 days |
 | `processed_events` | `(event_id uuid, consumer text, processed_at)`; PK `(event_id, consumer)` | `pkg/inbox`; consumers `tenant-billing`, `usage-billing`; 8-day retention > 4-day SQS retention (PE-1) |
-| `pending_audit_entries` | `(id uuid PK, tenant_id, entry jsonb, idempotency_key text UNIQUE, attempts, next_attempt_at, created_at)` | AL-5 relay (§10.6); deleted on `200`/`201` |
+| `pending_audit_entries` | Owned by `platform-audit` (migration `000001_pending_audit_entries`, applied by `auditoutbox.ApplySchema`; tracked in `platform_audit_schema_migrations`). Billing does not define or alter its columns | AL-5 outbox (§10.6). Billing adds RLS after `ApplySchema`: `tenant_isolation` on `tenant_id`, with `WITH CHECK` admitting `platform_tenant` (`…00b1`) rows (library LLD §4.3). Grants: `billing_app` `SELECT, INSERT`; drainer `billing_audit_drainer` (`NOBYPASSRLS`, policy `audit_drainer_all`) `SELECT, INSERT, UPDATE, DELETE`. Delivered rows deleted; parked rows kept until an operator disposes of them; disposed rows purged after `AUDIT_DISPOSED_RETENTION` |
 | `rls_violation_log` | Same as IAM (`table_name, row_tenant_id, app_tenant_id, violation_type, …`) | 1%-sampled; RLS disabled on itself |
 
 #### 4.2.24 `provider_certifications` (global, no RLS)
@@ -1282,10 +1312,12 @@ GRANT SELECT ON <t> TO admin_readonly;
 | File | Content |
 |---|---|
 | `000000_outbox_schema` | `platform-events` outbox, dead letters, `processed_events` |
+| (library) `platform-audit` `000001_pending_audit_entries` | Applied by `auditoutbox.ApplySchema` after `000000_outbox_schema` and before `000001_initial_schema`; own tracking table `platform_audit_schema_migrations` |
 | `000001_initial_schema` | Extensions, enums, all tables in §4.2, indexes, RLS, `rls_check_tenant`, `rls_violation_log`, triggers (§4.5), grants for `billing_app`, `billing_system`, `admin_readonly` (granted explicitly, not assumed through ownership) |
 | `000002_seed_price_book` | `plan_prices` seed (§4.2.2) as `provider = 'manual'` rows only (the stub's prices). Stripe rows need a `provider_price_id` (`chk_pp_provider_ref`), so `price-book-sync.sh` creates them per environment through B-O11 |
 | `000003_views` | `v_subscription_summary` (`security_invoker = true`) |
 | `000004_provider_certifications` | `certification_status` enum, `provider_certifications` table and grants (§4.2.24); inserts the `manual` adapter's `exempt` record for its compiled `adapter_version` |
+| `000005_audit_outbox_rls` | RLS on `pending_audit_entries` (`tenant_isolation`, `WITH CHECK` admits `platform_tenant`), role `billing_audit_drainer` (`NOBYPASSRLS`) with policy `audit_drainer_all`, grants (library LLD §4.3) |
 
 Rules: backward-compatible two-release migrations (HLD §15.5); `cmd/migrate` runs `MigrateSchema` (outbox first, then domain) under `MIGRATE_TIMEOUT`; production runs require the `production-data-migrations` environment approval.
 
@@ -1316,8 +1348,9 @@ Applied `BEFORE UPDATE … FOR EACH ROW WHEN (OLD.* IS DISTINCT FROM NEW.*)` on 
 | BIL-SEAT-2 | One open seat change schedule per subscription (`uq_scs_one_open`). |
 | BIL-SEAT-3 | `renewal_seats = max(target_seats, seats_in_use)`; after the renewal top-up check the licensed count is never below I-11's `active_users + pending_invitations` (HLD §8.5.1). |
 | BIL-SEAT-4 | A seat change schedule never changes `licensed_seats` before the renewal and never blocks a purchase or a member addition (HLD §8.5.1 step 2). |
-| BIL-ADD-1 | A token add-on is sold only when: the subscription is `active` and not collection-paused; `iam_lifecycle = 'active'`; the tenant is not on trial; the effective `llm_token_quota_monthly` is finite (§8.7). |
+| BIL-ADD-1 | A token add-on is sold only when: the subscription is `active` and not collection-paused; `iam_lifecycle = 'active'`; the tenant is not on trial (ENT-D6: a trial tenant who exhausts its trial token budget is prompted to convert through B-P2, or Sales assigns a larger trial profile in Entitlements; it never buys an add-on); the effective `llm_token_quota_monthly` is finite (§8.7). Read from Entitlements' per-resource eligibility for `llm_tokens` once shipped (BL-OQ-3); until then from `llm_token_quota_monthly`. A generic `addon_eligible` is not used. |
 | BIL-ADD-2 | `TenantQuotaAddOnChanged` is emitted exactly once per confirmed purchase, with `billing_ref = purchase_id` (`quota_addon_purchases.event_id`). |
+| BIL-ADD-4 | When a refund of an add-on invoice reaches `succeeded`, `TenantQuotaAddOnChanged {reason: "refund", delta: −addon_tokens, billing_ref: refund_id, purchase_ref: purchase_id}` is emitted exactly once in the same transaction (`refunds.addon_event_id`). Billing never computes the remaining balance: Entitlements removes at most the unused tokens of that grant, never below zero (Entitlements owns quota state; TL decision BL-OQ-20). |
 | BIL-ADD-3 | Add-on purchases have no customer refund path; a refund of an add-on invoice exists only as an operator action with category `billing_error`, `duplicate_charge` or `fraud` (HLD §8.6.2). |
 | BIL-SAGA-2 | One saga per `billing_subscription_id`; RP-3 is always called with `Idempotency-Key: convert:<tenant_id>:<billing_subscription_id>`. |
 | BIL-PAY-1 | Every provider callback is in `payment_event_ledger` before any domain write. |
@@ -1389,7 +1422,7 @@ The automation principal carries no tenant role (IAM HLD §11.7) and therefore n
 | BIL-AUTH-3 | B-I1 admits only the mTLS principal `cluster.local/ns/bff/sa/bff-signup`; any other caller is `403 INSUFFICIENT_ROLE`. |
 | BIL-AUTH-4 | `commercial-system` (`00000000-0000-0000-0000-0000000000c1`) is Billing's **outbound** identity only; inbound it is rejected on every route. |
 | BIL-AUTH-5 | The webhook route binds no tenant and trusts no header except the provider signature. |
-| BIL-AUTH-6 | Until IAM's operator path is live end to end (CD-52, OP-G3), every operator route answers `403 INSUFFICIENT_ROLE` outside dev and test; there is no Billing-side bypass. |
+| BIL-AUTH-6 | Until IAM's operator path is live end to end (CD-52; AuthZ Enrichment LLD §8.9.1 OP-G1 platform realm, OP-G2 gateway `jwt_authn` provider, OP-G3 `OPERATOR_REALM_ISSUER` set), every operator route answers `403 INSUFFICIENT_ROLE` outside dev and test; there is no Billing-side bypass. |
 
 ### 5.3 Endpoint catalogue
 
@@ -1440,7 +1473,7 @@ No other service calls Billing synchronously: IAM never calls Commercial (HLD §
 
 #### Operator routes (`/api/v1/operator/…`)
 
-B-O1 to B-O5 are the HLD §11.4 catalogue rows for Billing. B-O6 to B-O15 are **LLD additions**, sent to IAM for the operator gateway route list and the OP-G5 end-to-end tests (BL-OQ-9).
+B-O1 to B-O5 are the HLD §11.4 catalogue rows for Billing. B-O6 to B-O15 are **LLD additions**, exposed by Billing's own operator `HTTPRoute` (§13.1) and added to IAM's end-to-end operator test (AuthZ Enrichment LLD §8.9.1 OP-G4), whose list today covers only B-O1 to B-O5 (BL-OQ-9). There is no IAM-side route list: the platform-realm `jwt_authn` provider and AuthZ Enrichment admit the whole `/api/v1/operator/` prefix.
 
 | # | Method & path | Purpose | Audit (AL-5 `entry_type`) |
 |---|---|---|---|
@@ -1867,7 +1900,7 @@ Preconditions: no live subscription (`409 SUBSCRIPTION_ALREADY_EXISTS`); `iam_li
 { "refund_id": "0193…", "status": "pending", "amount": { "amount_minor": 39800, "currency": "USD" } }
 ```
 
-Validation: invoice `paid`; `amount ≤ amount_paid − amount_refunded` (`422 REFUND_EXCEEDS_PAID`); add-on invoices only with category `billing_error`, `duplicate_charge`, `fraud` (`422 ADDON_REFUND_CATEGORY`, `BIL-ADD-3`). Status becomes `succeeded`/`failed` from `refund.updated`. AL-5 `billing.refund.issued`. **Refunding tokens does not remove them**: the operator also calls Entitlements' `POST /api/v1/operator/tenants/:id/quota-addons` to remove unused tokens or reverse a duplicate grant (§8.11).
+Validation: invoice `paid`; `amount ≤ amount_paid − amount_refunded` (`422 REFUND_EXCEEDS_PAID`); add-on invoices only with category `billing_error`, `duplicate_charge`, `fraud` (`422 ADDON_REFUND_CATEGORY`, `BIL-ADD-3`). Status becomes `succeeded`/`failed` from `refund.updated`. AL-5 `billing.refund.issued`. **Add-on invoice:** the refund row records `addon_purchase_id` and `addon_tokens` (proportional to the refunded amount, rounded down). When `refund.updated` reports `succeeded`, Billing emits `TenantQuotaAddOnChanged {reason: "refund"}` in the same transaction (`BIL-ADD-4`); Entitlements removes the unused tokens. The operator does not call Entitlements (§8.11).
 
 ##### (B-O4) `GET /api/v1/operator/tenants/:id/invoices`
 
@@ -2083,7 +2116,7 @@ SNS message attributes: `EventType`, `TenantID`, `Source`, `EventID`, `Subject`.
 | `TenantPaymentPastDue` | `active → past_due` | Core, Audit, Notification `billing-notification-q` |
 | `TenantSubscriptionCancelled` | `active`/`past_due → cancelled` | Core, AuthZ, Audit, Entitlements, Notification |
 | `TenantReactivated` (`source: billing`) | `past_due → active` or `cancelled → active` | Core, AuthZ, RP `billing-realm-q`, Audit, Entitlements |
-| `TenantQuotaAddOnChanged` | Add-on payment confirmed | Entitlements, Audit (`billing.token_addon.purchased`) |
+| `TenantQuotaAddOnChanged` | Add-on payment confirmed (`reason: purchase`); refund of an add-on invoice succeeded (`reason: refund`, `BIL-ADD-4`) | Entitlements, Audit (`billing.token_addon.purchased`; `billing.token_addon.refunded`, BL-OQ-23) |
 | ~~`BillingPeriodRolled`~~ | **Not emitted (LLD decision)**: no consumer since CD-12 (HLD v0.23); Billing's own period handling uses provider renewal callbacks. Not registered in `billing-events`. If a consumer appears it is added as a new schema | — |
 
 #### 7.3.3 `TenantPlanChanged`
@@ -2177,10 +2210,11 @@ Core's consumed schema requires only `licensed_seats` (integer ≥ 0); Billing's
   "properties": {
     "tenant_id":     { "type": "string", "format": "uuid" },
     "resource":      { "type": "string", "enum": ["llm_tokens", "api_requests"], "description": "HLD §9.4 (v0.50); Billing emits llm_tokens only in v1 (CD-55 scope)" },
-    "delta":         { "type": "integer", "minimum": 1, "description": "Tokens added; Entitlements adds it to the balance, idempotent on billing_ref" },
-    "reason":        { "type": "string", "enum": ["purchase", "promotional_grant", "operator_correction", "migration_credit", "contract_entitlement"],
-                       "description": "v1 emits purchase only; the rest are reserved (HLD §9.4)" },
-    "billing_ref":   { "type": "string", "description": "quota_addon_purchases.purchase_id" },
+    "delta":         { "type": "integer", "not": { "const": 0 }, "description": "purchase: tokens added (> 0). refund: tokens to reverse (< 0); Entitlements removes at most the grant's unused tokens, never below zero. Idempotent on billing_ref" },
+    "reason":        { "type": "string", "enum": ["purchase", "refund"],
+                       "description": "Billing-owned commercial reasons only (TL decision BL-OQ-20). Correction and expiry are Entitlements' and travel on its own event, never on this one (D-8)" },
+    "billing_ref":   { "type": "string", "description": "purchase: quota_addon_purchases.purchase_id; refund: refunds.refund_id" },
+    "purchase_ref":  { "type": "string", "description": "refund only: purchase_id of the grant being reversed" },
     "purchased_at":  { "type": "string", "format": "date-time", "description": "LLD additive (BL-OQ-4): payment confirmation instant; basis of the 12-month expiry" },
     "pack_code":     { "type": "string" },
     "pack_quantity": { "type": "integer", "minimum": 1 }
@@ -2272,6 +2306,8 @@ The Stripe endpoint is registered with exactly the types above (`scripts/stripe-
 | BIL-EVT-6 | After `TenantConverted`, the seat event is held for `SEATS_AFTER_CONVERSION_DELAY` (120 s) in `scheduled_emissions` before it is published, so Core has applied `TenantConverted` (p99 < 5 s) before it can see a newer Billing event for that tenant. Root fix requested from IAM: BL-OQ-2. |
 | BIL-EVT-7 | `TenantPaymentPastDue`, `TenantSubscriptionCancelled` and `TenantReactivated` are emitted only on an actual transition of Billing's status, never for a repeated callback. |
 | BIL-EVT-8 | No event for a subscription that is `incomplete`. |
+
+**Update (BL-OQ-2 closed, 2026-11-19).** Core now keeps `seats_last_event_at` separate from `last_event_at`, so the race below no longer skips a conversion. `BIL-EVT-5/6` are kept as defence in depth; removing the 120 s delay is a later, optional change.
 
 **Why BIL-EVT-5/6 exist.** Core runs EVT-14 on every `billing-orgm-q` and `tenant-orgm-q` handler, including `TenantSeatsChanged`, and skips any event whose `time` is not newer than `tenants.last_event_at`. Billing stamps its events after it has consumed `TenantConverted`, so a Billing event is always newer than RP's `TenantConverted`. If Core is slow on `tenant-orgm-q` (redelivery, outage) and applies Billing's newer event first, it would then skip `TenantConverted` and leave the tenant `trial` although it has paid. The delay makes this unlikely; only an IAM change removes it (BL-OQ-2: give `licensed_seats` its own recency mark, or exempt `TenantSeatsChanged` from advancing `last_event_at`).
 
@@ -2374,7 +2410,7 @@ sequenceDiagram
 3. Saga as §8.1.2 (RP-3 as `commercial-system`, `TenantConverted`, delayed `TenantSeatsChanged`). The IAM-side conversion cannot tell the paths apart (HLD §5.1).
 4. Invoicing happens outside the product. Moving the tenant to Stripe later: §19.2.
 
-Dependency: the operator path (CD-52, OP-G3). Until it is live the stub is usable only in dev and test.
+Dependency: the operator path (CD-52, OP-G1 to OP-G3). Until it is live the stub is usable only in dev and test.
 
 ### 8.2 Conversion reversal (CD-10 — proposed)
 
@@ -2495,6 +2531,18 @@ On apply: subscription `plan` and the seat item's `price_id` change; history row
 3. At the period boundary the provider renews at the lower price. On the cycle `invoice.paid` whose line uses the new price: subscription `plan` updated, request `applied`, emit `TenantPlanChanged {direction: "downgrade"}`.
 4. **B-P5** cancels a scheduled downgrade. Cancelling the subscription (B-P12) cancels it too.
 5. Upgrades are never blocked (HLD §8.4 step 6).
+
+#### 8.4.3 Effect on model tier and limits (PD-LLM-1, ENT-D6)
+
+Billing does nothing tier-specific. The plan in `TenantPlanChanged` is the only input; Entitlements maps it to limits and `model_tier`, Usage & Metering re-renders the Gateway allow-list:
+
+| Change | When the tier changes | Consequence (owned elsewhere) |
+|---|---|---|
+| Upgrade (§8.4.1) | On payment confirmation, with `TenantPlanChanged {direction: "upgrade"}` | Higher tier's profiles allowed at once; allow-list is cumulative, so lower profiles stay allowed |
+| Downgrade (§8.4.2) | At the period boundary, on the `invoice.paid` that applies the lower price, never earlier | Next calls use the lower tier's profiles; artefacts already generated keep their recorded Model Profile (PD-LLM-1 consideration 4). Embedding (`bge-m3`) is the same on every plan, so no re-index |
+| Trial → paid (§8.1) | On `TenantConverted` (RP), not on a Billing event | Trial uses the plan's own tier; conversion replaces trial-profile limits with the paid plan's |
+
+Because a downgrade lowers model quality and token quota, the B-P4 response and the scheduled-downgrade notification state the effective date (`effective_at`) so the tenant knows when the tier drops.
 
 ### 8.5 Prepaid seat purchase (HLD §8.5, §8.5.1, §8.5.2)
 
@@ -2619,6 +2667,10 @@ On the cycle `invoice.paid` for the new period:
 
 ### 8.7 Token add-on purchase (HLD §8.6.2, CD-55)
 
+Trial tenants are not eligible (`BIL-ADD-1`, `ineligible_reason: trial`; ENT-D6 consideration 4).
+
+**Three clocks, kept separate (AI team reply, 2026-11-19).** (1) Billing's subscription period (anchored on the conversion date); (2) the quota month, which Usage & Metering sets when it writes the Gateway limit (CD-58). The Gateway's own monthly window is 30 days unless its calendar flag is set and is never anchored on the billing period, so a tenant billed on the 17th is not reset on the 17th; (3) the 12-month add-on expiry from `purchased_at` (Entitlements). Billing prices no usage, so none of these changes an invoice. **Fail-open (CD-57a):** while the Gateway's rate-limit service is down, calls are served and tokens are not metered at the edge; the SEV-2 alert and the usage-feed reconciliation recover the count. An add-on balance can therefore run past zero during an outage; that is Usage & Metering's and Entitlements' concern, and Billing does not refund or charge for it. The tenant admin UI shows the conversion checkout (B-P2) instead of the add-on catalog when the trial token budget is exhausted.
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -2697,11 +2749,11 @@ Finance confirms this or chooses "bill as normal" (then step 1 only records the 
 | Custom-deal price (HLD §8.10) | B-O11 price row for a custom price, or B-O2 recurring credit | New price on the next renewal / customer balance credit; AL-5 | Numeric overrides are Entitlements' (`PUT /api/v1/operator/tenants/:id/entitlement-overrides/:key`) |
 | Service credit, goodwill | B-O2 `credit` | Customer balance credit; AL-5 `billing.adjustment.issued` | — |
 | Refund a billing error or duplicate charge | B-O3 | Provider refund; AL-5 `billing.refund.issued` | — |
-| Duplicate token add-on charge | B-O3 `duplicate_charge` on the second add-on invoice | Money returned | Operator also calls Entitlements `POST /api/v1/operator/tenants/:id/quota-addons` to reverse the duplicate grant (never below zero, never consumed tokens; AL-5 `billing.token_addon.adjusted` written by Entitlements) |
-| Fraud on an add-on | B-O3 `fraud` | Money returned | Entitlements removes unused tokens (`billing.token_addon.revoked`) |
+| Duplicate token add-on charge | B-O3 `duplicate_charge` on the second add-on invoice | Money returned; on `succeeded`, `TenantQuotaAddOnChanged {reason: refund}` (`BIL-ADD-4`) | Entitlements removes the grant's unused tokens (never below zero, never consumed tokens) |
+| Fraud on an add-on | B-O3 `fraud` | Money returned; `TenantQuotaAddOnChanged {reason: refund}` | Entitlements removes unused tokens |
 | Goodwill tokens, migration credit | — (no money) | none | Entitlements operator route only (`billing.token_addon.granted`) |
 
-Billing never calls the Entitlements operator route itself: corrections to the balance are an operator decision made in Entitlements (HLD §8.6.2), and Billing does not emit `TenantQuotaAddOnChanged` for them in v1 (the reserved reasons are for a later change).
+**Ownership (TL decision, 2026-11-19).** Billing owns commercial transactions and emits `TenantQuotaAddOnChanged` for the two it performs: `purchase` and `refund`. Entitlements owns quota state: it applies those events, and corrections that involve no money (goodwill, migration credit, manual adjustment) and expiry are Entitlements actions on its own operator route, published on Entitlements' own event, never as `TenantQuotaAddOnChanged`. Billing never calls the Entitlements operator route.
 
 ### 8.12 Usage period records
 
@@ -2803,7 +2855,7 @@ if cmd.RowsAffected() == 0 {
 | Provider callback | `(provider, provider_event_id)` | Ledger PK | Duplicate insert → `200`, no work |
 | Consumed bus event | envelope `id` × consumer | `processed_events` via `pkg/inbox` | Claim is the first statement of the handler's transaction |
 | RP-3 / RP-4 | `convert:<tenant_id>:<billing_subscription_id>` / `revert:<tenant_id>:<billing_subscription_id>` | RP `provisioning_operations` | RP replays its stored result |
-| AL-5 | `uuidv5(billing-ns, <entry natural key>)` | Audit `processed_events` | `200` replay |
+| AL-5 | `Enqueuer.NewKeyStrict(<source_event_type>, <natural id>)` = `uuidv5(KeyNamespace("commercial-billing"), …)`; duplicate enqueue is `ON CONFLICT DO NOTHING` | Audit `processed_events` | `200` replay |
 | Emitted events | `billing_ref` in `data`; snapshot payloads | Consumers | `TenantQuotaAddOnChanged` idempotent on `billing_ref` at Entitlements |
 
 | # | Invariant |
@@ -2877,7 +2929,7 @@ stateDiagram-v2
 | **Core down (I-11, I-18)** | `503` from the client | Downgrade `503 IAM_UNAVAILABLE` (fail closed); B-P2/B-P14 `503` (seat floor); renewal reduction retried then skipped (renew at current count); display fields `null` |
 | **RP down (RP-3)** | Saga errors | Backoff with the same key; 30-min alert; no second charge |
 | **Entitlements down** | Client error | Add-on purchase `503 ENTITLEMENTS_UNAVAILABLE`; pack list shows `eligible: false` |
-| **Audit down** | AL-5 `5xx` | Entries wait in `pending_audit_entries`; business writes unaffected (AUDIT-CALLER-1) |
+| **Audit down** | AL-5 `5xx` / timeout | Entries wait in `pending_audit_entries` (runner backoff, 50-attempt budget then parked); business writes unaffected (AUDIT-CALLER-1); `PlatformAudit*` alerts (§11.5) |
 | **Bus down (SNS)** | Outbox publish errors | Outbox retries; after 5 attempts → dead letters + page; ordered rows for that tenant wait; state is committed, publication catches up |
 | **SQS consumer errors** | `platform_messages_failed_total` | Redelivery; DLQ at receive 4; `BillingDLQNotEmpty` |
 | **Duplicate webhook** | Ledger PK | `200`, no work |
@@ -2923,7 +2975,7 @@ stateDiagram-v2
 | Direction | Allowed |
 |---|---|
 | **Ingress** | Ingress Envoy (`envoy-gateway-system`) → tenant routes, operator routes, `/api/v1/webhooks/stripe` on 8080; `bff` namespace pods with `app.kubernetes.io/name: bff-signup` → `/api/v1/internal/subscriptions/authorize-and-charge` on 8080 (NetworkPolicy + Istio AuthorizationPolicy on `cluster.local/ns/bff/sa/bff-signup`, method `POST`, exact path); `monitoring` → 9090 |
-| **Egress** | Provider API via the NAT allowlist (`api.stripe.com:443`); SNS, SQS, Glue endpoints; RDS `billing` (PgBouncer); Core and RP in `iam` (API port, five routes); Entitlements in `commercial` (`GET /api/v1/internal/tenants/*/entitlements`); Audit Log (AL-5); OpenBao via ESO; OTLP collector; DNS |
+| **Egress** | Provider API via the NAT allowlist (`api.stripe.com:443`); SNS, SQS, Glue endpoints; RDS `billing` (PgBouncer); Core and RP in `iam` (API port, five routes); Entitlements in `commercial` (`GET /api/v1/internal/tenants/*/entitlements`); `iam-audit-log` in `iam` on 8080 (AL-5 `POST /api/v1/internal/audit-entries[:batch]`, `platform-audit` runner); OpenBao via ESO; OTLP collector; DNS |
 
 **Billing into IAM as `commercial-system` (CD-19)** — exactly these routes; anything else is `403`:
 
@@ -2939,7 +2991,7 @@ Identity on every call: mTLS from `billing` / `commercial-billing`; headers `x-u
 
 **Billing into Entitlements** (LLD addition, BL-OQ-3): mTLS `cluster.local/ns/billing/sa/commercial-billing` on `GET /api/v1/internal/tenants/:id/entitlements`.
 
-**Billing into Audit Log** (AL-5): `cluster.local/ns/billing/sa/commercial-billing` on `POST /api/v1/internal/audit-entries` (Audit returns `403 forbidden_peer` for an unrecognised peer — admission requested in BL-OQ-10).
+**Billing into Audit Log** (AL-5): **admitted** (Audit Log rev 0.34): `cluster.local/ns/billing/sa/commercial-billing` in Audit Log's `internalCallerPrincipals`, and namespace `billing` with pod label `app.kubernetes.io/name: commercial-billing` in its `networkPolicy.internalCallers`. Billing's chart sets `serviceAccount.name: commercial-billing` explicitly and adds the egress rule above. Before go-live, `Client.Probe` from a Billing pod must return `ProbeAdmitted` in every environment (library LLD §19.2).
 
 ### 10.3 Webhook security
 
@@ -2971,7 +3023,7 @@ OpenBao via External Secrets Operator, never env literals or images (HLD §11.3)
 ### 10.6 Audit
 
 - Every `billing.events` type reaches Audit Log on `billing-audit-q` (entry types `tenant.plan_changed`, `tenant.seats_changed`, `tenant.payment_past_due`, `tenant.subscription_cancelled`, `tenant.reactivated`, `billing.token_addon.purchased`; tier `security_3y`).
-- Operator actions write AL-5 entries through `pending_audit_entries` in the same transaction: `actor {type: "user", id: <operator sub>}`, `target {type: "subscription" | "invoice" | "saga", id}`, `source_service: "commercial-billing"`, `source_event_type` (e.g. `RefundIssued`), `occurred_at`, bounded `metadata` (amounts, category, reason). Existing types: `billing.adjustment.issued`, `billing.refund.issued`, `commercial.cross_tenant_job.ran` (one per reconciliation run, `tenant_id = platform_tenant`). Requested types (BL-OQ-10): `billing.conversion.stub`, `billing.conversion.reverted`, `billing.saga.resolved`, `billing.collection.paused`, `billing.price_book.changed`. Until Audit adds them, those actions are recorded in `subscription_status_history` and logs only, and the AL-5 rows are held in `pending_audit_entries` (drainer skips `422 unknown_entry_type` with backoff; they deliver once the types exist).
+- AL-5 direct-write through `platform-audit` v0.1.2 is used **only** for what the bus cannot carry: operator actions and the cross-tenant job entry. Entries are enqueued with `Enqueuer.Enqueue` in the same transaction as the change (outbox mode) and drained by `auditoutbox.Runner`: `actor {type: "user", id: <operator sub>}`, `target {type: "subscription" | "invoice" | "saga", id}`, `source_service: "commercial-billing"`, `source_event_type` (e.g. `RefundIssued`), `occurred_at`, bounded `metadata` (amounts, category, reason). Existing types: `billing.adjustment.issued`, `billing.refund.issued`, `commercial.cross_tenant_job.ran` (one per reconciliation run, `tenant_id = platform_tenant`). Added in Audit Log rev 0.34 (BL-OQ-10, closed): `billing.conversion.stub`, `billing.conversion.reverted`, `billing.saga.resolved`, `billing.collection.paused`, `billing.price_book.changed`, `billing.provider.certified`, `billing.provider.certification_revoked` (direct-write, `security_3y`, no producer restriction). `billing.price_book.changed` and both provider-certification types use `platform_tenant`; the others use the entry's tenant. In an environment where Audit Log is older, the runner holds those rows as `skew` (`422 UNKNOWN_ENTRY_TYPE`, attempts not spent) and they deliver after Audit Log is upgraded. Automated entries (reconciliation run) use `CommercialSystemActor()`.
 - HLD §11.6 review triggers owned by Billing: signature failures above threshold; a refund or adjustment above `REVIEW_THRESHOLD_MINOR`; any RP-4 request.
 
 ---
@@ -3030,8 +3082,9 @@ Three tiers (IAM Platform Observability Standard, HLD §12.2); const labels `dom
 | `commercial_billing_reconciliation_findings` | Gauge | `kind`, `repaired` | Last run |
 | `commercial_billing_collection_paused` | Gauge | `by` | CD-24 |
 | `commercial_billing_scheduled_emissions_pending` | Gauge | `builder` | `BIL-EVT-6` queue |
-| `commercial_billing_audit_pending` | Gauge | — | `pending_audit_entries` rows |
 | `commercial_billing_provider_certified` | Gauge | `provider`, `adapter_version` | 1 if the loaded adapter version has a valid record (`BIL-PROV-1`), 0 otherwise; refreshed with the registry |
+
+**`platform-audit` (library, `service="commercial-billing"`):** `platform_audit_deliveries_total`, `platform_audit_pending_entries`, `platform_audit_failed_entries`, `platform_audit_waiting_entries`, `platform_audit_oldest_pending_age_seconds`, `platform_audit_oldest_failed_age_seconds`, `platform_audit_invalid_entries_total`, `platform_audit_delivery_lag_seconds`, `platform_audit_runner_up` and the rest of the library registry (library LLD §11.2). Alerts from `monitoring/prometheus/platform-audit.rules.yml`, routed to Billing on-call; dashboard `monitoring/grafana/platform-audit.json`. No HPA references a `platform_audit_*` metric.
 
 **Tier 1 (libraries):** `platform_http_requests_total`, `platform_http_request_duration_seconds`, `platform_dependency_request_seconds{dependency=stripe|core|realm_provisioner|entitlements|audit, operation, outcome}`, `platform_outbox_pending_events`, `platform_outbox_dead_letters`, `platform_messages_{received,processed,failed}_total{queue}`, `platform_queue_depth`, `platform_dlq_depth`, `platform_dlq_messages_total`, `platform_event_propagation_seconds`, `platform_build_info`.
 
@@ -3110,7 +3163,9 @@ Values from `deploy/helm/values.yaml` (`env:`) and OpenBao (`secretValues:` via 
 | `PG_HOST` / `PG_PORT` / `PG_DBNAME` / `PG_SSLMODE` | — / `5432` / `billing` / `require` | — | DSN (pgcommon `ConfigFromEnv`) |
 | `PG_USER` / `PG_PASSWORD` | `billing_app` / secret | — | App pool |
 | `PG_SYSTEM_USER` / `PG_SYSTEM_PASSWORD` | `billing_system` / secret | — | sysPool |
-| `MIGRATION_DATABASE_URL` | secret | — | `cmd/migrate` (`billing_migrator`) |
+| `PG_AUDIT_DRAINER_USER` / `PG_AUDIT_DRAINER_PASSWORD` | `billing_audit_drainer` / secret | — | Audit drainer pool (`auditoutbox.Runner`, §3.3); `NOBYPASSRLS` role with policy `audit_drainer_all` |
+| `PG_AUDIT_DRAINER_MAX_CONNS` | `2` | 1–5 | Audit drainer pool |
+| `MIGRATION_DATABASE_URL` | secret | **direct RDS endpoint, not PgBouncer** | `cmd/migrate` (`billing_migrator`), incl. `auditoutbox.ApplySchema` (session-scoped advisory lock) |
 | `PG_MAX_CONNS` / `PG_MIN_CONNS` / `PG_SYSTEM_MAX_CONNS` | `10` / `0` / `4` | 2–50 / 0–10 / 1–10 | Pools (HLD §7.1) |
 | `PG_STATEMENT_TIMEOUT` / `PG_LOCK_TIMEOUT` | `5s` / `2s` | 1–30 s / 0.5–10 s | Per transaction |
 | `PG_BOUNCER_MODE` | `true` | bool | PgBouncer transaction pooling |
@@ -3158,7 +3213,11 @@ Values from `deploy/helm/values.yaml` (`env:`) and OpenBao (`secretValues:` via 
 | `CORE_BASE_URL` / `CORE_TIMEOUT_MS` | — / `3000` | — / 1000–10000 | I-11, I-18 (I-18 waits up to 2 s on RP-11 inside Core) |
 | `RP_BASE_URL` / `RP_TIMEOUT_MS` | — / `30000` | — / 5000–60000 | RP-3, RP-4, RP-11 (conversion continues detached past this) |
 | `ENTITLEMENTS_BASE_URL` / `ENTITLEMENTS_TIMEOUT_MS` | — / `1000` | — / 300–5000 | B-P19 / B-P20 |
-| `AUDIT_BASE_URL` / `AUDIT_DRAIN_INTERVAL` | — / `2s` | — / 1–60 s | AL-5 drainer |
+| `AUDIT_SOURCE_SERVICE` | `commercial-billing` | fixed (CD-17) | `platform-audit`: `source_service`, key namespace |
+| `AUDIT_LOG_BASE_URL` | `http://iam-audit-log.iam.svc.cluster.local:8080` | URL; empty disables delivery (rows still queue, `PlatformAuditDeliveryStalled` fires) | `platform-audit` client |
+| `AUDIT_CALLER_DOMAIN` | `commercial` | `commercial` (fixed for Billing) | Caller role `commercial-system`, user id `…00c1`, purge actor `CommercialSystemActor()` |
+| `AUDIT_DELIVERY_INTERVAL` | `5s` | 1–60 s | `auditoutbox.Runner` tick |
+| Other `AUDIT_*` (`AUDIT_LOG_TIMEOUT`, `AUDIT_DELIVERY_BATCH_SIZE`, `AUDIT_DELIVERY_MAX_ATTEMPTS`, `AUDIT_DELIVERY_BACKOFF_MAX`, `AUDIT_DISPOSED_RETENTION`, `AUDIT_REQUIRE_CROSS_TENANT_ACCESS`, …) | library defaults | library LLD §12 | Malformed values fail startup |
 | `COMMERCIAL_SYSTEM_PRINCIPAL` | `00000000-0000-0000-0000-0000000000c1` | fixed | Outbound identity |
 | `BFF_CALLER_PRINCIPAL` | `cluster.local/ns/bff/sa/bff-signup` | SPIFFE path | `BIL-AUTH-3` |
 | `LOG_LEVEL` / `LOG_HASH_SALT` | `info` / secret | — | Logs |
@@ -3177,12 +3236,12 @@ Namespace `billing`; ServiceAccount and `app.kubernetes.io/name` `commercial-bil
 | Resource | Spec |
 |---|---|
 | `Deployment` `commercial-billing` | 2 replicas minimum; `topologySpreadConstraints` across 3 AZs; readiness `/readyz` (DB, sysPool, Glue registry resolution, SNS topic reachable); liveness `/healthz`; `terminationGracePeriodSeconds: 45` (drains workers, outbox, in-flight requests) |
-| In-pod workers | Outbox runner, webhook processor, saga worker, emission worker, audit drainer, `tenant-billing-q` and `usage-billing-q` consumers, reconciliation run executor, metric exporter. All claim rows with `SKIP LOCKED`, so every replica runs them safely without leader election |
+| In-pod workers | Outbox runner, webhook processor, saga worker, emission worker, `platform-audit` `auditoutbox.Runner` (on the `billing_audit_drainer` pool; not in `/readyz`, `Runner.Alive()` in liveness), `tenant-billing-q` and `usage-billing-q` consumers, reconciliation run executor, metric exporter. All claim rows with `SKIP LOCKED`, so every replica runs them safely without leader election |
 | `HorizontalPodAutoscaler` | min 2, max 4; CPU 70%; external metric `commercial_billing_webhook_backlog{status="received"}` > 200 |
 | `PodDisruptionBudget` | `minAvailable: 1` |
 | `Job` `<release>-migrate` | Helm pre-install / pre-upgrade hook, `cmd/migrate`, `activeDeadlineSeconds: 900` |
 | `HTTPRoute` (tenant) | `PathPrefix /api/v1/tenants/` with path match `…/subscription*`, `…/payment-methods*`, `…/invoices*`, `…/token-packs`, `…/token-addons*`, `…/billing-contact` → 8080; `SecurityPolicy` JWT + `ext_authz`, CORS for `TENANT_APP_BASE_URL`, rate limit 20 rps per tenant |
-| `HTTPRoute` (operator) | `PathPrefix /api/v1/operator/` scoped to Billing's paths; platform-realm `jwt_authn` provider (OP-G3) |
+| `HTTPRoute` (operator) | `PathPrefix /api/v1/operator/` scoped to Billing's paths; platform-realm `jwt_authn` provider (platform-edge, AuthZ LLD OP-G2). Path matches list every Billing operator route, B-O1 to B-O15 (§5.3); a route missing here is not reachable through the gateway (BL-OQ-9) |
 | `HTTPRoute` (webhook) | Exact `/api/v1/webhooks/stripe`; no JWT; `ext_authz` disabled; 50 rps |
 | `NetworkPolicy` | §10.2 |
 | Istio `AuthorizationPolicy` | B-I1 from `bff/bff-signup` only; tenant and operator routes from the gateway only |
@@ -3247,7 +3306,7 @@ Dev and staging use Stripe **test mode** keys and their own webhook endpoints; o
 
 ### 14.2 Integration tests (testcontainers-go)
 
-Postgres 16 with the real migrations and RLS; **stripe-mock** for the adapter; **floci** for SNS/SQS/Glue (publish framed, consume with dedup and DLQ); `httptest` servers for Core, RP, Entitlements and Audit returning recorded responses.
+Postgres 16 with the real migrations and RLS; **stripe-mock** for the adapter; **floci** for SNS/SQS/Glue (publish framed, consume with dedup and DLQ); `httptest` servers for Core, RP and Entitlements returning recorded responses; `platform-audit` `audittest` fake AL-5 server for Audit (one test per audited action asserts enqueue-on-commit and no entry on rollback; `audittest.RequireKnownTypes` covers every type Billing emits).
 
 | Scenario | Asserts |
 |---|---|
@@ -3271,11 +3330,11 @@ Postgres 16 with the real migrations and RLS; **stripe-mock** for the adapter; *
 | Produced events | Each produced payload validated against the **consumers'** schemas fetched in CI: Core `api/asyncapi.yaml` (`TenantPlanChangedPayload`, `TenantSeatsChangedPayload`, envelope base requiring `id`, `type`, `subject`, `source`, `tenant_id`, `time`), RP `BillingTenantReactivatedPayload` (`tenant_id` required), Audit `billingAudit*` messages; `schema-gov diff` against the registry |
 | Consumed events | RP's published `TenantConvertedPayload`, `TenantSuspendedPayload`, `TenantReactivatedPayload`, `TenantOffboardedPayload`; Usage & Metering's `UsagePeriodClosed` once published |
 | IAM routes | I-11, I-18, RP-3, RP-4, RP-11 request and response shapes and error codes from IAM's Swagger |
-| AL-5 | Request schema and `422 unknown_entry_type` handling |
+| AL-5 | Covered by `platform-audit`'s own contract suite against the pinned Audit Log release; Billing runs `audittypecheck ./...` in CI (warning) |
 
 ### 14.4 E2E (staging)
 
-Stripe test mode with **Test Clocks**: monthly and annual renewal; failed renewal → `past_due` → retries → `cancelled`; reactivation from `past_due` and from `cancelled`; scheduled downgrade with I-18 re-check; reduction across a renewal; token add-on with 3-D Secure test cards. CD-19 smoke: Billing calls each admitted route as `commercial-system` and expects `403` on RP-10 and RP-14. Operator paths once OP-G3 is live (OP-G5, joint with IAM).
+Stripe test mode with **Test Clocks**: monthly and annual renewal; failed renewal → `past_due` → retries → `cancelled`; reactivation from `past_due` and from `cancelled`; scheduled downgrade with I-18 re-check; reduction across a renewal; token add-on with 3-D Secure test cards. CD-19 smoke: Billing calls each admitted route as `commercial-system` and expects `403` on RP-10 and RP-14. Operator paths once OP-G1 to OP-G3 are done: the joint end-to-end test OP-G4 (IAM + Commercial) covers B-O1 to B-O15.
 
 ### 14.5 RLS test cases
 
@@ -3361,28 +3420,31 @@ Each item names the default the design runs with until it closes.
 | # | Question / decision | HLD ref | Owner | Default until closed | Status |
 |---|---|---|---|---|---|
 | BL-OQ-1 | **CD-24 — invoicing during an operator suspension.** Proposal §8.10: pause collection automatically (`keep_as_draft`), resume on operator reactivation, drafts decided by an operator; B-O10 override | CD-24 | Finance + Billing | Proposal on (`AUTO_PAUSE_ON_OPERATOR_SUSPENSION=true`) | Proposed |
-| BL-OQ-2 | **EVT-14 and Billing's events (blocking for direct-signup and conversion go-live).** Core's recency guard runs on `TenantSeatsChanged` too, so a newer Billing seat event applied before an in-flight `TenantConverted` makes Core skip the conversion. Ask: give `licensed_seats` its own recency mark, or do not let `TenantSeatsChanged` advance `tenants.last_event_at`. Also confirm Core's tie rule (`time ==` → skip?) | §9.3, §7.5 | IAM (Core) | `BIL-EVT-5`, `BIL-EVT-6` (120 s delay), `seat-projection-check` | **Open — raised with IAM** |
-| BL-OQ-3 | **Billing as an Entitlements caller** for `BIL-ADD-1` (finite token quota). Entitlements admits `billing` / `commercial-billing` on `GET /api/v1/internal/tenants/:id/entitlements` (NetworkPolicy + mTLS). Alternative: an `addon_eligible` field in the effective set | §5.2, §8.6.2 | Entitlements LLD | Purchase fails closed (`503`) if not admitted | Open |
-| BL-OQ-4 | **`purchased_at` on `TenantQuotaAddOnChanged`** (additive) as the 12-month expiry basis | §8.6.2, §9.4 | Entitlements LLD, Audit | Field emitted; envelope `time` equals it | Proposed |
+| BL-OQ-2 | **EVT-14 and Billing's events (blocking for direct-signup and conversion go-live).** Core's recency guard runs on `TenantSeatsChanged` too, so a newer Billing seat event applied before an in-flight `TenantConverted` makes Core skip the conversion. Ask: give `licensed_seats` its own recency mark, or do not let `TenantSeatsChanged` advance `tenants.last_event_at`. Also confirm Core's tie rule (`time ==` → skip?) | §9.3, §7.5 | IAM (Core) | `BIL-EVT-5`, `BIL-EVT-6` (120 s delay), `seat-projection-check` | **Closed** (Core, 2026-11-19): `TenantSeatsChanged` has its own watermark `tenants.seats_last_event_at` (migration `000010_seats_last_event_at`); EVT-14 split by event type, so a seat event no longer advances `last_event_at`; tie rule `time ==` → skip confirmed; regression test `TestConsumerEVT14_SeatsChangedDoesNotBlockLifecycle`. `BIL-EVT-5/6` and `seat-projection-check` stay as defence in depth |
+| BL-OQ-3 | **Billing as an Entitlements caller** for `BIL-ADD-1` (finite token quota). Entitlements admits `billing` / `commercial-billing` on `GET /api/v1/internal/tenants/:id/entitlements` (NetworkPolicy + mTLS). Alternative: an `addon_eligible` field in the effective set | §5.2, §8.6.2 | Entitlements LLD | Purchase fails closed (`503`) if not admitted | **Decided** (TL, 2026-11-19): generic `addon_eligible` rejected; Entitlements exposes resource-level eligibility (`llm_tokens`, `api_requests`) on the effective set; Billing → Entitlements **read-only** access approved (`GET /api/v1/internal/tenants/:id/entitlements` only, NetworkPolicy + mTLS for `cluster.local/ns/billing/sa/commercial-billing`). Entitlements to implement |
+| BL-OQ-4 | **`purchased_at` on `TenantQuotaAddOnChanged`** (additive) as the 12-month expiry basis | §8.6.2, §9.4 | Entitlements LLD, Audit | Field emitted; envelope `time` equals it | **Decided** (TL, 2026-11-19): Billing is the only publisher of `TenantQuotaAddOnChanged` on `billing.events`; `purchased_at` stays Billing's (payment confirmation). Entitlements withdraws its `tenant_quota_add_on_changed` |
 | BL-OQ-5 | **Launch currency.** HLD §6.3 lists USD amounts; the capability bar requires AED pricing. Which currency per market; AED and USD both in Phase 1? | §6.3, §10.7.1, CD-56 | Finance | `DEFAULT_CURRENCY=USD`, AED rows added by B-O11 | Open |
 | BL-OQ-6 | **Proration rule without a provider engine** (§8.5.3); behaviour below the minimum charge; renewal top-up kept on payment failure (§8.6.3) | CD-54 | Finance | Seconds-based, half-up; `free_until_renewal`; top-up kept | Proposed |
 | BL-OQ-7 | **CD-10 — conversion-reversal trigger.** Proposal §8.2: fraud dispute or early fraud warning on the conversion payment within 7 days → SEV-2 → operator-approved B-O8 → RP-4 | CD-10, BIZ-7 | Billing + Finance + Security | Operator-approved; `AUTO_REVERT_ON_EFW=false` | Proposed |
 | BL-OQ-8 | **BFF alignment (SGN-2).** Contract published in §5.4.2. BFF: `BILLING_TIMEOUT_MS ≥ 15000`; field mapping `PaymentToken → payment_method_ref`, `Plan → plan_code`, `Seats → licensed_seats`; 3-D Secure (`402 PAYMENT_ACTION_REQUIRED` → browser → same-key retry). Go-live order §18.7 | §10.6 | Web / growth (BFF) | `FEATURE_DIRECT_SIGNUP=false` | Open — contract published |
-| BL-OQ-9 | **Operator routes B-O6 to B-O13** for IAM's operator gateway route list and OP-G5 tests | §11.4 | IAM + platform-edge | Routes return `403` until listed | Open |
-| BL-OQ-10 | **Audit Log:** admit `cluster.local/ns/billing/sa/commercial-billing` to AL-5; add entry types `billing.conversion.stub`, `billing.conversion.reverted`, `billing.saga.resolved`, `billing.collection.paused`, `billing.price_book.changed`, `billing.provider.certified`, `billing.provider.certification_revoked` (tier `security_3y`) | §11.6, CD-21 | Audit Log | Entries held in `pending_audit_entries` | Open |
+| BL-OQ-9 | **Operator routes B-O6 to B-O15.** (a) Billing's operator `HTTPRoute` lists every operator path, B-O1 to B-O15 (Billing's own chart, §13.1). (b) IAM extends the end-to-end operator test (AuthZ Enrichment LLD §8.9.1 OP-G4), whose list covers only B-O1 to B-O5, to B-O6 to B-O15. No IAM gateway route list exists: Envoy Gateway is the only ingress, and the platform-realm `jwt_authn` provider and AuthZ Enrichment admit the whole `/api/v1/operator/` prefix | §11.4 | Billing (a); IAM + Commercial (b) | Today's `403` is the operator path being off (OP-G1 to OP-G3, `BIL-AUTH-6`), not a missing route | **Approved; IAM part merged** ([iam-authz-enrichment#43](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-authz-enrichment/pull/43), `f4af854`, 2026-11-19): AuthZ unit and e2e tests cover B-O1–B-O15. **Remaining:** (a) Billing's operator `HTTPRoute` lists B-O1 to B-O15 when Billing's chart is written. Gateway half of OP-G4 waits on BL-OQ-14 |
+| BL-OQ-10 | **Audit Log:** admit `cluster.local/ns/billing/sa/commercial-billing` to AL-5; add entry types `billing.conversion.stub`, `billing.conversion.reverted`, `billing.saga.resolved`, `billing.collection.paused`, `billing.price_book.changed`, `billing.provider.certified`, `billing.provider.certification_revoked` (tier `security_3y`) | §11.6, CD-21 | Audit Log | Entries held in `pending_audit_entries` | **Closed** (Audit Log rev 0.34: admitted; all seven types added) |
 | BL-OQ-11 | **CD-14 — financial-record retention** per jurisdiction (BIZ-5); also decides Workflow history retention | CD-14 | Finance + Legal + Billing | No financial deletion job; operational prunes only | Open |
 | BL-OQ-12 | **Notification messages (NTF-3):** seats added; reduction applied (incl. renewal above target); add-on purchased; downgrade blocked at renewal; renewal top-up charged. Add-on expiry reminder is Entitlements-driven | §10.5 | Notification + Commercial | Only past-due and cancelled emails (existing filter) | Open |
 | BL-OQ-13 | **Permission list (BIZ-6)** — six permissions in §5.2, two added here | §6.6, CD-54 | Finance + Billing | §5.2 as written | Proposed |
-| BL-OQ-14 | **CD-52 dependency** — operator path needs platform-edge OP-G3 (`jwt_authn` provider) and the OP-G5 joint test | CD-52 | Platform-edge | Operator routes `403` outside dev/test | Open (external) |
+| BL-OQ-14 | **CD-52 dependency** — operator path needs OP-G1 (Keycloak platform realm, IAM), **OP-G2** (gateway `jwt_authn` provider, platform-edge), OP-G3 (`OPERATOR_REALM_ISSUER` set and deployed, IAM), then the OP-G4 joint end-to-end test (numbering per AuthZ Enrichment LLD §8.9.1; HLD numbers differ, D-9) | CD-52 | Platform-edge (OP-G2); IAM (OP-G1, OP-G3) | Operator routes `403` outside dev/test | Open (external). **OP-G1 merged** ([iam-realm-provisioner#60](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-realm-provisioner/pull/60), `9e8fcab`): realm `bcbp-platform`, issuer `https://auth.bcbpsolutions.com/realms/bcbp-platform`, created on Realm Provisioner's next deploy; operator users still to be created by hand. **OP-G2** requested from platform edge (`op-g2-platform-edge-request.md`), not started, sole external blocker. OP-G3 after OP-G2. OP-G6 date not set |
 | BL-OQ-15 | **CD-56 follow-ups** — per-tenant provider selection once a second provider exists; moving saved payment methods and live subscriptions when a provider is removed (design in §19.3) | CD-56 | Billing + Finance | One provider; `billing_accounts.provider` fixed while live | Deferred (Phase 3) |
 | BL-OQ-16 | **Price changes for live subscriptions** — keep until next renewal (default) or grandfather longer | §6.3 | Product + Finance | Next renewal | Proposed |
 | BL-OQ-17 | **Stripe data location and processor terms** for the UAE account | §13.3 | Finance + Legal | — | Open |
 | BL-OQ-18 | **CD-55 commercial policy (BIZ-1)** — pack sizes, prices, any monthly cap | §8.6.2 | Product | `token_packs` empty → `ADDON_NOT_AVAILABLE` | Open |
-| BL-OQ-19 | **Token add-on go-live gate** — Model Gateway per-tenant limit hot reload end to end on a cluster (CD-55 dependency, CD-58) | §10.2, §17.2 | AI team | `FEATURE_TOKEN_ADDONS=false` | Open (external) |
+| BL-OQ-23 | **Audit Log:** (a) `billing-audit-q` filter adds Billing's `TenantQuotaAddOnChanged` (SRE-8, decided); (b) map `reason: refund` to a new entry type `billing.token_addon.refunded` (`security_3y`); (c) do not subscribe to any Entitlements add-on event, since Entitlements' corrections already arrive by AL-5 (`billing.token_addon.granted` / `.adjusted` / `.revoked` / `.expired`) | §11.6, CD-55 | IAM (Audit Log) | Until Audit ships it, refund events are stored as `billing.token_addon.purchased` (Audit's existing mapping ignores `reason`): mislabelled as a purchase, not lost; the payload (`reason`, negative `delta`) is kept in metadata | (a) **Closed**: `billing-audit-q` is catch-all (AL-EVT-2). (b) **Merged** ([iam-audit-log#24](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-audit-log/pull/24), `0e12f2c`): `billing.token_addon.refunded`, classified by `reason`; effective in each environment once Audit Log at or after this commit is deployed (release v0.3.0 suggested). (c) **Open**: TL to confirm Entitlements publishes no add-on event (`entitlement-audit-q` is catch-all) |
+| BL-OQ-22 | **Final prices wait on Finance's token-budget validation.** PD-LLM-1 R-3 validates the Starter / Pro / Enterprise token quotas (500K / 5M / 25M) against tier model cost; ENT-D6 validates trial token budgets. Plan prices (`plan_prices`, B-O11 / `price-book-sync`) and token-pack prices (`token_packs`, BL-OQ-18) are set after that validation. Data only; no schema or code change | §6.3, §8.6.2 | Finance + Product | Phase 1 seed (§4.2.2); `token_packs` empty → `ADDON_NOT_AVAILABLE` | Open |
+| BL-OQ-19 | **Token add-on go-live gate** — Model Gateway per-tenant limit hot reload end to end on a cluster (CD-55 dependency, CD-58) | §10.2, §17.2 | AI team | `FEATURE_TOKEN_ADDONS=false` | **Open — not proven** (AI team, 2026-11-19, draft): limit reload in 0.3 s and Envoy fail-open shown without a cluster only; nothing run through Gateway v1.2.0. Needs a cluster with Gateway, rate-limit service and Valkey (SRE / platform), then AI-1, AI-3, AI-4, AI-5. **Go-live evidence (Billing decision, 2026-11-19):** AI-1, AI-3 and AI-5 each passing on the pinned Gateway v1.2.0 image on a named cluster. AI-1 shows an entitlement change propagates within the required 60 s; AI-3 shows calls continue and the SEV-2 alert fires when the rate-limit service fails; AI-5 shows the business outcome, that a purchased add-on raises the effective allowance (plan entitlement plus add-on). AI-1 and AI-3 alone would leave the commercial add-on path unproven, so AI-5 is required before `FEATURE_TOKEN_ADDONS` is turned on |
 | BL-OQ-21 | **Who signs a certification run.** Proposal: a Commercial Team (Billing) engineer submits (B-O14) and a PCI owner group member reviews (`reviewed_by`), matching the production deploy rule (HLD §15.4) | §10.7.1, §15.4 | Commercial Team + PCI owner group | As proposed (`chk_pc_passed_reviewed`) | Proposed |
-| BL-OQ-20 | **Operator manual add-on corrections** stay an Entitlements-only action; Billing does not emit the reserved `TenantQuotaAddOnChanged` reasons in v1 (§8.11). Confirm with the Entitlements LLD | §8.6.2, §9.4 | Entitlements LLD | As written | Proposed |
+| BL-OQ-20 | **Operator manual add-on corrections** stay an Entitlements-only action; Billing does not emit the reserved `TenantQuotaAddOnChanged` reasons in v1 (§8.11). Confirm with the Entitlements LLD | §8.6.2, §9.4 | Entitlements LLD | As written | **Decided** (TL, 2026-11-19): Billing owns `purchase` and `refund`; Entitlements owns correction and expiry, on its own event. Refund emission specified (`BIL-ADD-4`) |
+| BL-OQ-24 | **`UsagePeriodClosed` contract unverified.** The Usage & Metering LLD is not written, so the consumed fields (`period_start`, `period_end`, `tokens_total`, `api_requests_total`, `addon_consumed`, `limits`, §7.1) are taken from the HLD only. Ask: Usage & Metering confirms the payload and registers the schema in Glue before Billing's `usage-billing-q` consumer is enabled | §8.7, §9.4 | Usage & Metering | Records are reference-only and nothing is priced from them (§8.12), so a mismatch affects operator / Finance views, not charges | Open (known risk; not a design sign-off blocker) |
 
-**Platform / SRE items Billing depends on:** SRE-1 (Istio `STRICT` in staging), SRE-3 (Core migration `000004` + `parked-events-replay`, before direct signup), SRE-6 (`IAMParkedTenantEventsStale` → Billing on-call), SRE-7 (remove any `membership-billing-q`), SRE-8 (`billing-audit-q` filter adds `TenantQuotaAddOnChanged`), and Commercial IaC for `billing-events`, `tenant-billing-q`, `usage-billing-q` (HLD §16 action 2).
+**Platform / SRE items Billing depends on:** SRE-1 (Istio `STRICT` in staging), SRE-3 (Core migration `000004` + `parked-events-replay`, deployed before direct signup is enabled in each environment; both confirmed in Core's repo and chart by IAM 2026-11-19; code is in Core's repo, and no service is beyond dev yet), SRE-6 (**done**: `notify_billing: "true"` on `IAMParkedTenantEventsStale`), SRE-7 (remove any `membership-billing-q`), SRE-8 (**closed**: `billing-audit-q` is catch-all, already receives `TenantQuotaAddOnChanged`), and Commercial IaC for `billing-events`, `tenant-billing-q`, `usage-billing-q` (HLD §16 action 2).
 
 ### 16.2 Discrepancies found while verifying contracts
 
@@ -3390,10 +3452,13 @@ Each item names the default the design runs with until it closes.
 |---|---|---|---|
 | D-1 | HLD §9.4 vs RP `billing-realm-q` schema | HLD: `tenant_id` rides the envelope, not `data`. RP's consumed `BillingTenantReactivatedPayload` **requires** `data.tenant_id` | Every Billing payload carries `tenant_id` in `data` as well (§7.3.1). HLD note requested |
 | D-2 | Core LLD §5.4 vs §6.1 | P-27 / I-11 text says cached 30 s under `om:seat_usage`; §6.1 says the key is declared but never populated (I-11 reads Postgres) | Billing treats I-11 as fresh; its own 30 s display cache is the only cache (§6) |
-| D-3 | Core LLD I-18 row vs CD-19 | Row still says "Auth: `RequireSystemRole` (CD-19 TODO: admit `billing` namespace)"; CD-19 is built and CI-enforced | Billing follows CD-19 (§10.2); Core row is stale text |
-| D-4 | Core LLD I-11 response vs IAM-1 | Core LLD still shows `over_cap`; IAM-1 says I-11 returns three fields | Billing reads `active_users`, `pending_invitations`, `licensed_seats` and ignores any other field |
+| D-3 | Core LLD I-18 row vs CD-19 | Row still says "Auth: `RequireSystemRole` (CD-19 TODO: admit `billing` namespace)"; CD-19 is built and CI-enforced | Billing follows CD-19 (§10.2); Core row is stale text. **Resolved** (Core, 2026-11-19): Core LLD I-18 row now documents `RequireInternalCaller()`; stale TODO removed |
+| D-4 | Core LLD I-11 response vs IAM-1 | Core LLD still shows `over_cap`; IAM-1 says I-11 returns three fields | Billing reads `active_users`, `pending_invitations`, `licensed_seats` and ignores any other field. **Resolved** (Core, 2026-11-19): `over_cap` removed from Core LLD I-11 / P-27 |
 | D-5 | HLD §3.3 vs this LLD | HLD lists `platform-gincommon` v1.6.0; this LLD uses `platform-gincommon/v2` (RFC 9457 members `errorCode`, `validationErrors`, `traceId`) | Same wire format as IAM's RFC 9457 bodies; aligned with CD-31's target. HLD note requested |
 | D-6 | HLD §9.1 table vs this LLD | `BillingPeriodRolled` listed on `billing.events` | Not emitted (§7.3.2); HLD §9.4 already says "kept or dropped by the Billing LLD" |
+| D-9 | HLD v0.64 CD-52 status row vs AuthZ Enrichment LLD §8.9.1 | HLD numbers the gateway `jwt_authn` provider OP-G3 and the end-to-end test OP-G5. AuthZ LLD (source): OP-G1 platform realm, OP-G2 gateway provider (platform-edge), OP-G3 set `OPERATOR_REALM_ISSUER` (IAM), OP-G4 end-to-end test, OP-G5 staff role `commercial_trial_manager` | This LLD uses the AuthZ LLD numbering from rev 0.11. HLD note requested |
+| D-8 | HLD §9.4 `TenantQuotaAddOnChanged.reason` vs TL decision BL-OQ-20 | HLD lists `purchase` plus reserved `promotional_grant`, `operator_correction`, `migration_credit`, `contract_entitlement` on Billing's event | Billing's enum is `purchase` \| `refund`; the correction reasons move to Entitlements' own event. HLD note requested |
+| D-7 | HLD §3.3 vs as-built IAM (rev 0.4) | Rev 0.4 found no `platform-audit` repository and planned an in-repo adapter | **Resolved, rev 0.5:** `platform-audit` v0.1.2 is released and HLD v0.64 makes it the AL-5 path for all Commercial services; Billing adopts it |
 
 ### 16.3 Disposition of the superseded draft (`hld-billing-service.md` B-1 to B-13)
 
@@ -3426,7 +3491,7 @@ Each item names the default the design runs with until it closes.
 | §8.5.1 adapter rounding and day-count | §8.5.3 (Finance to confirm) |
 | §10.6 authorize-and-charge incl. 3-D Secure | Published (§5.4.2) |
 | §10.7.1 adapter interface | §3.4 |
-| §11.4 Billing operator paths "finalised in the Billing LLD" | §5.3 (B-O1–B-O5 as HLD; B-O6–B-O13 added) |
+| §11.4 Billing operator paths "finalised in the Billing LLD" | §5.3 (B-O1–B-O5 as HLD; B-O6–B-O15 added, B-O14 and B-O15 in rev 0.3) |
 | §13.1 RTO/RPO "confirm in each service LLD" | 30 min / 5 min confirmed (§11.1, §20.6) |
 | CD-10 | Proposal (BL-OQ-7) |
 | CD-14 | Setting and placeholders (BL-OQ-11) |
@@ -3548,7 +3613,7 @@ The tenant UI's upgrade prompt recognises `SUBSCRIPTION_REQUIRED`, `PLAN_CHANGE_
 | Direction | Mechanism | Detail |
 |---|---|---|
 | Billing → Audit | `billing-audit-q` | All six event types; mapping `tenant.plan_changed`, `tenant.seats_changed`, `tenant.payment_past_due`, `tenant.subscription_cancelled`, `tenant.reactivated`, `billing.token_addon.purchased` (`security_3y`) |
-| Billing → Audit | AL-5 `POST /api/v1/internal/audit-entries` | Required: `tenant_id`, `entry_type`, `action`, `actor`, `occurred_at`, `source_service = "commercial-billing"`, `source_event_type`; `Idempotency-Key` required; `201` / `200` replay / `422 unknown_entry_type` / `403 forbidden_peer` / `503`; `metadata` ≤ 8 KiB. Delivered by the drainer from `pending_audit_entries` |
+| Billing → Audit | AL-5 `POST /api/v1/internal/audit-entries` | Required: `tenant_id`, `entry_type`, `action`, `actor`, `occurred_at`, `source_service = "commercial-billing"`, `source_event_type`; `Idempotency-Key` required; `201` / `200` replay / `422 unknown_entry_type` / `403 forbidden_peer` / `503`; `metadata` ≤ 8 KiB. Written by `platform-audit` `Enqueuer` in the business transaction and delivered by `auditoutbox.Runner` from `pending_audit_entries`; caller role `commercial-system` |
 
 ### 18.4 Entitlements
 
@@ -3629,7 +3694,7 @@ Calls B-P* through the ingress. Contract notes: show `actions_available`; on `40
 3. **Price book**: `price-book-sync.sh` creates Stripe Products and Prices per environment and posts the rows through B-O11 (operator), so `provider_price_id` is set; `manual` rows come from the seed.
 4. **Stripe**: webhook endpoint per environment with the types of §7.4; Smart Retries and "cancel subscription after final retry"; Radar on; secrets in OpenBao.
 5. **Deploy** Billing to staging (test mode); CD-19 smoke (§14.4); Test-Clock E2E.
-6. **Operator routes** usable once CD-52 OP-G3 is live; the Phase 1 stub becomes available then.
+6. **Operator routes** usable once CD-52 OP-G1 to OP-G3 are is live; the Phase 1 stub becomes available then.
 7. **Feature flags**: seat purchase on; direct signup per §18.7; token add-ons after BL-OQ-18 and BL-OQ-19.
 
 ### 19.2 Rolling upgrades
@@ -3856,7 +3921,7 @@ Every Billing item in HLD §5.1, §8, §9, §10.6, §10.7, §11.4, §12 and §17
 | §9.1.1 per-event consumer mapping | §7.3.9 |
 | §9.2 Billing-owned queues `tenant-billing-q`, `usage-billing-q` with filters | §7.1, §19.1 |
 | §9.3 envelope, SNS attributes, `source`, Glue, `time`, snapshots, outbox, inbox, re-read, provider webhooks not bus events, AsyncAPI | §7.2–§7.6, §7.4 |
-| §9.4 payloads incl. `resource` enum (v0.50) and reserved reasons | §7.3.3–§7.3.6 |
+| §9.4 payloads incl. `resource` enum (v0.50); reserved reasons moved to Entitlements' own event (BL-OQ-20, D-8) | §7.3.3–§7.3.6 |
 | §9.5 consumed external events and fields; sensitive fields | §7.1, §10.1 |
 | §10.6 Signup BFF flow, keys, activation steps, authorize-and-charge contract (all rows incl. 3-D Secure) | §5.4.2, §8.3, §18.7 |
 | §10.7.1 decision, responsibility split, adapter contract, capability bar, ledger | §3.4, §2.2, §4.2.15, §19.3 |
@@ -3870,6 +3935,6 @@ Every Billing item in HLD §5.1, §8, §9, §10.6, §10.7, §11.4, §12 and §17
 | §17.1 CD-54, CD-55, CD-56 decisions as they bind Billing | §8.5–§8.7, §3.4 |
 | §17.2 CD-10, CD-14, CD-56 follow-ups (1)–(5), CD-54 Billing items, SGN-2, `IAMParkedTenantEventsStale` routing, SRE-8, CD-55 policy | §16.1 |
 
-**Items that could not be placed in this LLD:** none of Billing's own. Three HLD statements are recorded as discrepancies rather than implemented as written: `tenant_id` only in the envelope (D-1, both are sent), `platform-gincommon` v1.6.0 (D-5, v2 used), and `BillingPeriodRolled` on the topic list (D-6, not emitted). One HLD assumption does not hold against the as-built IAM code and needs IAM: that Billing's events can be applied in any order relative to `TenantConverted` (BL-OQ-2).
+**Items that could not be placed in this LLD:** none of Billing's own. Three HLD statements are recorded as discrepancies rather than implemented as written: `tenant_id` only in the envelope (D-1, both are sent), `platform-gincommon` v1.6.0 (D-5, v2 used), and `BillingPeriodRolled` on the topic list (D-6, not emitted). D-7 (`platform-audit`) is resolved: the library is adopted. One HLD assumption does not hold against the as-built IAM code and needs IAM: that Billing's events can be applied in any order relative to `TenantConverted` (BL-OQ-2).
 
 *End of document.*
