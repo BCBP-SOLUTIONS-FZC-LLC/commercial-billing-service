@@ -5,8 +5,8 @@
 | From | Commercial Team (Billing) |
 | To | IAM: operator gateway / AuthZ Enrichment, Audit Log, Core (Org & Membership), Realm Provisioner |
 | Date | 2026-11-19 |
-| Billing LLD | `commercial-lld-billing-service.md` rev 0.13 |
-| Status | **IAM replied 2026-11-19** (`billing-iam-actions-reply.md`); #43, #24 and #60 merged the same day. Status column and checklist below reflect the reply |
+| Billing LLD | `commercial-lld-billing-service.md` rev 0.16 (A-1 to A-8 written against rev 0.13; A-9 added 2026-11-23 from rev 0.16) |
+| Status | **IAM replied 2026-11-19** (`billing-iam-actions-reply.md`); #43, #24 and #60 merged the same day. Status column and checklist below reflect the reply. **A-9 is new (2026-11-23), not yet answered** |
 | Ingress | Envoy Gateway is the only ingress. There is no IAM-side operator route list: the platform-realm `jwt_authn` provider and AuthZ Enrichment admit the whole `/api/v1/operator/` prefix, and each service exposes its own paths with its own `HTTPRoute` |
 | OP-G numbering | AuthZ Enrichment LLD §8.9.1 (OP-G1 platform realm, OP-G2 gateway provider, OP-G3 issuer, OP-G4 end-to-end test, OP-G5 staff role). The HLD's CD-52 row numbers them differently (Billing D-9) |
 | Deployment state | No service is in production; every service, Billing included, runs in dev only. "Deploy" below means promotion through dev → staging → production |
@@ -23,6 +23,7 @@
 | A-6 | Confirm no subscription to Entitlements add-on events | Audit Log | BL-OQ-23 (c) | Confirm | — | Confirmed, caveat: TL to confirm Entitlements publishes no add-on event |
 | A-7 | Deploy Core `000004` and `parked-events-replay` before direct signup, in each environment | Core + Platform/SRE | SRE-3 | Deploy ordering | Direct paid signup per environment | **Done** — confirmed in Core's repo and chart |
 | A-8 | Confirm Billing's admission on the five IAM routes | Core, Realm Provisioner | CD-19 | Confirm | Conversion, downgrade, seats, reversal | **Done** — admitted in dev, staging, prod |
+| A-9 | **New.** Cover Billing's new operator route B-O16 in OP-G4, and add AL-5 entry type `billing.invoice.suspension_disposition` | AuthZ Enrichment + Commercial (a); Audit Log (b) | BL-OQ-25 (from BL-OQ-1 / CD-24) | Test (a); Code, taxonomy (b) | B-O16 through the gateway; its audit entries | **Requested 2026-11-23** |
 
 Already closed (no action): BL-OQ-2, D-3, D-4, SRE-6 (Core); BL-OQ-10 (Audit Log rev 0.34: Billing admitted to AL-5, seven entry types added).
 
@@ -115,6 +116,45 @@ Billing calls IAM as `commercial-system` from namespace `billing` (`cluster.loca
 | RP-4 revert conversion | Realm Provisioner | Operator-approved reversal (CD-10) | To confirm |
 | RP-11 realm status | Realm Provisioner | Operator view | To confirm |
 
+## A-9 — Billing operator route B-O16 and its audit entry type (BL-OQ-25)
+
+**Why this is new.** Finance approved CD-24 on 2026-11-23 (Billing BL-OQ-1, LLD rev 0.16). When an operator suspends a tenant, Billing pauses collection, and renewal invoices created during the pause are held as drafts. Finance requires an explicit, audited operator decision on each held draft (charge it or void it), never an automatic charge on reactivation. Billing adds operator route **B-O16** for that decision.
+
+### (a) OP-G4 coverage — AuthZ Enrichment + Commercial
+
+No AuthZ code change is expected: B-O16 sits under the `/api/v1/operator/` prefix that AuthZ already admits. Billing adds it to its own operator `HTTPRoute` (LLD §13.1). Please add it to the OP-G4 per-route tests, as A-1 did for B-O6 to B-O15:
+
+| # | Method | Path | Tenant in path |
+|---|---|---|---|
+| B-O16 | `POST` | `/api/v1/operator/tenants/:id/invoices/:invoice_id/disposition` | Yes |
+
+| Case | Expected |
+|---|---|
+| Platform-realm token with `platform_operator` | Allow; `x-tenant-roles: platform_operator`, `x-user-id` = operator `sub`, `x-tenant-id` = path tenant |
+| Platform-realm token without `platform_operator` | `403` (`DENY_ROLE_INSUFFICIENT`) |
+| Tenant-realm token, any role | `403` |
+| Non-UUID tenant in path | `401` (`DENY_MALFORMED_IDENTITY`) |
+
+The gateway half runs with A-3, once OP-G2 and OP-G3 are done.
+
+### (b) New Audit entry type — Audit Log
+
+| Field | Value |
+|---|---|
+| Entry type | `billing.invoice.suspension_disposition` |
+| Tier | `security_3y` (as Billing's other operator-action types) |
+| Source | AL-5 direct-write through `platform-audit` v0.1.2 outbox mode; producer `commercial-billing` (already admitted, Audit Log rev 0.34). Not bus-sourced |
+| Actor | Operator `sub` (`x-user-id`) |
+| Tenant | Path tenant |
+| Written | Once per B-O16 decision, in the same transaction as the decision |
+| Metadata | `invoice_id`, `provider_invoice_id`, `action` (`finalize` \| `void`), `amount_minor`, `currency`, `reason` (operator text, 10–1000 characters) |
+
+**Until it ships:** entries wait in Billing's `pending_audit_entries` and drain once the type exists, as with BL-OQ-10. Nothing is lost.
+
+**No change needed for B-O10.** It keeps using `billing.collection.paused` (already in the taxonomy). The reason is now mandatory, and the metadata gains `paused` (`true` \| `false`) so "continue billing during a suspension" is recorded too. Please confirm `billing.collection.paused` accepts that extra metadata field.
+
+**BL-OQ-25 closes** when OP-G4 lists B-O16 and the Audit entry type is released. It is a go-live gate for B-O16, not a blocker for Billing's design sign-off.
+
 ---
 
 ## Checklist for IAM
@@ -128,3 +168,5 @@ Billing calls IAM as `commercial-system` from namespace `billing` (`cluster.loca
 - [x] A-6 (caveat, see reply): confirm no Entitlements add-on subscription
 - [x] A-7: Core `000004` and CronJob before direct signup, per environment
 - [x] A-8: confirm I-11, RP-3, RP-4, RP-11 admission for `commercial-billing`
+- [ ] A-9 (a): OP-G4 covers B-O16 (tenant in path), allow and deny cases
+- [ ] A-9 (b): Audit entry type `billing.invoice.suspension_disposition` (`security_3y`, AL-5 direct-write, producer `commercial-billing`)
