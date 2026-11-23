@@ -1,0 +1,13 @@
+# Billing AsyncAPI contract (LLD §7.6). Phase 0 skeleton; Phase 4 adds the
+# servers, channels and the produced and consumed payload schemas of §7.3 and §7.1.
+asyncapi: 3.0.0
+info:
+  title: commercial-billing events
+  version: 0.0.0
+  description: >-
+    billing.events produced by commercial-billing; tenant-billing-q and
+    usage-billing-q consumed. See docs/lld/commercial-lld-billing-service.md §7.
+channels: {}
+operations: {}
+components:
+  schemas: {}

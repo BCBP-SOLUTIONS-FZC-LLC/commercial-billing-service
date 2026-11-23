@@ -1,0 +1,83 @@
+// Command migrate brings the billing database to this build's schema and
+// exits (LLD §4.4, §19.1). The Helm chart runs it once per release as a
+// pre-install / pre-upgrade hook Job, so server replicas (RUN_MIGRATIONS=
+// false) never race for the migration lock.
+//
+// It connects with MIGRATION_DATABASE_URL, direct to Postgres and never
+// through PgBouncer, because the migration lock is a session-scoped advisory
+// lock. Exit status 0 on success (including "already up to date"), 1 on any
+// failure.
+//
+// Phase 0: the DSN and timeout handling are in place; the migration order of
+// §4.4 (outbox schema, platform-audit ApplySchema, then 000001 to 000005)
+// is added in Phase 2.
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/config"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/logger"
+)
+
+// defaultMigrateTimeout bounds the run, lock wait included (MIGRATE_TIMEOUT
+// overrides it, 1–30 m). Keep it below the Job's activeDeadlineSeconds.
+const defaultMigrateTimeout = 10 * time.Minute
+
+func main() { os.Exit(run()) }
+
+func run() int {
+	env := "dev"
+	for _, key := range []string{"APP_ENV", "ENVIRONMENT"} {
+		if v := strings.ToLower(strings.TrimSpace(os.Getenv(key))); v != "" {
+			env = v
+			break
+		}
+	}
+	logEnv := env
+	if config.IsDevLike(env) {
+		logEnv = "dev"
+	}
+	log, err := logger.NewLogger(logEnv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migrate: init logger: %v\n", err)
+		return 1
+	}
+	defer func() { _ = gincommon.Shutdown(log) }()
+
+	dsn := pgadapter.MigrationDSNFromEnv()
+	if dsn == "" {
+		log.Error("migrate: no database DSN; set MIGRATION_DATABASE_URL (direct to Postgres, not PgBouncer)", nil)
+		return 1
+	}
+
+	timeout := defaultMigrateTimeout
+	if v := os.Getenv("MIGRATE_TIMEOUT"); v != "" {
+		d, perr := time.ParseDuration(v)
+		if perr != nil || d < time.Minute || d > 30*time.Minute {
+			log.Error("migrate: MIGRATE_TIMEOUT must be a duration between 1m and 30m", map[string]any{"value": v})
+			return 1
+		}
+		timeout = d
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	if err := migrate(ctx); err != nil {
+		log.Error("migrate failed", map[string]any{"error": err.Error()})
+		return 1
+	}
+	return 0
+}
+
+// migrate applies the schema. Phase 2 replaces this with the §4.4 order:
+// 000000 outbox schema, platform-audit ApplySchema, then 000001 to 000005.
+func migrate(ctx context.Context) error {
+	return ctx.Err()
+}

@@ -1,0 +1,69 @@
+# Local dependencies for commercial-billing (LLD §14.2). Host ports are
+# offset from the IAM services' so both can run side by side.
+#   make docker-up   then   make run
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      # Superuser is separate; scripts/init-db.sql creates the RLS-bound roles.
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: devpassword
+      POSTGRES_DB: billing
+    ports:
+      - "5634:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d billing"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    ports:
+      - "5633:5432"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: billing_app
+      DB_PASSWORD: devpassword
+      DB_NAME: billing
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 100
+      DEFAULT_POOL_SIZE: 5
+      AUTH_TYPE: scram-sha-256
+      IGNORE_STARTUP_PARAMETERS: extra_float_digits
+      SERVER_TLS_SSLMODE: disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -p 5432 -U billing_app || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  floci:
+    # SNS + SQS + Glue Schema Registry emulator (same image as the IAM services).
+    # Phase 4 adds scripts/init-floci.sh for the billing-events topology.
+    image: floci/floci:2.1.0-compat
+    ports:
+      - "4667:4566"
+    environment:
+      FLOCI_DEFAULT_REGION: ap-south-1
+      FLOCI_DEFAULT_ACCOUNT_ID: "000000000000"
+      FLOCI_HOSTNAME: floci
+    volumes:
+      - floci_data:/app/data
+
+  stripe-mock:
+    # Stripe API mock for the adapter tests (LLD §14.2).
+    image: stripe/stripe-mock:latest
+    ports:
+      - "12111:12111"
+
+volumes:
+  postgres_data:
+  floci_data:
