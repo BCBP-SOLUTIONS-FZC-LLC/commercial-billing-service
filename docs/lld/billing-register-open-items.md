@@ -2,26 +2,26 @@
 
 | Field | Value |
 |---|---|
-| Source | `commercial-lld-billing-service.md` rev 0.26, §16.1 "Billing register" (base HLD v0.65) |
+| Source | `commercial-lld-billing-service.md` rev 0.27, §16.1 "Billing register" (base HLD v0.65) |
 | Date | 2026-11-23 |
 | From | Commercial Team (Billing) |
-| Scope | Every §16.1 row that is **not Closed**: 14 of the 26 rows. The 12 closed rows (BL-OQ-1, 2, 5, 6, 7, 10, 11, 13, 16, 17, 21, 22) are left out |
+| Scope | Every §16.1 row that is **not Closed**: 13 of the 26 rows. The 13 closed rows (BL-OQ-1, 2, 5, 6, 7, 10, 11, 13, 16, 17, 18, 21, 22) are left out |
 | Deployment state | No service is in production; all run in dev only. "Go-live" means promotion through dev → staging → production |
 
 **Closed since this list was first written:**
+- BL-OQ-18 (token packs), Product + Finance 2026-11-23: Product and Finance finalised the Phase 1 token-pack catalogue (pack sizes, prices and any caps); the pack records are loaded into the commercial catalogue (`token_packs`, B-O12). Billing's existing add-on purchase design supports it without code or design change.
 - BL-OQ-22 (final prices), Product 2026-11-23: Product completed the token-budget validation against PD-LLM-1 R-3 and ENT-D6 and finalised the Phase 1 commercial pricing; prices are loaded into `plan_prices`. Resolved through configuration/data only; no code or design change. Token-pack prices (`token_packs`) are not part of this closure and stay with BL-OQ-18.
 - BL-OQ-17 (Stripe UAE terms), Legal 2026-11-23: Legal reviewed the Stripe UAE data-location and processor terms and accepted them without required amendments. Billing may proceed with the planned Stripe UAE account configuration. No additional design, legal or implementation work remains.
 - BL-OQ-5 (launch currency), Finance 2026-11-23: USD remains the default currency. Market-specific currencies are configured through `plan_prices`; AED pricing can be introduced via B-O11 without application changes. No further design or implementation work is required.
 
 ## Read this first
 
-**None of these items blocks the design sign-off.** All nine design decisions (S-1 to S-9 in `billing-design-signoff-blockers.md`) were approved on 2026-11-23. What is left is one of four kinds:
+**None of these items blocks the design sign-off.** All nine design decisions (S-1 to S-9 in `billing-design-signoff-blockers.md`) were approved on 2026-11-23. What is left is one of three kinds (all business decisions and data items are now closed):
 
 | Kind | Meaning | Items |
 |---|---|---|
 | **Decided, to build** | The decision is made; another team has to implement it | BL-OQ-3, 4, 20 |
 | **Go-live gate** | Another team has to build, configure or deploy something before a Billing feature can be switched on. Billing's design already handles "not yet" (a feature flag, a `403` or a `503`) | BL-OQ-8, 9, 12, 14, 19, 23, 24, 25, 26 |
-| **Business decision or data** | A number, price, currency or contract term. Loaded as data or settled outside the code; no design change | BL-OQ-18 |
 | **Deferred** | Planned for a later phase | BL-OQ-15 |
 
 Each item has a **default**: what Billing does until the item closes. The system is safe in that state. It just can't offer the feature yet.
@@ -39,7 +39,6 @@ Each item has a **default**: what Billing does until the item closes. The system
 | BL-OQ-3 | Entitlements: per-resource add-on eligibility and read-only access for Billing | Entitlements | Decided, to build | Add-on purchase fails closed (`503`) | Token add-ons |
 | BL-OQ-4 | Entitlements consumes Billing's `TenantQuotaAddOnChanged` and withdraws its own | Entitlements | Decided, to build | Billing emits the event | Token add-ons |
 | BL-OQ-20 | Entitlements applies `reason: refund`; corrections stay Entitlements' own | Entitlements | Decided, to build | As written | Token add-on refunds |
-| BL-OQ-18 | Token pack sizes, prices and any monthly cap | Product | Business data | No packs → `ADDON_NOT_AVAILABLE` | Token add-ons |
 | BL-OQ-19 | Model Gateway limit hot reload proven on a real cluster | AI team (+ SRE cluster) | Go-live gate | `FEATURE_TOKEN_ADDONS=false` | Token add-ons |
 | BL-OQ-23 | Audit Log release with the `billing.token_addon.refunded` type, deployed per environment | IAM (Audit Log) | Go-live gate | Refunds recorded but labelled as purchases | Correct audit label on add-on refunds |
 | BL-OQ-24 | Usage & Metering confirms the `UsagePeriodClosed` payload | Usage & Metering | Go-live gate (known risk) | Records kept for reference only; nothing priced from them | Billing's `usage-billing-q` consumer |
@@ -51,7 +50,7 @@ Each item has a **default**: what Billing does until the item closes. The system
 |---|---|
 | Paid subscriptions through Stripe | BL-OQ-14, BL-OQ-9, BL-OQ-26 (certification) |
 | Direct paid signup | The above, plus BL-OQ-8 |
-| Token add-ons | The above, plus BL-OQ-3, 4, 18, 19 and 20; BL-OQ-23 for the correct refund audit label |
+| Token add-ons | The above, plus BL-OQ-3, 4, 19 and 20; BL-OQ-23 for the correct refund audit label |
 | Price increases for existing customers | BL-OQ-12 (the renewal price-change message) |
 
 ---
@@ -108,20 +107,6 @@ The PCI owner group names who holds the role.
 **Billing's default.** Until (b), audit entries wait in `pending_audit_entries`. B-O16 is reachable only once the operator path is live (BL-OQ-14).
 
 **To close:** IAM action **A-9** in `billing-iam-actions.md`.
-
----
-
-## Business decisions and data
-
-### BL-OQ-18 — Token pack sizes, prices and monthly cap (CD-55, BIZ-1) — Product
-
-**Question.** What token packs are sold, at what price, and is there a monthly purchase cap?
-
-**Billing's default.** The `token_packs` table is empty, so the pack list is empty and a purchase returns `ADDON_NOT_AVAILABLE`.
-
-**Why it matters.** Token add-ons can't be sold without packs. Data only.
-
-**To close:** Product defines the packs and their prices (with Finance). Plan prices are already final (BL-OQ-22, closed).
 
 ---
 
@@ -249,7 +234,6 @@ SRE-6 and SRE-8 are closed.
 | BL-OQ-26 | IAM; PCI owner group | Go-live gate | Requested (A-10) |
 | BL-OQ-9 | Billing | Go-live gate | IAM part merged; Billing `HTTPRoute` when the chart is written |
 | BL-OQ-25 | IAM | Go-live gate | Requested (A-9) |
-| BL-OQ-18 | Product | Business data | Open |
 | BL-OQ-8 | Web / growth | Go-live gate | Contract published |
 | BL-OQ-12 | Notification + Commercial | Go-live gate | Open |
 | BL-OQ-24 | Usage & Metering | Go-live gate | Open (known risk) |

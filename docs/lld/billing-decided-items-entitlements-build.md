@@ -14,7 +14,7 @@
 
 Three items in the Billing register are **decided, not open**. The Commercial TL made the decision on 2026-11-19. What's left is the build, mostly in the **Entitlements service**. Nothing here needs a meeting or a new decision. Each team needs to implement its part and confirm it.
 
-They don't block the Billing design sign-off. They do block **token add-ons**, which stay off (`FEATURE_TOKEN_ADDONS=false`) until all three are built, along with BL-OQ-18 (pack definitions) and BL-OQ-19 (Model Gateway proof).
+They don't block the Billing design sign-off. They do block **token add-ons**, which stay off (`FEATURE_TOKEN_ADDONS=false`) until all three are built, along with BL-OQ-19 (Model Gateway proof). The pack catalogue is final (BL-OQ-18, closed 2026-11-23).
 
 ## The rule behind all three
 
@@ -220,7 +220,7 @@ The operator path (BL-OQ-14: OP-G1 to OP-G4) also affects Entitlements' own oper
 3. **W-3** withdrawal, then **W-4 / W-5** consumer. Build these together: a consumer that also still publishes would create two sources for the same balance.
 4. **W-1 / W-2** eligibility and access, tested from a Billing pod (W-9, W-10).
 5. **W-12** deployed before add-on refunds are possible in that environment.
-6. Token add-ons switch on (`FEATURE_TOKEN_ADDONS=true`) only once these are done **and** BL-OQ-18 (packs) and BL-OQ-19 (Model Gateway proof) are closed.
+6. Token add-ons switch on (`FEATURE_TOKEN_ADDONS=true`) only once these are done **and** BL-OQ-19 (Model Gateway proof) is closed. Packs are already loaded (BL-OQ-18, closed).
 
 ## Checklist
 
