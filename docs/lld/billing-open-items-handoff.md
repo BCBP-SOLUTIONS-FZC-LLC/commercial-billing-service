@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Document | Hand-off of every open item in the Billing LLD, by owning team and service |
-| Billing LLD | `commercial-lld-billing-service.md` rev 0.27 (base HLD v0.65) |
+| Billing LLD | `commercial-lld-billing-service.md` rev 0.28 (base HLD v0.65) |
 | Date | 2026-11-23 |
 | From | Commercial Team (Billing) |
 | Deployment state | No service is in production; all run in dev only. "Done" means merged **and** promoted with each environment (dev → staging → production) |
@@ -31,6 +31,7 @@
 ---
 
 **Closed since first issue:**
+- Product decision memos: Product approved PD-LLM-1 (model tiers) and Entitlements approved ENT-D6 (trial profiles) on 2026-11-23. Billing continues to send plan selections only; no design or implementation change. The approvals validate the assumptions behind pricing and entitlement configuration.
 - BL-OQ-18 (token packs), Product + Finance 2026-11-23: Product and Finance finalised the Phase 1 token-pack catalogue (pack sizes, prices and any caps); the pack records are loaded into the commercial catalogue (`token_packs`, B-O12). Billing's existing add-on purchase design supports it without code or design change.
 - BL-OQ-22 (final prices), Product 2026-11-23: Product completed the token-budget validation against PD-LLM-1 R-3 and ENT-D6 and finalised the Phase 1 commercial pricing; prices are loaded into `plan_prices`. Resolved through configuration/data only; no code or design change. Token-pack prices (`token_packs`) are not part of this closure and stay with BL-OQ-18.
 - BL-OQ-17 (Stripe UAE terms), Legal 2026-11-23: Legal reviewed the Stripe UAE data-location and processor terms and accepted them without required amendments. Billing may proceed with the planned Stripe UAE account configuration. No additional design, legal or implementation work remains.
@@ -48,12 +49,12 @@
 | **PCI owner group** | — | Re-confirm §4 and §5.4.4 (rev 0.21); name the role holders | **Final sign-off**; first provider certification |
 | **Commercial Entitlements** | `commercial-entitlements-service` (`commercial` / `commercial-entitlements`) | E-1, E-2, E-4, E-5, E-7 (**claimed, unverified**); Billing consumer event names; E-6 | **Token add-ons**; plan changes reaching Entitlements |
 | **Commercial IaC / Platform-SRE** | Commercial infrastructure-as-code; clusters | Topics, registry and queues; SRE-1, SRE-3, SRE-7; Gateway test cluster | Billing events in any environment; token add-ons |
-| **AI team** | Model Gateway (Envoy AI Gateway) | BL-OQ-19 (AI-1, AI-3, AI-5); PD-LLM-1 R-1, R-2, R-4 | Token add-ons; final prices |
+| **AI team** | Model Gateway (Envoy AI Gateway) | BL-OQ-19 (AI-1, AI-3, AI-5) | Token add-ons |
 | **Web / growth** | Signup BFF | BL-OQ-8 | Direct paid signup |
 | **Notification** | `hld-notification-service` | BL-OQ-12 | Customer emails; price increases for existing customers |
 | **Usage & Metering** | `commercial-usage-metering-service` | BL-OQ-24 | Billing's usage-record consumer |
 | **Finance** | — | Four acknowledgements (§3.3) | Final sign-off |
-| **Product** | — | Approve PD-LLM-1 and ENT-D6 memos; one acknowledgement | — |
+| **Product** | — | One acknowledgement (S-6) | — |
 | **Legal** | — | One acknowledgement (S-5) | — |
 | **Commercial HLD owner** | `commercial-hld-docs` | Merge and tag HLD v0.65 | **Final sign-off** |
 | **Commercial Team (Billing)** | `commercial-billing` (`billing` / `commercial-billing`) | BL-OQ-9 (a); W-8 to W-10; contract-test gap; LLD housekeeping; push and PR; BL-OQ-15 (deferred) | Final sign-off (as approver); its own build |
@@ -217,10 +218,10 @@ The work is probably unpushed. **These items stay open until the code can be see
   AI-5 is required: AI-1 and AI-3 alone don't prove the commercial path.
 - **Done when:** all three pass, with evidence.
 
-#### PD-LLM-1 R-1, R-2, R-4 (with Product)
+#### PD-LLM-1 R-1, R-2, R-4 — not Billing items
 
-- **What:** the model list (R-1), the evaluation set and pass bar (R-2), and the Opus tier (R-4) for the tiered model profiles.
-- **Why it matters for Billing:** nothing pending. Final plan prices (BL-OQ-22) are closed; Product completed the R-3 validation on 2026-11-23. Billing's design doesn't change.
+- **What:** the model list (R-1, needs Bedrock access), the evaluation set and pass bar (R-2), and the Opus-tier rule (R-4) for the tiered model profiles.
+- **For Billing:** nothing pending. Product approved PD-LLM-1 and Entitlements approved ENT-D6 on 2026-11-23; final plan and pack prices are loaded (BL-OQ-22, BL-OQ-18). Billing sends plan selections only. Whatever remains of R-1, R-2 and R-4 is the AI team's own delivery work for the Model Gateway, tracked outside this hand-off.
 
 ### 4.7 Web / growth — Signup BFF
 
@@ -271,7 +272,6 @@ The work is probably unpushed. **These items stay open until the code can be see
 
 | # | What | Billing meanwhile | Action | Done when |
 |---|---|---|---|---|
-| Memos | Approve PD-LLM-1 (model tiers) and ENT-D6 (trial profiles), both proposed 18 Nov | Billing sends the plan only; no Billing change | Approve or amend | Memos approved |
 | Ack | S-6 renewal-repricing job and no minimum notice (§3.3) | — | Reply | Acknowledged |
 
 ### 4.12 Legal
@@ -349,7 +349,7 @@ A-10 role + PCI names holders ────────────────�
 | BL-OQ-22 | Final prices | Finance + Product | — | **Closed** 2026-11-23: plan prices loaded |
 | BL-OQ-17 | UAE Stripe terms | Finance + Legal | — | **Closed** 2026-11-23: accepted without amendments |
 | BL-OQ-18 | Token packs | Product + Finance | — | **Closed** 2026-11-23: catalogue loaded into `token_packs` |
-| Memos | PD-LLM-1, ENT-D6 approval | Product (+ AI team R-1, R-2, R-4) | — | Proposed |
+| Memos | PD-LLM-1, ENT-D6 approval | Product; Entitlements | — | **Approved** 2026-11-23 |
 | BL-OQ-9 (a) | `HTTPRoute` B-O1 to B-O17 | Commercial Team (Billing) | `commercial-billing` | Open (with chart) |
 | W-8 to W-10 | Event publish, eligibility read, egress | Commercial Team (Billing) | `commercial-billing` | Designed; to build |
 | — | Contract test incl. Entitlements schema | Commercial Team (Billing) | `commercial-billing` | Open |
