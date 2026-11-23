@@ -2,8 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Document | `commercial-lld-billing-service.md` rev 0.16 (base HLD v0.64) |
-| Progress | **2 of 9 closed** — S-1 and S-2 approved by Finance 2026-11-23 |
+| Document | `commercial-lld-billing-service.md` rev 0.17 (base HLD v0.64) |
+| Progress | **3 of 9 closed** — S-1, S-2 and S-3 approved by Finance 2026-11-23 |
 | From | Commercial Team (Billing) |
 | Date | 2026-11-23 |
 | Purpose | Lists the decisions other teams must make before the Billing LLD can be **signed off as a design** |
@@ -27,7 +27,7 @@ The Billing LLD tracks three kinds of open item. Only the first kind is in this 
 |---|---|---|---|---|---|
 | S-1 | Finance | BL-OQ-6 | How are mid-period seat purchases charged when the payment provider can't calculate proration? | ✅ **Approved 2026-11-23, unchanged**, with three record-keeping additions (see S-1). Applied in LLD rev 0.15 | — |
 | S-2 | Finance | BL-OQ-1 (CD-24) | Do we keep charging a tenant that an operator suspended? | ✅ **Approved 2026-11-23**, rules 1–4, auto-pause on. Adds new operator route B-O16 (see S-2). Applied in LLD rev 0.16 | — |
-| S-3 | Finance | BL-OQ-13 (BIZ-6) | Which roles can do which billing actions? | Six permissions, two added by the LLD (owner-only plan change and payment method) | §5.2 table and the permission code change |
+| S-3 | Finance | BL-OQ-13 (BIZ-6) | Which roles can do which billing actions? | ✅ **Approved 2026-11-23, unchanged**, plus an overlap rule (see S-3). Applied in LLD rev 0.17 | — |
 | S-4 | Finance + Security | BL-OQ-7 (CD-10) | When is a trial-to-paid conversion reversed for fraud? | Fraud dispute or early fraud warning on the conversion payment within 7 days → SEV-2 → operator approves; never automatic | §8.2 flow, B-O8 and the alert change |
 | S-5 | Finance + Legal | BL-OQ-11 (CD-14) | How long must financial records be kept, per jurisdiction? | Keep everything; no financial deletion job; operational prunes only | Billing adds a retention/deletion job (new design work) |
 | S-6 | Product + Finance | BL-OQ-16 | When a price changes, when do existing subscribers pay it? | At their next renewal | Price rows need a grandfathering period; §4.2.2 / B-O11 change |
@@ -114,7 +114,19 @@ Rule 3's sequence is now written in §8.6.3: renewal invoice → payment fails �
 
 Tender admins and members get none of these.
 
-**Decision needed:** approve the six-permission list and the role mapping.
+**Decision: ✅ Approved by Finance, 2026-11-23. Six permissions and role mapping approved without changes.**
+
+| Role | Permissions | Finance's reason |
+|---|---|---|
+| Owner | All six | The legal and commercial authority for the tenant |
+| Tenant admin | `subscription.manage`, `billing.view`, `billing.download_invoice` | Operational management and billing visibility only. Cancelling, changing plan and payment methods can create or end commitments, affect revenue or change who pays, so they stay owner-only (least privilege) |
+| Tender admin, member | None | Procurement and workflow roles; mixing them with billing authority risks unauthorised commercial actions |
+
+Finance noted that the model gives complete coverage (every billing action maps to exactly one permission), separates operational, commercial and payment authority, and allows custom or delegated finance roles later without redesigning Billing's authorization.
+
+**Finance's overlap rule, now in §5.2:** *"Changing a payment method used for future invoices, updating billing-contact information, and initiating any action that can create a new contractual commitment require `commercial.payment_method.manage` or `commercial.subscription.change_plan` respectively, regardless of any other billing permissions."*
+
+**One interpretation, written into §5.2 so the rule can't conflict with the approved table:** a "new contractual commitment" means starting a paid subscription or converting a trial, changing tier (including scheduling a downgrade) and reactivating. Buying seats or add-ons within the current subscription, and scheduling a seat reduction, stay under `subscription.manage`, which Finance approved for tenant admins. New invariant `BIL-AUTH-7`: the two owner-only permissions are never implied by any other permission. No route or permission changed.
 
 ### S-4 — Conversion reversal for fraud (BL-OQ-7, CD-10) — Finance + Security
 
@@ -218,7 +230,7 @@ Tender admins and members get none of these.
 |---|---|---|---|---|
 | S-1 | Finance | Finance | ✅ Approved, rules 1–3 unchanged; three record-keeping additions applied (LLD rev 0.15) | 2026-11-23 |
 | S-2 | Finance | Finance | ✅ Approved, rules 1–4, auto-pause `true`; B-O16 and retry freeze added (LLD rev 0.16) | 2026-11-23 |
-| S-3 | Finance | | | |
+| S-3 | Finance | Finance | ✅ Approved unchanged; overlap rule and `BIL-AUTH-7` added (LLD rev 0.17) | 2026-11-23 |
 | S-4 | Finance | | | |
 | S-4 | Security | | | |
 | S-5 | Finance | | | |
