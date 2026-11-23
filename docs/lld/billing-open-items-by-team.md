@@ -1,6 +1,6 @@
 # Billing Service — Open Items by Team
 
-Source: `commercial-lld-billing-service.md` rev 0.20 (2026-11-23; base HLD v0.64), updated with the team responses, the Commercial TL decisions and the AI team reply (draft) of 2026-11-19 (`billing-open-items-team-response.md` and `billing-reply-ai-team.md`, not yet in this repository), §16.1 register, §16.2 discrepancies, platform/SRE dependencies, and the ENT-D3 / ENT-D6 product memos. Item IDs match the LLD. **Deployment state:** no service is in production; every service, Billing included, runs in dev only. "Deploy" items below are environment-promotion steps, not production fixes. Where several teams share an item, it is listed under each, with the lead team first.
+Source: `commercial-lld-billing-service.md` rev 0.21 (2026-11-23; base HLD v0.64), updated with the team responses, the Commercial TL decisions and the AI team reply (draft) of 2026-11-19 (`billing-open-items-team-response.md` and `billing-reply-ai-team.md`, not yet in this repository), §16.1 register, §16.2 discrepancies, platform/SRE dependencies, and the ENT-D3 / ENT-D6 product memos. Item IDs match the LLD. **Deployment state:** no service is in production; every service, Billing included, runs in dev only. "Deploy" items below are environment-promotion steps, not production fixes. Where several teams share an item, it is listed under each, with the lead team first.
 
 **Status key:** **Decided** = TL decision made; owning team to implement · **Conflict** = a team answered, but the answer contradicts the HLD or Billing's need · **Open** = needs an answer · **Proposed** = Billing has a proposal; needs sign-off · **External** = depends on another team's delivery · **Deferred** = later phase.
 
@@ -10,20 +10,20 @@ Source: `commercial-lld-billing-service.md` rev 0.20 (2026-11-23; base HLD v0.64
 |---|---|---|
 | IAM — Core (Org & Membership) | SRE-3 (code ready; ships with Core's environment promotion) | SRE-3 (direct signup). BL-OQ-2, D-3, D-4, SRE-6 closed |
 | IAM — Audit Log | BL-OQ-23 (SRE-8 filter, refund entry type) | Token add-on refund audit |
-| IAM — Operator path / platform-edge | BL-OQ-9 (b) OP-G4 coverage; BL-OQ-14; BL-OQ-25 (B-O16 test + Audit type); OP-G1, OP-G3, OP-G6 (IAM); **OP-G2 (Platform edge)** | Every operator route `403` until OP-G1 to OP-G3; OP-G2 is the external blocker |
+| IAM — Operator path / platform-edge | BL-OQ-9 (b) OP-G4 coverage; BL-OQ-14; BL-OQ-25 (B-O16 test + Audit type); BL-OQ-26 (`pci_owner_reviewer` role, B-O17 test + Audit type); OP-G1, OP-G3, OP-G6 (IAM); **OP-G2 (Platform edge)** | Every operator route `403` until OP-G1 to OP-G3; OP-G2 is the external blocker |
 | Entitlements | BL-OQ-3, BL-OQ-4, BL-OQ-20, read-only access (all **decided**, to implement) | BL-OQ-3 (add-on purchase needs per-resource eligibility and access) |
 | Finance | BL-OQ-5, 15, 17, 22; PD-LLM-1 R-3; ENT-D6 budgets | BL-OQ-5 (launch currency), BL-OQ-22 (final prices) |
 | Product | BL-OQ-18, 22; PD-LLM-1 and ENT-D6 approval; **PD-LLM-1 R-4 (Opus tier)**; R-1 model list; R-2 evaluation set and pass bar | BL-OQ-18 (token add-ons have no packs) |
 | Legal | BL-OQ-17 | BL-OQ-17 (UAE Stripe account) |
 | Security | — (BL-OQ-7 closed 2026-11-23) | — |
-| PCI owner group | BL-OQ-21 | First provider certification run |
+| PCI owner group | Name the `pci_owner_reviewer` role holders (BL-OQ-26) | First provider certification run (needs BL-OQ-26) |
 | Web / growth (Signup BFF) | BL-OQ-8 | Direct paid signup (`FEATURE_DIRECT_SIGNUP=false`) |
 | Notification | BL-OQ-12 | Price increases for live subscribers are shown only on the Billing page until the renewal price-change message ships |
 | AI team | BL-OQ-19; PD-LLM-1 R-1, R-2, R-4 (none can close without another team) | Token add-ons (`FEATURE_TOKEN_ADDONS=false`) — waits on a cluster |
 | Platform / SRE | SRE-1, SRE-3, SRE-7, SRE-8, Commercial IaC, audit DB setup; **cluster for Gateway tests; Bedrock access in `ap-south-1`** | Deploy prerequisites; BL-OQ-19 test cluster |
 | Usage & Metering | BL-OQ-24 (`UsagePeriodClosed` contract; LLD not written) | — (reference-only records; known risk) |
 | Commercial HLD owner / TL | D-1, D-5, D-8, D-9 (HLD notes); BL-OQ-23 (c) confirmation | — (BL-OQ-3/4/20 decided 2026-11-19) |
-| Commercial Team (Billing) | BL-OQ-15, 21 (co-owner) | — |
+| Commercial Team (Billing) | BL-OQ-15 (co-owner) | — |
 
 ---
 
@@ -57,6 +57,7 @@ All Core-owned items closed on 2026-11-19.
 | BL-OQ-9 | (a) **Billing:** its operator `HTTPRoute` lists every operator path, B-O1 to B-O15 (Billing chart, LLD §13.1). (b) **IAM:** OP-G4 covers only B-O1 to B-O5 (Commercial's 28 Oct list); extend it to B-O6 to B-O15 | `403` until OP-G1 to OP-G3 are done (the path is off, not a missing route) | **Approved; IAM part merged** ([iam-authz-enrichment#43](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-authz-enrichment/pull/43)). Remaining: Billing's `HTTPRoute` lists B-O1–B-O15 |
 | BL-OQ-14 | **CD-52:** Billing's operator routes work only after OP-G1 to OP-G3, then the joint OP-G4 run per environment. Expected denials (IAM HLD §5.4): no `platform_operator` → `403 DENY_ROLE_INSUFFICIENT`; tenant token on an operator route → `403`; malformed tenant in the path → **`401` `DENY_MALFORMED_IDENTITY`** | Operator routes `403 INSUFFICIENT_ROLE` outside dev/test (`BIL-AUTH-6`); no Billing bypass | Open (external) — waits on OP-G2 (Platform edge) and OP-G6 date |
 | BL-OQ-25 | **New (from BL-OQ-1, 2026-11-23; IAM action A-9).** (a) AuthZ Enrichment: add B-O16 `POST /api/v1/operator/tenants/:id/invoices/:invoice_id/disposition` (tenant in path) to the OP-G4 test list. (b) Audit Log: new AL-5 entry type `billing.invoice.suspension_disposition` (`security_3y`). Billing adds B-O16 to its operator `HTTPRoute` | AL-5 entries wait in `pending_audit_entries`; route `403` until the operator path is live | Open (go-live gate) |
+| BL-OQ-26 | **New (from BL-OQ-21, 2026-11-23; IAM action A-10).** (a) Realm Provisioner / Keycloak: platform-realm role `pci_owner_reviewer`, held only by PCI owner group members; AuthZ Enrichment passes it in `x-tenant-roles` on the operator path. (b) AuthZ Enrichment: OP-G4 covers B-O17 `POST /api/v1/operator/billing/provider-certifications/:id/review` (no tenant in path). (c) Audit Log: AL-5 entry type `billing.provider.certification_reviewed` (`security_3y`) | B-O17 answers `403` until (a); AL-5 entries wait in `pending_audit_entries` until (c) | Open (go-live gate for the first provider certification) |
 
 ## Entitlements
 
@@ -123,7 +124,7 @@ No Billing design change follows from either memo (LLD rev 0.6, §8.4.3).
 
 | ID | Item | Billing default until closed | Status |
 |---|---|---|---|
-| BL-OQ-21 | Who signs a provider certification run: a Billing engineer submits (B-O14), a PCI owner group member reviews (`reviewed_by`), as for production deploys | Enforced by `chk_pc_passed_reviewed` | Proposed |
+| BL-OQ-21 | Who signs a provider certification run: a Billing engineer submits (B-O14), a PCI owner group member reviews (`reviewed_by`), as for production deploys | Reviewer approves through B-O17 (`pci_owner_reviewer`); `chk_pc_two_people`, `trg_pc_guard` | **Closed** (PCI owner group approved 2026-11-23, review complete; LLD rev 0.21; follow-up BL-OQ-26) |
 
 ## Web / growth (Signup BFF)
 
@@ -192,7 +193,7 @@ Limiting the evidence to AI-1 and AI-3, as the AI team proposed, would leave the
 
 ## Commercial Team (Billing) — co-owned items
 
-BL-OQ-15, BL-OQ-21: Billing drafted each proposal and needs the partner team's sign-off listed above.
+BL-OQ-15: Billing drafted each proposal and needs the partner team's sign-off listed above.
 
 ## Closed since the last revision
 

@@ -5,8 +5,8 @@
 | From | Commercial Team (Billing) |
 | To | IAM: operator gateway / AuthZ Enrichment, Audit Log, Core (Org & Membership), Realm Provisioner |
 | Date | 2026-11-19 |
-| Billing LLD | `commercial-lld-billing-service.md` rev 0.16 (A-1 to A-8 written against rev 0.13; A-9 added 2026-11-23 from rev 0.16) |
-| Status | **IAM replied 2026-11-19** (`billing-iam-actions-reply.md`); #43, #24 and #60 merged the same day. Status column and checklist below reflect the reply. **A-9 is new (2026-11-23), not yet answered** |
+| Billing LLD | `commercial-lld-billing-service.md` rev 0.21 (A-1 to A-8 written against rev 0.13; A-9 added 2026-11-23 from rev 0.16; A-10 added 2026-11-23 from rev 0.21) |
+| Status | **IAM replied 2026-11-19** (`billing-iam-actions-reply.md`); #43, #24 and #60 merged the same day. Status column and checklist below reflect the reply. **A-9 and A-10 are new (2026-11-23), not yet answered** |
 | Ingress | Envoy Gateway is the only ingress. There is no IAM-side operator route list: the platform-realm `jwt_authn` provider and AuthZ Enrichment admit the whole `/api/v1/operator/` prefix, and each service exposes its own paths with its own `HTTPRoute` |
 | OP-G numbering | AuthZ Enrichment LLD §8.9.1 (OP-G1 platform realm, OP-G2 gateway provider, OP-G3 issuer, OP-G4 end-to-end test, OP-G5 staff role). The HLD's CD-52 row numbers them differently (Billing D-9) |
 | Deployment state | No service is in production; every service, Billing included, runs in dev only. "Deploy" below means promotion through dev → staging → production |
@@ -24,6 +24,7 @@
 | A-7 | Deploy Core `000004` and `parked-events-replay` before direct signup, in each environment | Core + Platform/SRE | SRE-3 | Deploy ordering | Direct paid signup per environment | **Done** — confirmed in Core's repo and chart |
 | A-8 | Confirm Billing's admission on the five IAM routes | Core, Realm Provisioner | CD-19 | Confirm | Conversion, downgrade, seats, reversal | **Done** — admitted in dev, staging, prod |
 | A-9 | **New.** Cover Billing's new operator route B-O16 in OP-G4, and add AL-5 entry type `billing.invoice.suspension_disposition` | AuthZ Enrichment + Commercial (a); Audit Log (b) | BL-OQ-25 (from BL-OQ-1 / CD-24) | Test (a); Code, taxonomy (b) | B-O16 through the gateway; its audit entries | **Requested 2026-11-23** |
+| A-10 | **New.** Platform-realm role `pci_owner_reviewer` passed to Billing; OP-G4 coverage of B-O17; AL-5 entry type `billing.provider.certification_reviewed` | Realm Provisioner / Keycloak + AuthZ Enrichment (a); AuthZ Enrichment + Commercial (b); Audit Log (c) | BL-OQ-26 (from BL-OQ-21) | Config + Test + Code (taxonomy) | First payment-provider certification | Not started |
 
 Already closed (no action): BL-OQ-2, D-3, D-4, SRE-6 (Core); BL-OQ-10 (Audit Log rev 0.34: Billing admitted to AL-5, seven entry types added).
 
@@ -157,6 +158,53 @@ The gateway half runs with A-3, once OP-G2 and OP-G3 are done.
 
 ---
 
+## A-10 — PCI reviewer role and Billing operator route B-O17 (BL-OQ-26)
+
+**Why this is new.** The PCI owner group approved Billing's certification rule on 2026-11-23 (Billing BL-OQ-21, LLD rev 0.21): a Billing engineer runs the payment-provider certification suite, and a **different** PCI owner group member approves it. PCI recommended that approval be restricted to the PCI owner group. Billing therefore splits submission from approval: B-O14 records a run as `pending_review`, and new route **B-O17** lets the reviewer approve or reject it. Billing must be able to tell that the caller is a PCI owner group member, which needs a role from IAM.
+
+### (a) Role `pci_owner_reviewer` — Realm Provisioner / Keycloak + AuthZ Enrichment
+
+| Item | Request |
+|---|---|
+| Realm | Platform realm (OP-G1), alongside `platform_operator` |
+| Holders | PCI owner group members only. The PCI owner group names them; it is never granted by default |
+| Header | AuthZ Enrichment passes it in `x-tenant-roles` on the operator path, for example `x-tenant-roles: platform_operator,pci_owner_reviewer`. Billing checks both on B-O17 only |
+| Precedent | Same shape as the staff role in OP-G5 (`commercial_trial_manager`) |
+| Audit | Role grants and removals audited as for other platform-realm roles |
+
+Please confirm whether AuthZ Enrichment forwards additional platform-realm roles in `x-tenant-roles` today, or whether this needs a change.
+
+### (b) OP-G4 coverage — AuthZ Enrichment + Commercial
+
+| # | Method | Path | Tenant in path |
+|---|---|---|---|
+| B-O17 | `POST` | `/api/v1/operator/billing/provider-certifications/:id/review` | No (global) |
+
+| Case | Expected |
+|---|---|
+| Platform-realm token with `platform_operator` and `pci_owner_reviewer` | Allow; both roles in `x-tenant-roles`, `x-user-id` = reviewer `sub` |
+| Platform-realm token with `platform_operator` only | Allowed through AuthZ; Billing answers `403 INSUFFICIENT_ROLE` (end-to-end test asserts the `403`) |
+| Platform-realm token without `platform_operator` | `403` (`DENY_ROLE_INSUFFICIENT`) |
+| Tenant-realm token, any role | `403` |
+
+### (c) New Audit entry type — Audit Log
+
+| Field | Value |
+|---|---|
+| Entry type | `billing.provider.certification_reviewed` |
+| Tier | `security_3y` |
+| Source | AL-5 direct-write through `platform-audit` v0.1.2 outbox mode; producer `commercial-billing`. Not bus-sourced |
+| Actor | Reviewer `sub` (`x-user-id`) |
+| Tenant | `platform_tenant` (global record, as `billing.provider.certified`) |
+| Written | Once per B-O17 decision, in the same transaction |
+| Metadata | `certification_id`, `decision` (`approve` \| `reject`), `provider`, `adapter_version`, `suite_version`, `certified_by` (submitter `sub`), `reason` |
+
+**Until it ships:** entries wait in Billing's `pending_audit_entries`, as with A-9.
+
+**BL-OQ-26 closes** when the role is live and passed to Billing in each environment, OP-G4 lists B-O17, and the Audit entry type is released. It is a go-live gate for the first provider certification, not a blocker for Billing's design sign-off.
+
+---
+
 ## Checklist for IAM
 
 - [x] A-1 (#43 merged): OP-G4 covers B-O6 to B-O15 → with Billing's `HTTPRoute` change, **BL-OQ-9 closed**
@@ -170,3 +218,6 @@ The gateway half runs with A-3, once OP-G2 and OP-G3 are done.
 - [x] A-8: confirm I-11, RP-3, RP-4, RP-11 admission for `commercial-billing`
 - [ ] A-9 (a): OP-G4 covers B-O16 (tenant in path), allow and deny cases
 - [ ] A-9 (b): Audit entry type `billing.invoice.suspension_disposition` (`security_3y`, AL-5 direct-write, producer `commercial-billing`)
+- [ ] A-10 (a): platform-realm role `pci_owner_reviewer` (PCI owner group members only), forwarded in `x-tenant-roles` on the operator path
+- [ ] A-10 (b): OP-G4 covers B-O17 (no tenant in path), allow and deny cases
+- [ ] A-10 (c): Audit entry type `billing.provider.certification_reviewed` (`security_3y`, AL-5 direct-write, producer `commercial-billing`)

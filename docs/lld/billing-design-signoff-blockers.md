@@ -2,8 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Document | `commercial-lld-billing-service.md` rev 0.20 (base HLD v0.64) |
-| Progress | **6 of 9 closed** — S-1, S-2 and S-3 approved by Finance; S-4 by Finance and Security; S-5 by Finance and Legal; S-6 by Product and Finance (all 2026-11-23) |
+| Document | `commercial-lld-billing-service.md` rev 0.21 (base HLD v0.64) |
+| Progress | **7 of 9 closed** — S-1, S-2 and S-3 approved by Finance; S-4 by Finance and Security; S-5 by Finance and Legal; S-6 by Product and Finance; S-7 by the PCI owner group (all 2026-11-23) |
 | From | Commercial Team (Billing) |
 | Date | 2026-11-23 |
 | Purpose | Lists the decisions other teams must make before the Billing LLD can be **signed off as a design** |
@@ -31,7 +31,7 @@ The Billing LLD tracks three kinds of open item. Only the first kind is in this 
 | S-4 | Finance + Security | BL-OQ-7 (CD-10) | When is a trial-to-paid conversion reversed for fraud? | ✅ **Approved 2026-11-23 by Finance and Security, unchanged** (see S-4). Recorded in LLD rev 0.18 | — |
 | S-5 | Finance + Legal | BL-OQ-11 (CD-14) | How long must financial records be kept, per jurisdiction? | ✅ **Approved 2026-11-23 by Finance and Legal**: keep indefinitely, no deletion or minimisation job (see S-5). Applied in LLD rev 0.19 | — |
 | S-6 | Product + Finance | BL-OQ-16 | When a price changes, when do existing subscribers pay it? | ✅ **Approved 2026-11-23 by Product and Finance**: next renewal, no grandfathering (see S-6). Applied in LLD rev 0.20 | — |
-| S-7 | PCI owner group | BL-OQ-21 + review | Who may mark a payment provider as certified? Plus PCI review of §4, §5.4.4, §10 | A Billing engineer submits, a PCI owner group member reviews; enforced in the database | `provider_certifications` constraint and B-O14 change |
+| S-7 | PCI owner group | BL-OQ-21 + review | Who may mark a payment provider as certified? Plus PCI review of §4, §5.4.4, §10 | ✅ **Approved 2026-11-23**, review complete with no blocking findings; reviewer now approves through new route B-O17 (see S-7). Applied in LLD rev 0.21 | — |
 | S-8 | Commercial TL + Entitlements | BL-OQ-23 (c) | Does Entitlements publish any add-on balance event? | No; Audit gets those changes only through AL-5 | Audit Log needs a new LLD decision; event contracts change |
 | S-9 | Commercial HLD owner | D-1, D-5, D-8, D-9 | Will the HLD be corrected where the LLD knowingly differs? | LLD follows the source system or TL decision; HLD notes requested | Until fixed, the signed LLD contradicts the signed HLD |
 
@@ -244,6 +244,28 @@ Also added: invariant `BIL-SUB-8` (price changes only at renewal or with a custo
 1. Approve the submitter/reviewer rule.
 2. Complete the PCI review of LLD §4 (data model), §5.4.4 (operator routes) and §10 (security). This review is part of sign-off, not a separate step.
 
+**Decision: ✅ Approved by the PCI owner group, 2026-11-23. Submitter/reviewer rule approved; PCI review of §4, §5.4.4 and §10 complete with no blocking findings.**
+
+| Area | Result | PCI recommendation (non-blocking) |
+|---|---|---|
+| Submitter/reviewer rule | Approved: a Billing engineer runs the suite, a different PCI owner group member approves, no self-approval, `passed` needs a recorded reviewer | — |
+| §4 Data model | Approved | Submitter, reviewer, timestamps, status transitions and evidence references immutable after approval, except through controlled operator actions |
+| §5.4.4 Operator routes | Approved | Restrict approval to the PCI owner group; keep auditing approval, rejection and recertification |
+| §10 Security | Approved: separation of duties, dual-person review, auditable approvals, consistent with the production-deploy rule | — |
+
+PCI's risk statement: the main risk is one engineer certifying and approving an adapter that then carries customer payments; the rule removes it.
+
+**What the Commercial Team changed to meet the two recommendations (LLD rev 0.21):**
+
+| Recommendation | Gap in the reviewed design | Change |
+|---|---|---|
+| Approval restricted to the PCI owner group | The submitter typed the reviewer's user id into B-O14; the reviewer never signed in, and Billing never checked group membership | B-O14 now records the run as `pending_review`. **New route B-O17**: the reviewer approves or rejects it themselves, needs the new platform-realm role `pci_owner_reviewer`, and cannot be the submitter (`422 SELF_REVIEW_NOT_ALLOWED`; database `chk_pc_two_people`). Only B-O17 can set `passed` |
+| Immutability after approval | Nothing stopped an update to an approved row | Trigger `trg_pc_guard`: rows are never deleted; only the review decision and the revocation of a `passed` record may change a row; run data, results, evidence references and submitter are fixed at insert |
+
+New invariant `BIL-PROV-4`. The PCI owner group may want to glance at B-O17 (LLD §5.4.4), since it tightens what they approved rather than loosening it.
+
+**Follow-up (go-live gate, not a design blocker): BL-OQ-26 / IAM action A-10.** IAM creates the `pci_owner_reviewer` role and passes it to Billing, covers B-O17 in OP-G4, and adds the Audit entry type. The PCI owner group names who holds the role. Until then no provider can be certified.
+
 ---
 
 ## Commercial TL (with Entitlements)
@@ -298,7 +320,7 @@ Also added: invariant `BIL-SUB-8` (price changes only at renewal or with a custo
 | S-5 | Legal | Legal | ✅ Approved, with the governance note for future jurisdictions (LLD rev 0.19) | 2026-11-23 |
 | S-6 | Product | Product | ✅ Approved: next renewal, no grandfathering; notice required before a higher price (LLD rev 0.20) | 2026-11-23 |
 | S-6 | Finance | Finance | ✅ Approved: next renewal, no grandfathering (LLD rev 0.20) | 2026-11-23 |
-| S-7 | PCI owner group | | | |
+| S-7 | PCI owner group | PCI owner group | ✅ Approved; PCI review of §4, §5.4.4, §10 complete, no blocking findings. B-O17 and `trg_pc_guard` added for its recommendations (LLD rev 0.21) | 2026-11-23 |
 | S-8 | Commercial TL | | | |
 | S-8 | Entitlements | | | |
 | S-9 | Commercial HLD owner | | | |
