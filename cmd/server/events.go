@@ -23,11 +23,9 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
 )
 
-// Bus timing (§7.1, §7.3.8). The outbox claim lease must outlive a batch's
-// publish time; the library re-claims rows whose lease expired. The SQS
-// handler timeout stays well inside the visibility timeout.
+// Bus timing (§7.1, §7.3.8). The SQS handler timeout stays well inside the
+// visibility timeout.
 const (
-	outboxClaimLease     = 2 * time.Minute
 	outboxPublishTimeout = 10 * time.Second
 	sqsHandlerTimeout    = 20 * time.Second
 	sqsDrainTimeout      = 15 * time.Second
@@ -108,8 +106,15 @@ func outboxRunner(ctx context.Context, cfg config.Config, awsCfg aws.Config, app
 	return outbox.NewRunner(outbox.Config{
 		Pool: appPool, Publisher: pub, Logger: log,
 		PollInterval: cfg.OutboxPollInterval, BatchSize: cfg.OutboxBatchSize, MaxAttempts: cfg.OutboxMaxAttempts,
-		ClaimLeaseDuration: outboxClaimLease, PublishTimeout: outboxPublishTimeout,
+		ClaimLeaseDuration: outboxClaimLease(cfg.OutboxBatchSize), PublishTimeout: outboxPublishTimeout,
 	})
+}
+
+// outboxClaimLease outlives the worst-case publish time of a claimed batch,
+// so a slow batch is never re-claimed and published twice; platform-events
+// requires at least BatchSize×PublishTimeout + 1 min. Floor 10 min (IAM).
+func outboxClaimLease(batchSize int) time.Duration {
+	return max(10*time.Minute, time.Duration(batchSize)*outboxPublishTimeout+2*time.Minute)
 }
 
 // sqsConsumers builds tenant-billing-q and usage-billing-q (§7.1).
