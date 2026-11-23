@@ -1,6 +1,6 @@
 # Billing Service — Open Items by Team
 
-Source: `commercial-lld-billing-service.md` rev 0.19 (2026-11-23; base HLD v0.64), updated with the team responses, the Commercial TL decisions and the AI team reply (draft) of 2026-11-19 (`billing-open-items-team-response.md` and `billing-reply-ai-team.md`, not yet in this repository), §16.1 register, §16.2 discrepancies, platform/SRE dependencies, and the ENT-D3 / ENT-D6 product memos. Item IDs match the LLD. **Deployment state:** no service is in production; every service, Billing included, runs in dev only. "Deploy" items below are environment-promotion steps, not production fixes. Where several teams share an item, it is listed under each, with the lead team first.
+Source: `commercial-lld-billing-service.md` rev 0.20 (2026-11-23; base HLD v0.64), updated with the team responses, the Commercial TL decisions and the AI team reply (draft) of 2026-11-19 (`billing-open-items-team-response.md` and `billing-reply-ai-team.md`, not yet in this repository), §16.1 register, §16.2 discrepancies, platform/SRE dependencies, and the ENT-D3 / ENT-D6 product memos. Item IDs match the LLD. **Deployment state:** no service is in production; every service, Billing included, runs in dev only. "Deploy" items below are environment-promotion steps, not production fixes. Where several teams share an item, it is listed under each, with the lead team first.
 
 **Status key:** **Decided** = TL decision made; owning team to implement · **Conflict** = a team answered, but the answer contradicts the HLD or Billing's need · **Open** = needs an answer · **Proposed** = Billing has a proposal; needs sign-off · **External** = depends on another team's delivery · **Deferred** = later phase.
 
@@ -12,13 +12,13 @@ Source: `commercial-lld-billing-service.md` rev 0.19 (2026-11-23; base HLD v0.64
 | IAM — Audit Log | BL-OQ-23 (SRE-8 filter, refund entry type) | Token add-on refund audit |
 | IAM — Operator path / platform-edge | BL-OQ-9 (b) OP-G4 coverage; BL-OQ-14; BL-OQ-25 (B-O16 test + Audit type); OP-G1, OP-G3, OP-G6 (IAM); **OP-G2 (Platform edge)** | Every operator route `403` until OP-G1 to OP-G3; OP-G2 is the external blocker |
 | Entitlements | BL-OQ-3, BL-OQ-4, BL-OQ-20, read-only access (all **decided**, to implement) | BL-OQ-3 (add-on purchase needs per-resource eligibility and access) |
-| Finance | BL-OQ-5, 15, 16, 17, 22; PD-LLM-1 R-3; ENT-D6 budgets | BL-OQ-5 (launch currency), BL-OQ-22 (final prices) |
-| Product | BL-OQ-16, 18, 22; PD-LLM-1 and ENT-D6 approval; **PD-LLM-1 R-4 (Opus tier)**; R-1 model list; R-2 evaluation set and pass bar | BL-OQ-18 (token add-ons have no packs) |
+| Finance | BL-OQ-5, 15, 17, 22; PD-LLM-1 R-3; ENT-D6 budgets | BL-OQ-5 (launch currency), BL-OQ-22 (final prices) |
+| Product | BL-OQ-18, 22; PD-LLM-1 and ENT-D6 approval; **PD-LLM-1 R-4 (Opus tier)**; R-1 model list; R-2 evaluation set and pass bar | BL-OQ-18 (token add-ons have no packs) |
 | Legal | BL-OQ-17 | BL-OQ-17 (UAE Stripe account) |
 | Security | — (BL-OQ-7 closed 2026-11-23) | — |
 | PCI owner group | BL-OQ-21 | First provider certification run |
 | Web / growth (Signup BFF) | BL-OQ-8 | Direct paid signup (`FEATURE_DIRECT_SIGNUP=false`) |
-| Notification | BL-OQ-12 | — |
+| Notification | BL-OQ-12 | Price increases for live subscribers are shown only on the Billing page until the renewal price-change message ships |
 | AI team | BL-OQ-19; PD-LLM-1 R-1, R-2, R-4 (none can close without another team) | Token add-ons (`FEATURE_TOKEN_ADDONS=false`) — waits on a cluster |
 | Platform / SRE | SRE-1, SRE-3, SRE-7, SRE-8, Commercial IaC, audit DB setup; **cluster for Gateway tests; Bedrock access in `ap-south-1`** | Deploy prerequisites; BL-OQ-19 test cluster |
 | Usage & Metering | BL-OQ-24 (`UsagePeriodClosed` contract; LLD not written) | — (reference-only records; known risk) |
@@ -88,7 +88,7 @@ All Core-owned items closed on 2026-11-19.
 | BL-OQ-7 | **CD-10:** conversion reversal on a fraud dispute or early fraud warning within 7 days, operator-approved (with Billing, Security) | Operator-approved; `AUTO_REVERT_ON_EFW=false` | **Closed** (Finance and Security approved 2026-11-23; LLD rev 0.18) |
 | BL-OQ-11 | **CD-14:** financial-record retention per jurisdiction; also sets Workflow history retention (with Legal, Billing) | No financial deletion job | **Closed** (Finance and Legal approved 2026-11-23: keep indefinitely; LLD rev 0.19) |
 | BL-OQ-13 | **BIZ-6:** approve the six billing permissions (two added by the LLD) (with Billing) | §5.2 as written | **Closed** (Finance approved 2026-11-23; LLD rev 0.17) |
-| BL-OQ-16 | Price changes for live subscriptions: next renewal or grandfather longer (with Product) | Next renewal | Proposed |
+| BL-OQ-16 | Price changes for live subscriptions: next renewal or grandfather longer (with Product) | Next renewal | **Closed** (Product and Finance approved 2026-11-23; LLD rev 0.20) |
 | BL-OQ-17 | Stripe data location and processor terms for the UAE account (with Legal) | — | Open |
 | BL-OQ-15 | **CD-56 follow-ups:** per-tenant provider selection; moving payment methods and live subscriptions off a removed provider (with Billing) | One provider | Deferred (Phase 3) |
 | PD-LLM-1 R-3 | Validate token quotas per plan against tier model cost | — | Open (memo) |
@@ -100,7 +100,7 @@ All Core-owned items closed on 2026-11-19.
 |---|---|---|---|
 | BL-OQ-18 | **CD-55 commercial policy (BIZ-1):** token pack sizes, prices, any monthly cap | `token_packs` empty → `ADDON_NOT_AVAILABLE` | **Open — blocking** token add-on sales |
 | BL-OQ-22 | Final plan and pack prices after Finance validation (with Finance) | Phase 1 seed | Open |
-| BL-OQ-16 | Price-change policy for live subscriptions (with Finance) | Next renewal | Proposed |
+| BL-OQ-16 | Price-change policy for live subscriptions (with Finance) | Next renewal | **Closed** (approved 2026-11-23; LLD rev 0.20) |
 | PD-LLM-1 | Approve tiered model profiles (tier names, plan mapping, nine principles) | Seeded: Starter `basic`, Pro `standard`, Enterprise `premium` | Proposed (memo) |
 | ENT-D6 | Approve trial profile values (six `plan_trial_profiles` rows, explicit Enterprise limits) | `NULL` profiles inherit paid limits | Proposed (memo) |
 
@@ -135,7 +135,7 @@ No Billing design change follows from either memo (LLD rev 0.6, §8.4.3).
 
 | ID | Item | Billing default until closed | Status |
 |---|---|---|---|
-| BL-OQ-12 | **NTF-3** messages: seats added; reduction applied (incl. renewal above target); add-on purchased; downgrade blocked at renewal; renewal top-up charged. The scheduled-downgrade message should state `effective_at` (model tier drops then, §8.4.3) | Only past-due and cancelled emails | Open |
+| BL-OQ-12 | **NTF-3** messages: seats added; reduction applied (incl. renewal above target); add-on purchased; downgrade blocked at renewal; renewal top-up charged; **renewal price change scheduled** (current and new unit price, effective date; Product requires it before a higher price applies, BL-OQ-16, LLD §8.16). The scheduled-downgrade message should state `effective_at` (model tier drops then, §8.4.3) | Only past-due and cancelled emails | Open |
 
 ## AI team
 

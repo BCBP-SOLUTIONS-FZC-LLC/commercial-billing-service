@@ -2,8 +2,8 @@
 
 | Field | Value |
 |---|---|
-| Document | `commercial-lld-billing-service.md` rev 0.19 (base HLD v0.64) |
-| Progress | **5 of 9 closed** — S-1, S-2 and S-3 approved by Finance; S-4 by Finance and Security; S-5 by Finance and Legal (all 2026-11-23) |
+| Document | `commercial-lld-billing-service.md` rev 0.20 (base HLD v0.64) |
+| Progress | **6 of 9 closed** — S-1, S-2 and S-3 approved by Finance; S-4 by Finance and Security; S-5 by Finance and Legal; S-6 by Product and Finance (all 2026-11-23) |
 | From | Commercial Team (Billing) |
 | Date | 2026-11-23 |
 | Purpose | Lists the decisions other teams must make before the Billing LLD can be **signed off as a design** |
@@ -30,7 +30,7 @@ The Billing LLD tracks three kinds of open item. Only the first kind is in this 
 | S-3 | Finance | BL-OQ-13 (BIZ-6) | Which roles can do which billing actions? | ✅ **Approved 2026-11-23, unchanged**, plus an overlap rule (see S-3). Applied in LLD rev 0.17 | — |
 | S-4 | Finance + Security | BL-OQ-7 (CD-10) | When is a trial-to-paid conversion reversed for fraud? | ✅ **Approved 2026-11-23 by Finance and Security, unchanged** (see S-4). Recorded in LLD rev 0.18 | — |
 | S-5 | Finance + Legal | BL-OQ-11 (CD-14) | How long must financial records be kept, per jurisdiction? | ✅ **Approved 2026-11-23 by Finance and Legal**: keep indefinitely, no deletion or minimisation job (see S-5). Applied in LLD rev 0.19 | — |
-| S-6 | Product + Finance | BL-OQ-16 | When a price changes, when do existing subscribers pay it? | At their next renewal | Price rows need a grandfathering period; §4.2.2 / B-O11 change |
+| S-6 | Product + Finance | BL-OQ-16 | When a price changes, when do existing subscribers pay it? | ✅ **Approved 2026-11-23 by Product and Finance**: next renewal, no grandfathering (see S-6). Applied in LLD rev 0.20 | — |
 | S-7 | PCI owner group | BL-OQ-21 + review | Who may mark a payment provider as certified? Plus PCI review of §4, §5.4.4, §10 | A Billing engineer submits, a PCI owner group member reviews; enforced in the database | `provider_certifications` constraint and B-O14 change |
 | S-8 | Commercial TL + Entitlements | BL-OQ-23 (c) | Does Entitlements publish any add-on balance event? | No; Audit gets those changes only through AL-5 | Audit Log needs a new LLD decision; event contracts change |
 | S-9 | Commercial HLD owner | D-1, D-5, D-8, D-9 | Will the HLD be corrected where the LLD knowingly differs? | LLD follows the source system or TL decision; HLD notes requested | Until fixed, the signed LLD contradicts the signed HLD |
@@ -205,6 +205,29 @@ New invariant `BIL-OPS-9`: no job deletes or minimises a financial record; `pii-
 
 **Decision needed:** approve "next renewal", or define the grandfathering rule.
 
+
+**Decision: ✅ Approved by Product and Finance, 2026-11-23. Existing subscribers move to the new price at their next renewal; no grandfathering period in Phase 1.**
+
+| Subscriber | Price applied |
+|---|---|
+| New subscriber after the change | New price immediately |
+| Existing subscriber | Current price until the next renewal |
+| Next renewal after the effective date | New price |
+| Within a paid period | Never repriced |
+
+**Why.** Simple, predictable for customers ("price changes apply when my current term ends"), no revenue delayed by up to a year, and no permanent price cohorts. "Until plan change" was rejected: seat changes, add-ons, cancellation and reactivation, downgrade-then-upgrade and provider migration would each need their own rule.
+
+**Product requirement:** customers are notified before a renewal uses a higher price. The Billing page shows the upcoming renewal amount and both the current and future prices once a change is scheduled, and renewal notices carry the new price.
+
+**Two additions by the Commercial Team (LLD §8.16):**
+
+| Topic | Decision | Why |
+|---|---|---|
+| How subscribers move | New hourly CronJob `renewal-repricing` schedules the switch at the first renewal on or after the new price's effective date, using the existing `ScheduleAtPeriodEnd` (merged with any scheduled downgrade or seat reduction). No grandfathering field, override or new provider method | Product and Finance said no migration job is needed, but Stripe keeps a subscription on its old Price until Billing changes it. Without this step, every existing customer would be grandfathered indefinitely |
+| Notice period | **No minimum.** The notice goes out when the change is scheduled; a change found less than 1 h (`REPRICE_CUTOFF`) before a renewal moves at the following renewal | Product required notice but set no minimum |
+
+Also added: invariant `BIL-SUB-8` (price changes only at renewal or with a customer plan change), B-P1 field `scheduled_unit_price`, and a "renewal price change" message in the Notification list (BL-OQ-12). That message is a **go-live gate**: until Notification ships it, customers see the change only on the Billing page.
+
 ---
 
 ## PCI owner group
@@ -273,8 +296,8 @@ New invariant `BIL-OPS-9`: no job deletes or minimises a financial record; `pii-
 | S-4 | Security | Security | ✅ Approved unchanged: SEV-2, operator-only B-O8, `AUTO_REVERT_ON_EFW=false` (LLD rev 0.18) | 2026-11-23 |
 | S-5 | Finance | Finance | ✅ Approved: indefinite retention, no deletion or minimisation job, purge keeps financial records (LLD rev 0.19) | 2026-11-23 |
 | S-5 | Legal | Legal | ✅ Approved, with the governance note for future jurisdictions (LLD rev 0.19) | 2026-11-23 |
-| S-6 | Product | | | |
-| S-6 | Finance | | | |
+| S-6 | Product | Product | ✅ Approved: next renewal, no grandfathering; notice required before a higher price (LLD rev 0.20) | 2026-11-23 |
+| S-6 | Finance | Finance | ✅ Approved: next renewal, no grandfathering (LLD rev 0.20) | 2026-11-23 |
 | S-7 | PCI owner group | | | |
 | S-8 | Commercial TL | | | |
 | S-8 | Entitlements | | | |

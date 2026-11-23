@@ -7,7 +7,7 @@
 | Document type | Low-Level Design (LLD) |
 | Service | `commercial-billing` (Billing) |
 | Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing` |
-| Status | **Submitted for sign-off** (rev 0.19) — design stage; no code yet. Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
+| Status | **Submitted for sign-off** (rev 0.20) — design stage; no code yet. Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
 | Base HLD | Commercial Domain HLD **v0.64** (`hld-commercial-domain-v0.64.md`), the only HLD for the domain. Rebased from v0.51 in rev 0.14: v0.52 to v0.64 checked for Billing impact (§1.1, "HLD v0.52 to v0.64"); only v0.64 (`platform-audit`) changes Billing, already applied in rev 0.5. Parent: IAM HLD **v1.59** |
 | Supersedes | `hld-billing-service.md` v0.2 (draft Billing HLD, dropped in Commercial HLD v0.28). Its open items B-1 to B-13 are dispositioned in §16.3 and are never a source of requirements |
 | Sibling LLDs | Commercial: `commercial-lld-entitlements-service.md`, `commercial-lld-usage-metering-service.md` (to be written; until it exists the consumed `UsagePeriodClosed` contract is unverified, BL-OQ-24). IAM (contracts verified against these): Core `iam-lld-org-membership-service.md` rev 2.49 (I-11, I-18, `billing-orgm-q`, EVT-14/15/18, SEAT-2), Realm Provisioner `iam-lld-realm-provisioner-service.md` rev 1.46+ (RP-3, RP-4, RP-11, `billing-realm-q`, `iam.tenant.events` payloads), Audit Log `iam-lld-audit-log-service.md` rev 0.37 (AL-5, entry taxonomy, Billing admission since rev 0.34, `billing.token_addon.refunded` since rev 0.37), `platform-audit` `docs/lld/platform-lld-audit.md` rev 1.5 (§4, §11, §18.6, §19.2), AuthZ Enrichment `iam-lld-authz-enrichment.md` v1.50 (operator path, CD-52; §8.9.1 OP-G4 lists Billing B-O1 to B-O15). Edge: `signup-bff-lld.md` (Signup BFF, `BillingClient.AuthorizeAndCharge`) |
@@ -19,6 +19,7 @@
 
 | Rev | Date | Change |
 |---|---|---|
+| 0.20 | 2026-11-23 | **BL-OQ-16 closed — Product and Finance approved "new price at next renewal", no grandfathering period** (sign-off item S-6). Product requires notice before a renewal uses a higher price. New §8.16 records the decision. Commercial Team additions: (1) Stripe keeps a subscription on its old Price unless changed, so a new hourly CronJob `renewal-repricing` schedules the move at the first renewal on or after the new row's effective date, reusing `ScheduleAtPeriodEnd` (no new port method, no grandfathering field); (2) no minimum notice period; changes inside `REPRICE_CUTOFF` (1 h) of renewal move at the following renewal. New columns `subscription_items.scheduled_price_id` and `scheduled_price_at`; B-P1 `scheduled_unit_price`; invariant `BIL-SUB-8`; metric `commercial_billing_repricing_scheduled_total`; setting `REPRICE_CUTOFF`; renewal price-change message added to BL-OQ-12. |
 | 0.19 | 2026-11-23 | **BL-OQ-11 (CD-14) closed — Finance and Legal approved indefinite retention of all financial records and of workflow history supporting financial actions** (sign-off item S-5). No financial deletion or minimisation job; tenant purge never removes financial records; `FINANCIAL_RECORD_RETENTION_YEARS` reserved and unused in Phase 1; governance note added (a future jurisdiction-specific destruction or anonymisation requirement gets its own workflow). §15.3 rewritten. Commercial Team interpretation: the ruling covers financial records, so GDPR minimisation of personal contact data stays, as a new `pii-minimisation` CronJob that only nulls contact fields and never deletes a row: offboarded accounts after 90 days (unchanged); abandoned-checkout accounts now have their contact data nulled after 30 days instead of being deleted; `payment_event_ledger` payloads are no longer emptied after 18 months. New invariant `BIL-OPS-9`; new settings `PII_MINIMISE_OFFBOARDED_DAYS` and `PII_MINIMISE_ABANDONED_DAYS`. §1.1, §13.2, §15.1, §15.2, §16.1 and §16.4 updated. |
 | 0.18 | 2026-11-23 | **BL-OQ-7 (CD-10) closed — Finance and Security approved the conversion-reversal proposal unchanged** (sign-off item S-4). Finance: trigger (dispute reason `fraudulent` or Stripe early fraud warning), conversion payment only, 7-day window, refund unless the dispute already returned the funds. Security: SEV-2 `BillingReversalDecisionNeeded`, operator-only approval through B-O8, `AUTO_REVERT_ON_EFW=false` in Phase 1. §8.2 heading and text record the approval and the reasons; §1.1, §16.1 and §16.4 updated. No flow, route, schema or config change. |
 | 0.17 | 2026-11-23 | **BL-OQ-13 (BIZ-6) closed — Finance approved the six permissions and role mapping unchanged** (sign-off item S-3): owner all six; tenant admin `subscription.manage`, `billing.view`, `billing.download_invoice`; tender roles none. §5.2: approval recorded; Finance's overlap rule added, with "new contractual commitment" defined by route (B-P2, B-P4, B-P5, B-P14) so seat and add-on purchases stay under `subscription.manage`; new invariant `BIL-AUTH-7`. No route or permission change. |
@@ -707,7 +708,7 @@ CREATE TABLE plan_prices (
 | `pro` | 6900 | 70380 |
 | `enterprise` | 17900 | 182580 |
 
-Provider price ids are filled per environment by `scripts/price-book-sync.sh` (creates the Stripe Product per plan and Price per row, then writes `provider_price_id` through the operator price-book route B-O11). A price change inserts a new row and closes the old one; live subscriptions keep their price until their next renewal (BL-OQ-16 default).
+Provider price ids are filled per environment by `scripts/price-book-sync.sh` (creates the Stripe Product per plan and Price per row, then writes `provider_price_id` through the operator price-book route B-O11). A price change inserts a new row and closes the old one; live subscriptions keep their price until their next renewal on or after the new row's `effective_from`, then move to it (`renewal-repricing`, §8.16; Product and Finance approved, BL-OQ-16).
 
 #### 4.2.3 `token_packs` (global, no RLS)
 
@@ -783,9 +784,12 @@ CREATE TABLE subscription_items (
   price_id                  uuid NOT NULL REFERENCES plan_prices(price_id),
   quantity                  int  NOT NULL CHECK (quantity BETWEEN 1 AND 100000),
   provider_item_id          text,
+  scheduled_price_id        uuid REFERENCES plan_prices(price_id),  -- §8.16 renewal repricing
+  scheduled_price_at        timestamptz,                            -- renewal instant R
   record_version            bigint NOT NULL DEFAULT 1,
   updated_at                timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT uq_si_kind UNIQUE (billing_subscription_id, kind)
+  CONSTRAINT uq_si_kind UNIQUE (billing_subscription_id, kind),
+  CONSTRAINT chk_si_scheduled CHECK ((scheduled_price_id IS NULL) = (scheduled_price_at IS NULL))
 );
 
 CREATE VIEW v_subscription_summary AS
@@ -1378,6 +1382,7 @@ Applied `BEFORE UPDATE … FOR EACH ROW WHEN (OLD.* IS DISTINCT FROM NEW.*)` on 
 | BIL-SUB-5 | The seat item `quantity` changes only on a **confirmed** payment (conversion, purchase, top-up) or at a renewal applying a reduction; never on a request. |
 | BIL-SUB-6 | An account's currency is fixed while it has a non-`ended` subscription. |
 | BIL-SUB-7 | While collection is paused (CD-24, §8.10) no payment is attempted: new invoices are held as drafts (`held_for_review`), automatic retries on already-open invoices are stopped, and no dunning transition is made. A held draft is charged or voided only by an explicit operator decision with a reason (B-O16, `chk_inv_disposition`); it is never finalised automatically, including on reactivation. Pausing never waives an amount already due, cancels the subscription or changes entitlements. |
+| BIL-SUB-8 | A live subscription's price changes only at a renewal or with a plan change the customer makes (BL-OQ-16, §8.16). At renewal `R` the seat item moves to the `plan_prices` row effective at `R` for its plan, interval, currency and provider, unless the change was found less than `REPRICE_CUTOFF` before `R`, in which case it moves at the following renewal. Every `ScheduleAtPeriodEnd` sets `ToPriceRef` by this rule. There is no grandfathering field. |
 | BIL-SEAT-1 | One open seat purchase per subscription (`uq_sp_one_open`). |
 | BIL-SEAT-2 | One open seat change schedule per subscription (`uq_scs_one_open`). |
 | BIL-SEAT-3 | `renewal_seats = max(target_seats, seats_in_use)`; after the renewal top-up check the licensed count is never below I-11's `active_users + pending_invitations` (HLD §8.5.1). |
@@ -1551,6 +1556,7 @@ Common objects, defined once and reused below:
   "interval": "month",
   "licensed_seats": 50,
   "unit_price": { "amount_minor": 6900, "currency": "USD" },
+  "scheduled_unit_price": null,                       // or { "amount_minor": 7900, "currency": "USD", "effective_at": "2026-12-01T00:00:00Z" } (§8.16)
   "status": "active",                                  // incomplete | active | past_due | cancelled | ended
   "auto_renew": true,
   "current_period_start": "2026-11-01T00:00:00Z",
@@ -1590,7 +1596,7 @@ Common objects, defined once and reused below:
 ##### (B-P1) `GET /api/v1/tenants/:id/subscription`
 
 - **Response `200`**: `SubscriptionView`. For a trial tenant with no subscription: `200 {"status": "none", "trial": true, "caller_permissions": […], "actions_available": ["start_subscription"]}`.
-- **Reads**: `v_subscription_summary`, open purchases, open change and schedule; `renewal_estimate.seats` = scheduled reduction's estimate if any (I-11 from the 30 s display cache, §6), else current seats.
+- **Reads**: `v_subscription_summary`, open purchases, open change and schedule; `renewal_estimate.seats` = scheduled reduction's estimate if any (I-11 from the 30 s display cache, §6), else current seats; `renewal_estimate.amount` uses `scheduled_unit_price` when a price change is scheduled for the renewal (§8.16).
 - **Errors**: `403 INSUFFICIENT_PERMISSION`, `404 SUBSCRIPTION_NOT_FOUND` (ended and no history — never for a tenant that ever had one: an ended subscription is returned with `status: "ended"`).
 
 ##### (B-P2) `POST /api/v1/tenants/:id/subscription/checkout`
@@ -2722,7 +2728,7 @@ sequenceDiagram
 
 1. `seat-renewal` (every 15 min) picks schedules with `effective_at − now() ≤ SEAT_RENEWAL_LEAD` (24 h).
 2. **Fresh I-11** (never the display cache): `seats_in_use = active_users + pending_invitations`.
-3. `renewal_seats = max(target_seats, seats_in_use)` (`BIL-SEAT-3`); `ScheduleAtPeriodEnd` with that quantity and no proration.
+3. `renewal_seats = max(target_seats, seats_in_use)` (`BIL-SEAT-3`); `ScheduleAtPeriodEnd` with that quantity, `ToPriceRef` = the row effective at renewal (`BIL-SUB-8`, §8.16), and no proration.
 4. I-11 unavailable until `effective_at − 1 h` → `skipped` (`iam_unavailable`): the renewal bills the current count; the owner is told; never reduce blind.
 
 #### 8.6.3 At renewal
@@ -2902,6 +2908,30 @@ RETURNING p.*;
 3. **Process** — bind the tenant on the app pool, `FetchCurrent` (`BIL-PAY-4`), dispatch per §7.4, commit domain change + outbox + ledger outcome (`processed` with `outcome`). A row whose `claimed_until` passes without completion is reclaimable.
 4. **Errors** — transient (provider `5xx`, DB) → `failed`, `next_attempt_at` = backoff (1 s … 5 min); after `WEBHOOK_MAX_ATTEMPTS` (10) stays `failed` with SEV-3 and is replayed by runbook (§20.2, B-O13). `unknown_customer` → `failed` immediately (no retry).
 5. **Target** — received → processed < 10 s p95.
+
+### 8.16 Price change for live subscriptions (BL-OQ-16)
+
+**Approved by Product and Finance (BL-OQ-16, 2026-11-23): existing subscribers move to the new price at their next renewal; no grandfathering period in Phase 1.**
+
+| Subscriber | Price applied |
+|---|---|
+| New subscriber after the change | New price immediately (checkout uses the row effective now) |
+| Existing subscriber | Current price until the next renewal on or after the new row's `effective_from` |
+| At that renewal | New price |
+| Within a paid period | Never repriced. Seat purchases in the period use the item's current price; a customer upgrade (§8.4.1) moves to the target plan's current row, as before |
+
+**Why (Product and Finance).** It respects the price the customer already paid for the current term, takes effect promptly, avoids delaying revenue by up to a year, and avoids permanent price cohorts (support, reporting and reconciliation cost). "Until plan change" was rejected because seat changes, add-ons, cancellation and reactivation, downgrade-then-upgrade and provider migration would each need their own pricing rule.
+
+**Notice (Product requirement).** Customers are told before a renewal uses a higher price: B-P1 shows the current and the scheduled unit price (`scheduled_unit_price`) and the renewal estimate at the new price, and the renewal notice carries the new price (Notification message, BL-OQ-12). **No minimum notice period** (Commercial Team, 2026-11-23): the notice goes out when the change is scheduled, and the change applies at the first renewal on or after the effective date. Decreases follow the same path.
+
+**Mechanism (Commercial Team, 2026-11-23).** A provider subscription stays on its provider Price until Billing changes it, so without a step at renewal every existing customer would be grandfathered indefinitely. No grandfathering field or price override is added; one job moves subscriptions at renewal.
+
+1. **`renewal-repricing`** (CronJob, hourly at `:20`) selects live subscriptions (`active`, `past_due`; not `auto_renew = false`) where the seat item's price differs from the **target row**: the `plan_prices` row effective at `R = current_period_end` for the item's plan, interval, currency and provider. Subscriptions with `R − now() < REPRICE_CUTOFF` (1 h) are skipped this period and moved at the following renewal.
+2. **Schedule.** `ScheduleAtPeriodEnd {ToPriceRef: target, ToQuantity: current quantity, At: R}`. The Stripe adapter updates the subscription's existing schedule if one exists, so a scheduled seat reduction (§8.6.2) or downgrade (§8.4.2) is kept. Every `ScheduleAtPeriodEnd` call, from any flow, sets `ToPriceRef` to the row effective at `R` for the plan that will be current at `R` (`BIL-SUB-8`). A downgrade therefore already renews at the target plan's new price, and a released schedule (blocked downgrade, §8.4.2) is re-created by the next run.
+3. **Record.** Commit `subscription_items.scheduled_price_id`, `scheduled_price_at = R`; history row; outbox message for the notice (BL-OQ-12). The job is idempotent: a subscription already scheduled to the target row is skipped; a newer row added before the cutoff replaces the schedule.
+4. **At renewal.** On the cycle `invoice.paid` whose line uses the new price: seat item `price_id = scheduled_price_id`, scheduled columns cleared, history row. **No bus event to IAM**: the plan is unchanged, so there is nothing for Core or Entitlements to project.
+5. **`manual` subscriptions** (operator stub) get the same item change at `R`; they are invoiced outside the product.
+6. **Metric:** `commercial_billing_repricing_scheduled_total{direction}` (`increase`\|`decrease`).
 
 ---
 ## 9. Concurrency, Consistency, and Failure Handling
@@ -3158,6 +3188,7 @@ Three tiers (IAM Platform Observability Standard, HLD §12.2); const labels `dom
 | `commercial_billing_rp_convert_attempts_total` | Counter | `outcome` (`ok`\|`in_progress`\|`retryable`\|`terminal`) | RP-3 calls |
 | `commercial_billing_subscriptions` | Gauge | `status`, `plan`, `provider` | Exporter, 60 s |
 | `commercial_billing_downgrades_blocked_total` | Counter | `blocker` | I-18 blockers |
+| `commercial_billing_repricing_scheduled_total` | Counter | `direction` (`increase`\|`decrease`) | §8.16 |
 | `commercial_billing_seat_changes_total` | Counter | `direction` (`purchase`\|`reduction`\|`renewal_topup`), `outcome` | Seats |
 | `commercial_billing_seat_projection_mismatches_total` | Counter | — | §8.6.4 |
 | `commercial_billing_proration_deferred_total` | Counter | `currency`, `reason` (`below_provider_minimum`) | Seat purchases added free until renewal (§8.5.3, BL-OQ-6) |
@@ -3292,6 +3323,7 @@ Values from `deploy/helm/values.yaml` (`env:`) and OpenBao (`secretValues:` via 
 | `SEAT_RENEWAL_LEAD` | `24h` | 1–72 h | §8.6.2 |
 | `SEAT_RESYNC_AFTER` | `10m` | 5–60 m | §8.6.4 |
 | `DOWNGRADE_RECHECK_LEAD` | `2h` | 30 m–24 h | §8.4.2 |
+| `REPRICE_CUTOFF` | `1h` | 15 m–24 h | §8.16: a price change found later than this before renewal moves at the following renewal |
 | `SAGA_POLL_INTERVAL` / `SAGA_ALERT_AFTER` / `SAGA_MAX_BACKOFF` | `2s` / `30m` / `5m` | 1–10 s / fixed 30 m / 1–15 m | §8.1.2 |
 | `SEATS_AFTER_CONVERSION_DELAY` | `120s` | 30–600 s | `BIL-EVT-6` |
 | `EMISSION_POLL_INTERVAL` | `5s` | 1–30 s | `scheduled_emissions` worker |
@@ -3358,6 +3390,7 @@ Node class `t3.small` share (HLD §14.2).
 | `pii-minimisation` | `0 5 * * *` | Null the billing-contact name and email (and clear the provider customer email) 90 days after `closed_at`, and 30 days after an abandoned checkout's subscription ended; set `pii_minimised_at`. Never deletes a row and never touches a financial record (`BIL-OPS-9`, §15.3) |
 | `outbox-prune` | `0 3 * * *` | `outbox.Runner.PrunePublished` (8 days) |
 | `processed-events-prune` | `0 4 * * *` | `inbox.Store.Prune` (8 days) |
+| `renewal-repricing` | `20 * * * *` | Schedule the move to a new price at the first renewal on or after its effective date (§8.16, `BIL-SUB-8`) |
 | `idempotency-prune` | `30 4 * * *` | `idempotency_records` past `expires_at` |
 
 `concurrencyPolicy: Forbid`, `startingDeadlineSeconds: 120`; each job pushes `commercial_cross_tenant_job_runs_total` to the Pushgateway. Reconciliation is operator-triggered in Phase 1 (B-O5) and runs in the server pods; Phase 2 adds a nightly `reconciliation` CronJob calling the same code.
@@ -3530,11 +3563,11 @@ Each item names the default the design runs with until it closes.
 | BL-OQ-9 | **Operator routes B-O6 to B-O15.** (a) Billing's operator `HTTPRoute` lists every operator path, B-O1 to B-O15 (Billing's own chart, §13.1). (b) IAM extends the end-to-end operator test (AuthZ Enrichment LLD §8.9.1 OP-G4), whose list covers only B-O1 to B-O5, to B-O6 to B-O15. No IAM gateway route list exists: Envoy Gateway is the only ingress, and the platform-realm `jwt_authn` provider and AuthZ Enrichment admit the whole `/api/v1/operator/` prefix | §11.4 | Billing (a); IAM + Commercial (b) | Today's `403` is the operator path being off (OP-G1 to OP-G3, `BIL-AUTH-6`), not a missing route | **Approved; IAM part merged** ([iam-authz-enrichment#43](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-authz-enrichment/pull/43), `f4af854`, 2026-11-19): AuthZ unit and e2e tests cover B-O1–B-O15. **Remaining:** (a) Billing's operator `HTTPRoute` lists B-O1 to B-O15 when Billing's chart is written. Gateway half of OP-G4 waits on BL-OQ-14 |
 | BL-OQ-10 | **Audit Log:** admit `cluster.local/ns/billing/sa/commercial-billing` to AL-5; add entry types `billing.conversion.stub`, `billing.conversion.reverted`, `billing.saga.resolved`, `billing.collection.paused`, `billing.price_book.changed`, `billing.provider.certified`, `billing.provider.certification_revoked` (tier `security_3y`) | §11.6, CD-21 | Audit Log | Entries held in `pending_audit_entries` | **Closed** (Audit Log rev 0.34: admitted; all seven types added) |
 | BL-OQ-11 | **CD-14 — financial-record retention** per jurisdiction (BIZ-5); also decides Workflow history retention | CD-14 | Finance + Legal + Billing | No financial deletion job; operational prunes only | **Closed** (Finance and Legal, 2026-11-23): financial records and financial workflow history kept indefinitely; no deletion or minimisation job; tenant purge keeps them; `FINANCIAL_RECORD_RETENTION_YEARS` reserved. Added: governance note, `pii-minimisation` for contact data only, `BIL-OPS-9` |
-| BL-OQ-12 | **Notification messages (NTF-3):** seats added; reduction applied (incl. renewal above target); add-on purchased; downgrade blocked at renewal; renewal top-up charged. Add-on expiry reminder is Entitlements-driven | §10.5 | Notification + Commercial | Only past-due and cancelled emails (existing filter) | Open |
+| BL-OQ-12 | **Notification messages (NTF-3):** seats added; reduction applied (incl. renewal above target); add-on purchased; downgrade blocked at renewal; renewal top-up charged; **renewal price change scheduled** (current and new unit price, effective date; required by Product before a higher price applies, BL-OQ-16). Add-on expiry reminder is Entitlements-driven | §10.5 | Notification + Commercial | Only past-due and cancelled emails (existing filter) | Open |
 | BL-OQ-13 | **Permission list (BIZ-6)** — six permissions in §5.2, two added here | §6.6, CD-54 | Finance + Billing | §5.2 as written | **Closed** (Finance, 2026-11-23): six permissions and role mapping approved unchanged. Added: Finance's overlap rule in §5.2 and invariant `BIL-AUTH-7` |
 | BL-OQ-14 | **CD-52 dependency** — operator path needs OP-G1 (Keycloak platform realm, IAM), **OP-G2** (gateway `jwt_authn` provider, platform-edge), OP-G3 (`OPERATOR_REALM_ISSUER` set and deployed, IAM), then the OP-G4 joint end-to-end test (numbering per AuthZ Enrichment LLD §8.9.1; HLD numbers differ, D-9) | CD-52 | Platform-edge (OP-G2); IAM (OP-G1, OP-G3) | Operator routes `403` outside dev/test | Open (external). **OP-G1 merged** ([iam-realm-provisioner#60](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-realm-provisioner/pull/60), `9e8fcab`): realm `bcbp-platform`, issuer `https://auth.bcbpsolutions.com/realms/bcbp-platform`, created on Realm Provisioner's next deploy; operator users still to be created by hand. **OP-G2** requested from platform edge (`op-g2-platform-edge-request.md`), not started, sole external blocker. OP-G3 after OP-G2. OP-G6 date not set |
 | BL-OQ-15 | **CD-56 follow-ups** — per-tenant provider selection once a second provider exists; moving saved payment methods and live subscriptions when a provider is removed (design in §19.3) | CD-56 | Billing + Finance | One provider; `billing_accounts.provider` fixed while live | Deferred (Phase 3) |
-| BL-OQ-16 | **Price changes for live subscriptions** — keep until next renewal (default) or grandfather longer | §6.3 | Product + Finance | Next renewal | Proposed |
+| BL-OQ-16 | **Price changes for live subscriptions** — keep until next renewal (default) or grandfather longer | §6.3 | Product + Finance | Next renewal | **Closed** (Product and Finance, 2026-11-23): new price at the first renewal on or after the effective date; no grandfathering; customers notified before a higher price applies. Added: §8.16, `renewal-repricing`, `BIL-SUB-8`, B-P1 `scheduled_unit_price`, BL-OQ-12 message |
 | BL-OQ-17 | **Stripe data location and processor terms** for the UAE account | §13.3 | Finance + Legal | — | Open |
 | BL-OQ-18 | **CD-55 commercial policy (BIZ-1)** — pack sizes, prices, any monthly cap | §8.6.2 | Product | `token_packs` empty → `ADDON_NOT_AVAILABLE` | Open |
 | BL-OQ-23 | **Audit Log:** (a) `billing-audit-q` filter adds Billing's `TenantQuotaAddOnChanged` (SRE-8, decided); (b) map `reason: refund` to a new entry type `billing.token_addon.refunded` (`security_3y`); (c) do not subscribe to any Entitlements add-on event, since Entitlements' corrections already arrive by AL-5 (`billing.token_addon.granted` / `.adjusted` / `.revoked` / `.expired`) | §11.6, CD-55 | IAM (Audit Log) | Until Audit ships it, refund events are stored as `billing.token_addon.purchased` (Audit's existing mapping ignores `reason`): mislabelled as a purchase, not lost; the payload (`reason`, negative `delta`) is kept in metadata | (a) **Closed**: `billing-audit-q` is catch-all (AL-EVT-2). (b) **Merged** ([iam-audit-log#24](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-audit-log/pull/24), `0e12f2c`): `billing.token_addon.refunded`, classified by `reason`; effective in each environment once Audit Log at or after this commit is deployed (release v0.3.0 suggested). (c) **Open**: TL to confirm Entitlements publishes no add-on event (`entitlement-audit-q` is catch-all) |
