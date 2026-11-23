@@ -1,0 +1,197 @@
+# Billing LLD — Design Sign-off Blockers by Team
+
+| Field | Value |
+|---|---|
+| Document | `commercial-lld-billing-service.md` rev 0.14 (base HLD v0.64) |
+| From | Commercial Team (Billing) |
+| Date | 2026-11-23 |
+| Purpose | Lists the decisions other teams must make before the Billing LLD can be **signed off as a design** |
+| Final approvers | Commercial Team (CD-4) for the whole document; PCI owner group for §4, §5.4.4 and §10 |
+
+## Read this first
+
+The Billing LLD tracks three kinds of open item. Only the first kind is in this document.
+
+| Kind | Meaning | Blocks design sign-off? | Where tracked |
+|---|---|---|---|
+| **Design blocker** (this document) | The LLD already writes a behaviour, rule or schema into the design, marked *Proposed*. The owning team has not yet agreed to it. If they say no, the design text, code or schema changes | **Yes** | Here; LLD §16.1 and §16.2 |
+| Go-live gate | Another team must build, configure or deploy something. Billing's design already handles both "not yet" and "done", usually with a feature flag or a `403` / `503` | No | `billing-open-items-by-team.md`, `billing-open-items-entitlements.md` |
+| Data or value | A number or price list (currency, prices, pack sizes). Loaded as data; no design change | No | `billing-open-items-by-team.md` |
+
+**What each team needs to do:** for each item addressed to you, reply **Approve** or **Reject with your alternative**. Every item already has a written default, so a reply is enough. No meeting is needed unless you reject.
+
+## Summary
+
+| # | Team | Item | Question in one line | Billing's proposal (current default) | If rejected |
+|---|---|---|---|---|---|
+| S-1 | Finance | BL-OQ-6 | How are mid-period seat purchases charged when the payment provider can't calculate proration? | Seconds-based, rounded half-up; below the minimum charge the seats are free until renewal; renewal top-up seats kept if payment fails | §8.5.3 / §8.6.3 change; golden tests rewritten |
+| S-2 | Finance | BL-OQ-1 (CD-24) | Do we keep charging a tenant that an operator suspended? | No: collection pauses automatically, invoices are kept as drafts, an operator decides | §8.10 reduced to "bill as normal"; config flag removed |
+| S-3 | Finance | BL-OQ-13 (BIZ-6) | Which roles can do which billing actions? | Six permissions, two added by the LLD (owner-only plan change and payment method) | §5.2 table and the permission code change |
+| S-4 | Finance + Security | BL-OQ-7 (CD-10) | When is a trial-to-paid conversion reversed for fraud? | Fraud dispute or early fraud warning on the conversion payment within 7 days → SEV-2 → operator approves; never automatic | §8.2 flow, B-O8 and the alert change |
+| S-5 | Finance + Legal | BL-OQ-11 (CD-14) | How long must financial records be kept, per jurisdiction? | Keep everything; no financial deletion job; operational prunes only | Billing adds a retention/deletion job (new design work) |
+| S-6 | Product + Finance | BL-OQ-16 | When a price changes, when do existing subscribers pay it? | At their next renewal | Price rows need a grandfathering period; §4.2.2 / B-O11 change |
+| S-7 | PCI owner group | BL-OQ-21 + review | Who may mark a payment provider as certified? Plus PCI review of §4, §5.4.4, §10 | A Billing engineer submits, a PCI owner group member reviews; enforced in the database | `provider_certifications` constraint and B-O14 change |
+| S-8 | Commercial TL + Entitlements | BL-OQ-23 (c) | Does Entitlements publish any add-on balance event? | No; Audit gets those changes only through AL-5 | Audit Log needs a new LLD decision; event contracts change |
+| S-9 | Commercial HLD owner | D-1, D-5, D-8, D-9 | Will the HLD be corrected where the LLD knowingly differs? | LLD follows the source system or TL decision; HLD notes requested | Until fixed, the signed LLD contradicts the signed HLD |
+
+---
+
+## Finance
+
+### S-1 — Proration rule when the provider has no proration engine (BL-OQ-6, CD-54)
+
+**Background.** When a tenant buys extra seats mid-period, they pay only for the rest of the period. Stripe calculates this itself. The LLD also has to support future providers that can't, so Billing has its own calculator (LLD §8.5.3). It runs only for a provider certified with `Proration = fallback`, which Stripe is not.
+
+**Billing's proposal — three rules:**
+
+1. **Formula.** Charge = unit price × seats added × (seconds left in the period ÷ seconds in the period). It is calculated exactly and rounded half-up once to the currency's minor unit (fils / cents). Month lengths and leap years need no special handling.
+   *Example:* 5 seats at 69.00, 18 days left in a 30-day month → 207.00.
+2. **Below the provider's minimum charge.** The seats are added free for the rest of the period and billed from renewal, recorded as an adjustment. The alternative is to charge the minimum. Default: `PRORATION_BELOW_MINIMUM = free_until_renewal`.
+3. **Renewal top-up fails.** If members were added just before renewal and the top-up charge fails, the tenant **keeps the seats** and the unpaid invoice goes into normal dunning (LLD §8.6.3). Removing the seats would leave the tenant above its seat cap in IAM.
+
+**Decision needed:** approve rules 1 to 3, or give the alternative for any of them.
+
+### S-2 — Invoicing while an operator has suspended the tenant (BL-OQ-1, CD-24)
+
+**Background.** An operator can suspend a tenant for abuse, a security issue or a legal hold. The HLD leaves it to Billing to decide whether the subscription keeps charging during that time (LLD §8.10).
+
+**Billing's proposal:**
+- When the suspension arrives, Billing **pauses collection automatically**. Stripe still creates renewal invoices, but keeps them as drafts and does not charge them. No dunning runs, and no purchases or plan changes are allowed (`409 COLLECTION_PAUSED`).
+- When the operator reactivates the tenant, collection resumes. Drafts created during the pause are **not** charged automatically; an operator finalises or voids them.
+- An operator can override either way with B-O10 and a reason.
+- Default: `AUTO_PAUSE_ON_OPERATOR_SUSPENSION=true`.
+
+**Why:** these suspensions are usually disputes or investigations, so billing that time should be a human decision.
+
+**Decision needed:** approve, or choose "bill as normal during operator suspension".
+
+### S-3 — Billing permissions (BL-OQ-13, BIZ-6)
+
+**Background.** The HLD defines four billing permissions. Some rows of its role matrix ("owner only") had no permission, so the LLD adds two more and maps every action to a permission (LLD §5.2).
+
+| Permission | What it allows | Owner | Tenant admin |
+|---|---|---|---|
+| `commercial.subscription.manage` | Buy seats, schedule or cancel a seat reduction, buy a token add-on | ✓ | ✓ |
+| `commercial.subscription.cancel` | Cancel or resume the subscription | ✓ | |
+| `commercial.billing.view` | View plan, subscription, payment methods, purchases, history | ✓ | ✓ |
+| `commercial.billing.download_invoice` | View and download invoices | ✓ | ✓ |
+| `commercial.subscription.change_plan` **(new)** | Start a paid subscription or convert a trial, change tier, schedule a downgrade, reactivate | ✓ | |
+| `commercial.payment_method.manage` **(new)** | Add or update a payment method, edit the billing contact | ✓ | |
+
+Tender admins and members get none of these.
+
+**Decision needed:** approve the six-permission list and the role mapping.
+
+### S-4 — Conversion reversal for fraud (BL-OQ-7, CD-10) — Finance + Security
+
+**Background.** If a trial converts to paid with a stolen card, the tenant should go back to the trial realm and the money should be returned. The HLD says the trigger is Billing's to define (LLD §8.2).
+
+**Billing's proposal:**
+- **Trigger:** a dispute with reason `fraudulent`, or a Stripe early fraud warning, **on the conversion payment**, **within 7 days** of conversion. Other disputes are handled in the provider dashboard and never reverse a conversion.
+- **Alert:** SEV-2 `BillingReversalDecisionNeeded` to the operator.
+- **Decision:** an operator approves or declines (B-O8). It is **never automatic** in Phase 1. `AUTO_REVERT_ON_EFW=false` could later allow it for early fraud warnings only.
+- **Effect if approved:** IAM moves the tenant back to the trial realm (RP-4), then Billing cancels the subscription and refunds, unless the dispute already returned the money. Everything is audited.
+- After 7 days, IAM refuses the reversal and it becomes a manual runbook.
+
+**Decision needed:**
+- **Finance:** approve the trigger, the 7-day window and the refund rule.
+- **Security:** approve SEV-2 severity and operator-only approval.
+
+### S-5 — Financial-record retention (BL-OQ-11, CD-14) — Finance + Legal
+
+**Background.** Invoices, refunds, adjustments, disputes and subscription history must be kept for a legal period that depends on jurisdiction (UAE first). The same answer sets how long Workflow history is kept (LLD §15.3).
+
+**Billing's default:** keep all financial records indefinitely. There is **no** financial deletion job, only operational prunes (outbox, idempotency keys). The setting `FINANCIAL_RECORD_RETENTION_YEARS` exists but is unused. Billing does not delete financial records when a tenant is purged.
+
+**Why it blocks:** if the answer requires deletion or minimisation after N years, Billing must add a retention job to the design. That is new design work, not a configuration value.
+
+**Decision needed:** the retention period per jurisdiction, and whether records are deleted or only minimised at the end of it.
+
+---
+
+## Product (with Finance)
+
+### S-6 — Price changes for existing subscribers (BL-OQ-16)
+
+**Background.** Prices live in `plan_prices`. A price change adds a new row and closes the old one (LLD §4.2.2, B-O11).
+
+**Billing's proposal:** existing subscribers move to the new price at their **next renewal**. New subscribers pay it immediately.
+
+**Alternative:** grandfather existing subscribers for longer, for example 12 months or until they change plan. That needs a grandfathering period on price rows and logic to apply it at renewal.
+
+**Decision needed:** approve "next renewal", or define the grandfathering rule.
+
+---
+
+## PCI owner group
+
+### S-7 — Who signs a provider certification, plus PCI review (BL-OQ-21)
+
+**Background.** Before Billing uses a payment provider adapter for new customers, the adapter must pass a certification test suite (LLD §3.5, B-O14). This is a PCI-relevant control.
+
+**Billing's proposal:** a Commercial Team (Billing) engineer submits the run, and a **different person** from the PCI owner group reviews it. This matches the rule for production changes to Billing (HLD §15.4). It is enforced twice:
+- in the database: a run cannot be `passed` without `reviewed_by` (`chk_pc_passed_reviewed`);
+- in the API: `reviewed_by` must differ from the submitter (`422` otherwise).
+
+**Decision needed:**
+1. Approve the submitter/reviewer rule.
+2. Complete the PCI review of LLD §4 (data model), §5.4.4 (operator routes) and §10 (security). This review is part of sign-off, not a separate step.
+
+---
+
+## Commercial TL (with Entitlements)
+
+### S-8 — Does Entitlements publish an add-on balance event? (BL-OQ-23 c)
+
+**Background.** Our 19 Nov corrections note said Entitlements *could* publish its own balance event (for example `TenantAddOnBalanceChanged`) for goodwill grants, corrections and expiry. IAM then pointed out that Audit records **everything** on Entitlements' event topic. Such an event would be stored as `entitlement.unknown`, raise an alarm and duplicate audit entries Entitlements already writes through AL-5.
+
+**Options:**
+1. **No add-on balance event on `entitlement-events`; AL-5 is the only audit path.** Recommended by Billing and IAM. Nothing else changes.
+2. Publish one. This needs a named consumer, and Audit Log needs a new LLD decision to skip or map it.
+
+**Why it blocks:** it fixes the event contracts between Billing, Entitlements and Audit that the LLD relies on (§7.3.6, §8.11).
+
+**Decision needed:** confirm option 1. Details: `billing-open-items-entitlements.md` E-3.
+
+---
+
+## Commercial HLD owner
+
+### S-9 — HLD notes for known LLD/HLD differences (D-1, D-5, D-8, D-9)
+
+**Background.** In four places the LLD knowingly differs from the HLD, because it follows the system actually built or a later TL decision. The LLD's rule is that the HLD wins in a conflict, so these differences must be acknowledged in the HLD before both are signed.
+
+| # | HLD says | LLD does | Why |
+|---|---|---|---|
+| D-1 | `tenant_id` only in the event envelope (§9.4) | Also in `data` | Realm Provisioner's consumer requires `data.tenant_id` |
+| D-5 | `platform-gincommon` v1.6.0 (§3.3) | v2 | Same RFC 9457 wire format; aligned with CD-31's target |
+| D-8 | Reserved correction reasons on `TenantQuotaAddOnChanged` (§9.4) | `purchase` \| `refund` only | TL decision BL-OQ-20: corrections belong to Entitlements |
+| D-9 | CD-52 row numbers the gateway provider OP-G3 and the end-to-end test OP-G5 | OP-G2 and OP-G4 | Follows the AuthZ Enrichment LLD §8.9.1, which is the source |
+
+**Decision needed:** accept the four notes and schedule them into the next HLD revision. The notes can follow sign-off, but the acceptance cannot.
+
+---
+
+## Suggested order
+
+1. **Send this week:** S-1 to S-6 to Finance, Product and Legal as one pack (they share BL-OQ-7, 11 and 16), S-7 to the PCI owner group, S-8 to the TL and S-9 to the HLD owner.
+2. **Rejections** become LLD changes in rev 0.15. Approvals change the item's status from *Proposed* to *Closed* in §16.1.
+3. **Sign-off** happens when every row below says Approved. Go-live gates stay open and are tracked separately.
+
+## Tracker
+
+| # | Team | Approver | Reply | Date |
+|---|---|---|---|---|
+| S-1 | Finance | | | |
+| S-2 | Finance | | | |
+| S-3 | Finance | | | |
+| S-4 | Finance | | | |
+| S-4 | Security | | | |
+| S-5 | Finance | | | |
+| S-5 | Legal | | | |
+| S-6 | Product | | | |
+| S-6 | Finance | | | |
+| S-7 | PCI owner group | | | |
+| S-8 | Commercial TL | | | |
+| S-8 | Entitlements | | | |
+| S-9 | Commercial HLD owner | | | |
