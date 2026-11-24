@@ -7,7 +7,7 @@
 | Document type | Low-Level Design (LLD) |
 | Service | `commercial-billing` (Billing) |
 | Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service` (the repository name, as in the IAM services). Service name, ServiceAccount, pod label, envelope `source` and metric prefix stay `commercial-billing` (CD-17, CD-19) |
-| Status | **Submitted for sign-off** (rev 0.33) — design stage; no code yet. **All nine partner-team design decisions approved (S-1 to S-9, 2026-11-23)**, and the Commercial Team's additions to S-2, S-3, S-5 and S-6 acknowledged by Finance, Product and Legal; awaiting final sign-off (HLD v0.65 merge; PCI re-confirmation of §4 and §5.4.4). Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
+| Status | **Submitted for sign-off** (rev 0.34) — design stage; no code yet. **All nine partner-team design decisions approved (S-1 to S-9, 2026-11-23)**, and the Commercial Team's additions to S-2, S-3, S-5 and S-6 acknowledged by Finance, Product and Legal; awaiting final sign-off (HLD v0.65 merge; PCI re-confirmation of §4 and §5.4.4). Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
 | Base HLD | Commercial Domain HLD **v0.65** (`hld-commercial-domain-v0.65.md`), the only HLD for the domain. Rebased from v0.51 in rev 0.14 (to v0.64) and to v0.65 in rev 0.23: v0.52 to v0.65 checked for Billing impact (§1.1, "HLD v0.52 to v0.65"); v0.64 (`platform-audit`) changes Billing, already applied in rev 0.5; v0.65 is text-only and adopts this LLD's D-1, D-5, D-8 and D-9. Parent: IAM HLD **v1.59** |
 | Supersedes | `hld-billing-service.md` v0.2 (draft Billing HLD, dropped in Commercial HLD v0.28). Its open items B-1 to B-13 are dispositioned in §16.3 and are never a source of requirements |
 | Sibling LLDs | Commercial: `commercial-lld-entitlements-service.md`, `commercial-lld-usage-metering-service.md` (to be written; until it exists the consumed `UsagePeriodClosed` contract is unverified, BL-OQ-24). IAM (contracts verified against these): Core `iam-lld-org-membership-service.md` rev 2.49 (I-11, I-18, `billing-orgm-q`, EVT-14/15/18, SEAT-2), Realm Provisioner `iam-lld-realm-provisioner-service.md` rev 1.46+ (RP-3, RP-4, RP-11, `billing-realm-q`, `iam.tenant.events` payloads), Audit Log `iam-lld-audit-log-service.md` rev 0.37 (AL-5, entry taxonomy, Billing admission since rev 0.34, `billing.token_addon.refunded` since rev 0.37), `platform-audit` `docs/lld/platform-lld-audit.md` rev 1.5 (§4, §11, §18.6, §19.2), AuthZ Enrichment `iam-lld-authz-enrichment.md` v1.50 (operator path, CD-52; §8.9.1 OP-G4 lists Billing B-O1 to B-O15). Edge: `signup-bff-lld.md` (Signup BFF, `BillingClient.AuthorizeAndCharge`) |
@@ -19,6 +19,7 @@
 
 | Rev | Date | Change |
 |---|---|---|
+| 0.34 | 2026-11-24 | **Three implementation clarifications approved (Phase 5); no design change.** (1) §12: new setting `OPERATOR_PATH_LIVE` (default `false`), the explicit rollout control for `BIL-AUTH-6`: it models whether IAM's operator path (CD-52, OP-G1 to OP-G4) is available; until it is `true`, every operator route answers `403 INSUFFICIENT_ROLE` outside dev and test. (2) §5.1: `validationErrors[]` entries are the platform-standard `gincommon/v2` shape `{field, message}`; the `code` member previously documented is removed (neither emitted nor supported by gincommon; the platform standard is the source of truth). (3) §5.4.2, §13.1, §5.2 `BIL-AUTH-3`: the B-I1 caller principal is read from the Istio-generated `X-Forwarded-Client-Cert` header (SPIFFE URI of the nearest hop); the deployment must keep the sidecar's client-certificate forwarding enabled (`forwardClientCertDetails: SANITIZE_SET`), stated as a Helm/deployment requirement. |
 | 0.33 | 2026-11-23 | **§3.1: stripe-go pinned at v87.2.0** (the latest stable at first build), which pins Stripe API version `2026-11-18.endive`; the Stripe adapter version is therefore `1.0.0+stripeapi.2026-11-18.endive`. The `2026-10-28.acacia` values in §5.4.4 and §19.6 are format examples. No design change. |
 | 0.32 | 2026-11-23 | **§14.2: integration tests run on Postgres 17**, matching the IAM services (`postgres:17-alpine`), instead of 16. No design change. |
 | 0.31 | 2026-11-23 | **Implementation baseline corrected (Phase 0).** Go module path is `commercial-billing-service`, the repository name (service identity unchanged). §3.1 pins the current platform releases: Go 1.26.11, `platform-gincommon/v2` v2.7.0 (first release with the `commercial` observability domain; v2.6.1 panicked on it), `platform-events/v2` v2.3.0, `platform-pgcommon/v2` v2.0.2, `platform-audit` v0.1.2. The note that IAM "still runs v1.6.0" is removed: IAM services run `gincommon/v2`. §3 layout root renamed. No design change. |
@@ -1461,7 +1462,7 @@ Applied `BEFORE UPDATE … FOR EACH ROW WHEN (OLD.* IS DISTINCT FROM NEW.*)` on 
 - Every route runs behind `gincommon.ObservabilityMiddlewares`. Tenant and operator groups add `gincommon.ProtectedMiddlewares` (RequireAuth → ContextMiddleware), then `GUCBridge` and `RequireJSONContentType` (`415 UNSUPPORTED_MEDIA_TYPE`). Tenant routes add `RequirePathTenantMatch` and `RequirePermission(p)`; operator routes add `RequirePlatformOperator`; the internal route adds `RequireCallerPrincipal(BFF_CALLER_PRINCIPAL)`.
 - **Identity** comes only from gateway- or mesh-injected `x-user-id`, `x-tenant-id`, `x-tenant-roles` under mesh mTLS. No JWT parsing. Identity fields in a body are ignored (`BIL-API-1`).
 - Content type `application/json; charset=utf-8`. Timestamps RFC 3339 UTC with second precision. **Money** is `{"amount_minor": 6900, "currency": "USD"}` — integer minor units and ISO 4217 code; never floats.
-- **Errors** are RFC 9457 problems from `gincommon/v2` (`application/problem+json`): `type`, `title`, `status`, `detail`, `instance`, `errorCode`, `validationErrors[]` (`{field, code, message}`), `traceId`, `tenantId`, `timestamp`, plus documented extension members. `errorCode` values are `UPPER_SNAKE` and frozen once published (CD-31; §17). `request_id` travels only in the `X-Request-ID` header.
+- **Errors** are RFC 9457 problems from `gincommon/v2` (`application/problem+json`): `type`, `title`, `status`, `detail`, `instance`, `errorCode`, `validationErrors[]` (`{field, message}`, the platform-standard `gincommon/v2` entry; the message is a fixed phrase that never echoes the value), `traceId`, `tenantId`, `timestamp`, plus documented extension members. `errorCode` values are `UPPER_SNAKE` and frozen once published (CD-31; §17). `request_id` travels only in the `X-Request-ID` header.
 - **Idempotency.** `Idempotency-Key` (8–200 chars, `[A-Za-z0-9:_\-.]`) is **required** on every mutating internal and operator route and on tenant routes that can create a charge or a provider object (B-P2, B-P4, B-P7, B-P10, B-P14, B-P16, B-P20, B-P23); optional on the other tenant mutations. Semantics in §9.2.
 - **Optimistic locking.** Mutations that act on a subscription the caller read take `record_version` (body field); mismatch → `409 OPTIMISTIC_LOCK_CONFLICT` with extension `record_version` (current). Every subscription response returns `record_version`.
 - **Lists** are cursor-paginated: `?limit=` 1–100 (default 20), `?cursor=` opaque; response `{"items": […], "next_cursor": "…" | null}`.
@@ -1513,10 +1514,10 @@ The automation principal carries no tenant role (IAM HLD §11.7) and therefore n
 |---|---|
 | BIL-AUTH-1 | Every tenant route checks its permission before any provider call or DB write; missing → `403 INSUFFICIENT_PERMISSION` with extension `required_permission`. |
 | BIL-AUTH-2 | `platform_operator` is accepted only on `/api/v1/operator/*`, re-checked in the handler before any DB access (IAM AUTH-6 pattern). A `platform_operator` value on a tenant route grants nothing. |
-| BIL-AUTH-3 | B-I1 admits only the mTLS principal `cluster.local/ns/bff/sa/bff-signup`; any other caller is `403 INSUFFICIENT_ROLE`. |
+| BIL-AUTH-3 | B-I1 admits only the mTLS principal `cluster.local/ns/bff/sa/bff-signup`; any other caller is `403 INSUFFICIENT_ROLE`. The principal is the SPIFFE URI (`URI=spiffe://…`) of the last element of the Istio-generated `X-Forwarded-Client-Cert` header; a request without it is refused. |
 | BIL-AUTH-4 | `commercial-system` (`00000000-0000-0000-0000-0000000000c1`) is Billing's **outbound** identity only; inbound it is rejected on every route. |
 | BIL-AUTH-5 | The webhook route binds no tenant and trusts no header except the provider signature. |
-| BIL-AUTH-6 | Until IAM's operator path is live end to end (CD-52; AuthZ Enrichment LLD §8.9.1 OP-G1 platform realm, OP-G2 gateway `jwt_authn` provider, OP-G3 `OPERATOR_REALM_ISSUER` set), every operator route answers `403 INSUFFICIENT_ROLE` outside dev and test; there is no Billing-side bypass. |
+| BIL-AUTH-6 | Until IAM's operator path is live end to end (CD-52; AuthZ Enrichment LLD §8.9.1 OP-G1 platform realm, OP-G2 gateway `jwt_authn` provider, OP-G3 `OPERATOR_REALM_ISSUER` set), every operator route answers `403 INSUFFICIENT_ROLE` outside dev and test; there is no Billing-side bypass. The switch is `OPERATOR_PATH_LIVE` (§12, default `false`), set to `true` per environment only after OP-G4 passes there. |
 | BIL-AUTH-7 | Each tenant route requires exactly one permission (§5.3). `commercial.payment_method.manage` and `commercial.subscription.change_plan` are never implied by any other permission: holding `commercial.subscription.manage`, `commercial.billing.view` or both never allows a payment-method change, a billing-contact change or a new contractual commitment. |
 
 ### 5.3 Endpoint catalogue
@@ -1905,7 +1906,7 @@ This **publishes** the contract HLD §10.6 marked indicative and the Signup BFF 
 |---|---|
 | `Idempotency-Key` | Required; must equal `charge:<tenant_id>` (SB-INV-3) — `400 VALIDATION_ERROR` otherwise |
 | `x-tenant-id` | The pre-allocated `tenant_id`; must equal the body (`400 TENANT_MISMATCH`) |
-| mTLS identity | `cluster.local/ns/bff/sa/bff-signup` (`BIL-AUTH-3`) |
+| `X-Forwarded-Client-Cert` | Set by the Istio sidecar from the verified mTLS client certificate (never by the caller: the sidecar sanitises and sets it). Billing reads the SPIFFE URI of the last element and requires `cluster.local/ns/bff/sa/bff-signup` (`BIL-AUTH-3`); missing or other → `403 INSUFFICIENT_ROLE` |
 
 **Request**
 
@@ -3421,7 +3422,8 @@ Values from `deploy/helm/values.yaml` (`env:`) and OpenBao (`secretValues:` via 
 | `AUDIT_DELIVERY_INTERVAL` | `5s` | 1–60 s | `auditoutbox.Runner` tick |
 | Other `AUDIT_*` (`AUDIT_LOG_TIMEOUT`, `AUDIT_DELIVERY_BATCH_SIZE`, `AUDIT_DELIVERY_MAX_ATTEMPTS`, `AUDIT_DELIVERY_BACKOFF_MAX`, `AUDIT_DISPOSED_RETENTION`, `AUDIT_REQUIRE_CROSS_TENANT_ACCESS`, …) | library defaults | library LLD §12 | Malformed values fail startup |
 | `COMMERCIAL_SYSTEM_PRINCIPAL` | `00000000-0000-0000-0000-0000000000c1` | fixed | Outbound identity |
-| `BFF_CALLER_PRINCIPAL` | `cluster.local/ns/bff/sa/bff-signup` | SPIFFE path | `BIL-AUTH-3` |
+| `BFF_CALLER_PRINCIPAL` | `cluster.local/ns/bff/sa/bff-signup` | SPIFFE path | `BIL-AUTH-3`; compared with the SPIFFE URI in `X-Forwarded-Client-Cert` (§13.1) |
+| `OPERATOR_PATH_LIVE` | `false` | bool | `BIL-AUTH-6`: models the availability of IAM's operator path (CD-52, OP-G1 to OP-G4). `false` → every operator route `403 INSUFFICIENT_ROLE` outside dev and test. Set `true` per environment only after OP-G4 passes there |
 | `LOG_LEVEL` / `LOG_HASH_SALT` | `info` / secret | — | Logs |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_TRACES_SAMPLER_ARG` | — / `0.2` | — / 0–1 | Tracing (errors always sampled) |
 
@@ -3447,6 +3449,7 @@ Namespace `billing`; ServiceAccount and `app.kubernetes.io/name` `commercial-bil
 | `HTTPRoute` (webhook) | Exact `/api/v1/webhooks/stripe`; no JWT; `ext_authz` disabled; 50 rps |
 | `NetworkPolicy` | §10.2 |
 | Istio `AuthorizationPolicy` | B-I1 from `bff/bff-signup` only; tenant and operator routes from the gateway only |
+| Istio sidecar client-certificate forwarding | **Deployment requirement (`BIL-AUTH-3`).** The pod's sidecar must forward the verified client certificate as `X-Forwarded-Client-Cert` with `forwardClientCertDetails: SANITIZE_SET` (pod annotation `proxy.istio.io/config`, or the mesh default if it already is). Billing obtains B-I1's caller identity only from that header; disabling forwarding makes every B-I1 call `403`. The chart sets the annotation explicitly and `helm-check` asserts it |
 | `ServiceMonitor`, `PrometheusRule` | Metrics on 9090 from `monitoring` only; rules of §11.5 |
 | `ExternalSecret` | §10.5 |
 
