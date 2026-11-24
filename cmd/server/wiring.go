@@ -73,6 +73,7 @@ func startWorkers(cfg config.Config, reg *provider.Registry, appPool, sysPool *p
 	}
 	go pollLoop(ctx, cfg.SagaPollInterval, sagaBatch, svc.RunSagas, log, "saga worker")
 	go pollLoop(ctx, followUpInterval, sagaBatch, svc.RunLifecycleFollowUps, log, "lifecycle follow-up")
+	go pollLoop(ctx, reconPollInterval, 1, svc.RunReconciliation, log, "reconciliation run")
 	if b.outbox != nil {
 		go func() {
 			if err := b.outbox.Start(ctx); err != nil {
@@ -152,6 +153,9 @@ func apiRoutes(cfg config.Config, ginCfg gincommon.Config, appPool *pgcommon.Poo
 	}
 	return api.Register
 }
+
+// reconPollInterval is how often a pod looks for a queued reconciliation run.
+const reconPollInterval = 30 * time.Second
 
 // followUpInterval paces the lifecycle follow-ups (§8.8.4, §8.10).
 const followUpInterval = 10 * time.Second

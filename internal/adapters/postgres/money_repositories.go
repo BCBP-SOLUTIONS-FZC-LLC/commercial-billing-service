@@ -149,3 +149,17 @@ func (r *MoneyRepository) DecideDispute(ctx context.Context, disputeID, decision
 		return err
 	})
 }
+
+// Disputes implements port.MoneyRepo: the tenant's disputes, newest first.
+func (r *MoneyRepository) Disputes(ctx context.Context, tenantID string) ([]domain.Dispute, error) {
+	var out []domain.Dispute
+	err := inTx(ctx, r.pool, func(q querier) error {
+		rows, err := q.Query(ctx, `SELECT `+disputeColumns+` FROM disputes WHERE tenant_id = $1::uuid ORDER BY opened_at DESC`, tenantID)
+		if err != nil {
+			return err
+		}
+		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.Dispute, error) { return scanDispute(row) })
+		return err
+	})
+	return out, err
+}

@@ -164,6 +164,9 @@ func (s *Service) closeOffboarded(ctx context.Context, tenantID, subID string) e
 			return providerErr(err)
 		}
 	}
+	if sub.Provider != manualProvider {
+		s.voidOpenInvoices(ctx, prov, tenantID)
+	}
 	return s.locked(ctx, tenantID, func(ctx context.Context) error {
 		cur, err := s.Subs.Get(ctx, subID)
 		if err != nil || cur.Status == domain.StatusEnded {

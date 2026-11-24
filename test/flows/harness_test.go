@@ -121,6 +121,7 @@ type fakeProvider struct {
 	change       []confirmAnswer
 	fallback     bool
 	refundStatus string
+	recon        map[port.ReconKind][]domain.ProviderObjectState
 }
 
 func (p *fakeProvider) record(c string) error {
@@ -293,6 +294,13 @@ func (p *fakeProvider) Refund(_ context.Context, in port.RefundInput, key string
 	return port.RefundResult{ProviderRefundID: "re_" + key, Status: st}, nil
 }
 
+// recon is what ListSince returns per kind.
+func (p *fakeProvider) ListSince(_ context.Context, kind port.ReconKind, _ time.Time, _ string) (port.ReconPage, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return port.ReconPage{Items: p.recon[kind]}, nil
+}
+
 func (p *fakeProvider) called(prefix string) []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -394,13 +402,14 @@ func newEnv(t *testing.T) *env {
 		Prices: pgadapter.NewPriceRepository(appPool), Checkouts: pgadapter.NewCheckoutRepository(appPool), Invoices: pgadapter.NewInvoiceRepository(appPool),
 		Changes: pgadapter.NewPlanChangeRepository(appPool, systemPool), Previews: pgadapter.NewPreviewRepository(appPool),
 		SeatPurchases: pgadapter.NewSeatPurchaseRepository(appPool), Schedules: pgadapter.NewScheduleRepository(appPool, systemPool),
-		FollowUps: pgadapter.NewFollowUpRepository(systemPool), Addons: pgadapter.NewAddonRepository(appPool), Money: pgadapter.NewMoneyRepository(appPool), Admin: pgadapter.NewAdminRepository(systemPool), Entitlements: e.ent,
+		FollowUps: pgadapter.NewFollowUpRepository(systemPool), Addons: pgadapter.NewAddonRepository(appPool), Money: pgadapter.NewMoneyRepository(appPool), Admin: pgadapter.NewAdminRepository(systemPool),
+		Recon: pgadapter.NewReconRepository(systemPool), Ledger: pgadapter.NewLedgerRepository(systemPool), Entitlements: e.ent,
 		Sagas: pgadapter.NewSagaRepository(appPool, systemPool), Emissions: pgadapter.NewEmissionRepository(appPool, systemPool),
 		Providers: registry{"stripe": e.stripe, "manual": manual}, Core: e.core, RP: e.rp,
 		Events: pgadapter.NewEventEnqueuer(eventbus.Source, eventbus.SpecVersion, schemas.Validate), Audit: pgadapter.NewAuditWriter(enq),
 		Settings: app.Settings{DefaultCurrency: "USD", NewAccountProvider: "stripe", CheckoutTTL: time.Hour, TenantAppBaseURL: "https://app.example",
 			SagaMaxBackoff: 5 * time.Minute, SCAAbandonAfter: 30 * time.Minute, SagaClaim: 45 * time.Second, SeatsAfterConversionDelay: 120 * time.Second, MaxSeatsPerPurchase: 1000, SeatPreviewTTL: 10 * time.Minute, MinChargeMinor: 200, BelowMinimumPolicy: domain.FreeUntilRenewal,
-			FeatureSeatPurchase: true, AutoPauseOnOperatorSuspension: true, ReviewThresholdMinor: 100000, CertSuiteVersion: "cert-1.0"},
+			FeatureSeatPurchase: true, AutoPauseOnOperatorSuspension: true, ReviewThresholdMinor: 100000, CertSuiteVersion: "cert-1.0", WorkerName: "test"},
 		Now: func() time.Time { return e.now },
 	}
 	return e

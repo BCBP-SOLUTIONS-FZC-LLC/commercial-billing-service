@@ -330,3 +330,21 @@ func jsonText(b []byte) *string {
 	s := string(b)
 	return &s
 }
+
+// Excerpt returns the tenant's newest ledger rows, never payloads (B-O7).
+func (r *LedgerRepository) Excerpt(ctx context.Context, tenantID string, limit int) ([]port.LedgerExcerpt, error) {
+	var out []port.LedgerExcerpt
+	err := inTx(ctx, r.pool, func(q querier) error {
+		rows, err := q.Query(ctx, `SELECT provider_event_id, event_type, status::text, outcome, received_at FROM payment_event_ledger
+			WHERE tenant_id = $1::uuid ORDER BY received_at DESC LIMIT $2`, tenantID, limit)
+		if err != nil {
+			return err
+		}
+		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (port.LedgerExcerpt, error) {
+			var e port.LedgerExcerpt
+			return e, row.Scan(&e.ProviderEventID, &e.EventType, &e.Status, &e.Outcome, &e.ReceivedAt)
+		})
+		return err
+	})
+	return out, err
+}

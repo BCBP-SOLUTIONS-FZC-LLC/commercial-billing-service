@@ -36,6 +36,7 @@ type Settings struct {
 	FeatureDirectSignup           bool
 	ReviewThresholdMinor          int64
 	CertSuiteVersion              string
+	WorkerName                    string // pod name, reconciliation_runs.claimed_by
 	AutoPauseOnOperatorSuspension bool
 	FeatureTokenAddons            bool
 	FeatureSeatPurchase           bool
@@ -61,6 +62,8 @@ type Service struct {
 	Addons        port.AddonRepo
 	Money         port.MoneyRepo
 	Admin         port.AdminRepo
+	Recon         port.ReconRepo
+	Ledger        port.LedgerReader
 	Entitlements  port.EntitlementsReader
 	Sagas         port.SagaRepo
 	Emissions     port.EmissionRepo

@@ -143,6 +143,19 @@ type MoneyRepo interface {
 	UpsertDispute(ctx context.Context, d domain.Dispute) (domain.Dispute, error)
 	Dispute(ctx context.Context, disputeID string) (domain.Dispute, bool, error)
 	DecideDispute(ctx context.Context, disputeID, decision, by string) error
+	Disputes(ctx context.Context, tenantID string) ([]domain.Dispute, error)
+}
+
+// LedgerExcerpt is one ledger row for an operator, without its payload.
+type LedgerExcerpt struct {
+	ProviderEventID, EventType, Status string
+	Outcome                            *string
+	ReceivedAt                         time.Time
+}
+
+// LedgerReader lists a tenant's ledger rows (system pool, B-O7).
+type LedgerReader interface {
+	Excerpt(ctx context.Context, tenantID string, limit int) ([]LedgerExcerpt, error)
 }
 
 // InvoiceRow is one invoice of a list (B-P17, B-O4).
@@ -229,4 +242,32 @@ type AdminRepo interface {
 	Certification(ctx context.Context, id string) (domain.Certification, bool, error)
 	ReviewCertification(ctx context.Context, id string, status domain.CertificationStatus, by, reason string, at time.Time) (domain.Certification, error)
 	RevokeCertification(ctx context.Context, id, by, reason string, at time.Time) (domain.Certification, error)
+}
+
+// ReconRun is a reconciliation run (§4.2.22).
+type ReconRun struct {
+	RunID, Provider, StartedBy, Status string
+	WindowStart, WindowEnd             time.Time
+	AutoRepair                         bool
+	Counts                             map[string]int
+}
+
+// ReconFinding is one finding (§4.2.22).
+type ReconFinding struct {
+	TenantID, Kind              string
+	BillingValue, ProviderValue []byte // JSON
+	AutoRepaired                bool
+	RepairNote                  *string
+}
+
+// ReconRepo stores reconciliation runs and reads Billing's side (system pool).
+type ReconRepo interface {
+	Queue(ctx context.Context, r ReconRun) error
+	Claim(ctx context.Context, worker string) (ReconRun, bool, error)
+	AddFinding(ctx context.Context, runID string, f ReconFinding) error
+	Finish(ctx context.Context, runID, status string, counts map[string]int, errText *string) error
+	Get(ctx context.Context, runID string) (ReconRun, []ReconFinding, bool, error)
+	BillingSubscriptions(ctx context.Context, provider string) (map[string][2]string, error)
+	KnownIDs(ctx context.Context, provider, kind string, ids []string) (map[string]bool, error)
+	UnknownCustomerEvents(ctx context.Context, provider string, from, to time.Time) ([]string, error)
 }
