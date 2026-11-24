@@ -120,6 +120,7 @@ type SagaRepo interface {
 type InvoiceRepo interface {
 	Mirror(ctx context.Context, tenantID, provider string, v InvoiceView, providerUpdatedAt time.Time) (invoiceID string, err error)
 	Link(ctx context.Context, invoiceID, tenantID, refType, refID string) error
+	OldestOpen(ctx context.Context, tenantID, billingSubscriptionID string) (providerInvoiceID string, err error)
 }
 
 // PlanChangeRepo stores plan change requests (§4.2.9).

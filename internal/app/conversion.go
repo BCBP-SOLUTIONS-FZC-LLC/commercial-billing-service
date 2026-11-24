@@ -305,7 +305,8 @@ func (h CheckoutCompleted) Handle(ctx context.Context, tenantID string, ev domai
 		return "applied:session_completed", nil
 	}
 	_, err = s.Subs.Update(ctx, *session.BillingSubscriptionID, 0, func(x *domain.Subscription) {
-		if x.ProviderSubscriptionID == nil {
+		// A reactivation replaces the deleted provider subscription (§8.9).
+		if x.ProviderSubscriptionID == nil || session.Purpose == domain.PurposeReactivation {
 			x.ProviderSubscriptionID = &providerSub
 		}
 	})

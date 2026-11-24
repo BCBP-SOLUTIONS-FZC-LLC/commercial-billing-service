@@ -303,8 +303,9 @@ func metaFor(c Caller) port.EventMeta {
 	return port.EventMeta{Actor: c.UserID, IPAddress: c.ClientIP, UserAgent: c.UserAgent}
 }
 
-// systemMeta is the envelope metadata of a callback, job or consumer.
-func systemMeta(userAgent string) port.EventMeta { return port.EventMeta{UserAgent: userAgent} }
+// webhookMeta is the envelope metadata of a callback-driven change
+// (actor commercial-system, ip "system", §7.3.1).
+func webhookMeta() port.EventMeta { return port.EventMeta{UserAgent: webhookUA} }
 
 func (s *Service) scheduleDowngrade(ctx context.Context, c Caller, sub domain.Subscription, item domain.SubscriptionItem, tp domain.PlanPrice,
 	prov port.PaymentProvider, target domain.PlanCode) (PlanChangeResult, error) {
@@ -435,7 +436,7 @@ func (h UpgradeInvoicePaid) Handle(ctx context.Context, tenantID string, ev doma
 		return "", errors.Join(err, domain.NewError(domain.ErrPriceNotAvailable, "target price missing"))
 	}
 	if err := s.applyPlanChange(ctx, &req, tp, domain.CommercialSystemPrincipal, "webhook:"+ev.EventType, eventRef(ev),
-		systemMeta("commercial-billing/webhook")); err != nil {
+		webhookMeta()); err != nil {
 		return "", err
 	}
 	return "applied:plan_upgrade", nil
@@ -489,7 +490,7 @@ func (h DowngradeOnCycle) Handle(ctx context.Context, tenantID string, ev domain
 		return "", errors.Join(err, domain.NewError(domain.ErrPriceNotAvailable, "target price missing"))
 	}
 	if err := s.applyPlanChange(ctx, &req, tp, domain.CommercialSystemPrincipal, "webhook:"+ev.EventType, eventRef(ev),
-		systemMeta("commercial-billing/webhook")); err != nil {
+		webhookMeta()); err != nil {
 		return "", err
 	}
 	if _, err := next(); err != nil {

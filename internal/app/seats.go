@@ -317,7 +317,7 @@ func (h SeatInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain.
 		return "", &port.IgnoredEvent{Reason: "purchase_" + string(p.Status)}
 	}
 	if err := s.confirmSeats(ctx, &p, "webhook:"+ev.EventType, domain.CommercialSystemPrincipal, eventRef(ev),
-		systemMeta("commercial-billing/webhook")); err != nil {
+		webhookMeta()); err != nil {
 		return "", err
 	}
 	return "applied:seat_purchase", nil

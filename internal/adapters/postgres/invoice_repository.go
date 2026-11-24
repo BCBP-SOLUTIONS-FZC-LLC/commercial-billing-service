@@ -69,3 +69,18 @@ func (r *InvoiceRepository) Link(ctx context.Context, invoiceID, tenantID, refTy
 		return err
 	})
 }
+
+// OldestOpen implements port.InvoiceRepo: the provider id of the oldest open
+// invoice for the subscription's provider subscriptions (B-P14), or "".
+func (r *InvoiceRepository) OldestOpen(ctx context.Context, tenantID, _ string) (string, error) {
+	var id string
+	err := inTx(ctx, r.pool, func(q querier) error {
+		err := q.QueryRow(ctx, `SELECT provider_invoice_id FROM invoices WHERE tenant_id = $1::uuid AND status = 'open'
+			AND kind IN ('subscription_cycle','subscription_create') ORDER BY issued_at NULLS LAST, provider_updated_at LIMIT 1`, tenantID).Scan(&id)
+		if isNoRows(err) {
+			return nil
+		}
+		return err
+	})
+	return id, err
+}

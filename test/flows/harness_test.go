@@ -220,6 +220,14 @@ func (p *fakeProvider) ChangeQuantity(_ context.Context, in port.QuantityChange,
 	return res, nil
 }
 
+func (p *fakeProvider) SetCancelAtPeriodEnd(_ context.Context, ref port.SubscriptionRef, cancel bool, key string) error {
+	return p.record(fmt.Sprintf("SetCancelAtPeriodEnd %s %v %s", ref.ProviderSubscriptionID, cancel, key))
+}
+
+func (p *fakeProvider) PayOpenInvoiceLink(_ context.Context, ref port.InvoiceRef) (port.URLWithExpiry, error) {
+	return port.URLWithExpiry{URL: "https://invoice.example/" + ref.ProviderInvoiceID, ExpiresAt: time.Now().Add(time.Hour)}, p.record("PayOpenInvoiceLink " + ref.ProviderInvoiceID)
+}
+
 func (p *fakeProvider) called(prefix string) []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -359,3 +367,26 @@ func (e *env) version(t *testing.T, sub string) int64 {
 }
 
 func itoa(n int64) string { return fmt.Sprint(n) }
+
+// paidChain is the server's invoice.paid handler chain.
+func paidChain(svc *app.Service) port.PaymentEventHandler {
+	return app.FirstInvoicePaid{S: svc, Next: app.UpgradeInvoicePaid{S: svc, Next: app.SeatInvoicePaid{S: svc,
+		Next: app.DowngradeOnCycle{S: svc, Next: app.CycleInvoicePaid{S: svc}}}}}
+}
+
+// invoiceState is a re-read invoice for subscription sub.
+func invoiceState(id, sub, status, reason string, start time.Time, qty int64) domain.ProviderObjectState {
+	return domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: id}, Status: status,
+		Fields: map[string]any{"subscription": "sub_" + sub, "billing_reason": reason, "amount_due_minor": int64(69000),
+			"amount_paid_minor": int64(0), "currency": "USD", "line_period_start": start, "line_period_end": start.AddDate(0, 1, 0),
+			"line_quantity": qty, "next_payment_attempt": start.Add(72 * time.Hour)}}
+}
+
+func callback(id, typ string, kind domain.NormalisedKind) domain.PaymentEvent {
+	return domain.PaymentEvent{Provider: "stripe", ProviderEventID: id, EventType: typ, Kind: kind, ProviderCreatedAt: time.Now()}
+}
+
+func events(t *testing.T, tenant string) []string {
+	t.Helper()
+	return scalar[[]string](t, `SELECT coalesce(array_agg(event_type ORDER BY ordering_seq), '{}') FROM outbox_events WHERE tenant_id = $1`, tenant)
+}

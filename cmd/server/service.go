@@ -47,8 +47,10 @@ func paymentHandlers(svc *app.Service) map[domain.NormalisedKind]port.PaymentEve
 	return map[domain.NormalisedKind]port.PaymentEventHandler{
 		domain.KindCheckoutCompleted: app.CheckoutCompleted{S: svc},
 		domain.KindCheckoutExpired:   app.CheckoutExpired{S: svc},
-		// invoice.paid: conversion payment → upgrade proration → seat proration → cycle (downgrade at renewal).
-		domain.KindInvoicePaid: app.FirstInvoicePaid{S: svc, Next: app.UpgradeInvoicePaid{S: svc, Next: app.SeatInvoicePaid{S: svc, Next: app.DowngradeOnCycle{S: svc}}}},
+		// invoice.paid: conversion payment → upgrade proration → seat proration → downgrade at renewal → cycle (renewal, recovery, reactivation).
+		domain.KindInvoicePaid:          app.FirstInvoicePaid{S: svc, Next: app.UpgradeInvoicePaid{S: svc, Next: app.SeatInvoicePaid{S: svc, Next: app.DowngradeOnCycle{S: svc, Next: app.CycleInvoicePaid{S: svc}}}}},
+		domain.KindInvoicePaymentFailed: app.PaymentFailed{S: svc},
+		domain.KindSubscriptionEnded:    app.SubscriptionEnded{S: svc},
 	}
 }
 
