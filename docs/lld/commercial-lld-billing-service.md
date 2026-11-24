@@ -7,7 +7,7 @@
 | Document type | Low-Level Design (LLD) |
 | Service | `commercial-billing` (Billing) |
 | Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service` (the repository name, as in the IAM services). Service name, ServiceAccount, pod label, envelope `source` and metric prefix stay `commercial-billing` (CD-17, CD-19) |
-| Status | **Submitted for sign-off** (rev 0.36) — design stage; no code yet. **All nine partner-team design decisions approved (S-1 to S-9, 2026-11-23)**, and the Commercial Team's additions to S-2, S-3, S-5 and S-6 acknowledged by Finance, Product and Legal; awaiting final sign-off (HLD v0.65 merge; PCI re-confirmation of §4 and §5.4.4). Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
+| Status | **Submitted for sign-off** (rev 0.37) — design stage; no code yet. **All nine partner-team design decisions approved (S-1 to S-9, 2026-11-23)**, and the Commercial Team's additions to S-2, S-3, S-5 and S-6 acknowledged by Finance, Product and Legal; awaiting final sign-off (HLD v0.65 merge; PCI re-confirmation of §4 and §5.4.4). Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
 | Base HLD | Commercial Domain HLD **v0.65** (`hld-commercial-domain-v0.65.md`), the only HLD for the domain. Rebased from v0.51 in rev 0.14 (to v0.64) and to v0.65 in rev 0.23: v0.52 to v0.65 checked for Billing impact (§1.1, "HLD v0.52 to v0.65"); v0.64 (`platform-audit`) changes Billing, already applied in rev 0.5; v0.65 is text-only and adopts this LLD's D-1, D-5, D-8 and D-9. Parent: IAM HLD **v1.59** |
 | Supersedes | `hld-billing-service.md` v0.2 (draft Billing HLD, dropped in Commercial HLD v0.28). Its open items B-1 to B-13 are dispositioned in §16.3 and are never a source of requirements |
 | Sibling LLDs | Commercial: `commercial-lld-entitlements-service.md`, `commercial-lld-usage-metering-service.md` (to be written; until it exists the consumed `UsagePeriodClosed` contract is unverified, BL-OQ-24). IAM (contracts verified against these): Core `iam-lld-org-membership-service.md` rev 2.49 (I-11, I-18, `billing-orgm-q`, EVT-14/15/18, SEAT-2), Realm Provisioner `iam-lld-realm-provisioner-service.md` rev 1.46+ (RP-3, RP-4, RP-11, `billing-realm-q`, `iam.tenant.events` payloads), Audit Log `iam-lld-audit-log-service.md` rev 0.37 (AL-5, entry taxonomy, Billing admission since rev 0.34, `billing.token_addon.refunded` since rev 0.37), `platform-audit` `docs/lld/platform-lld-audit.md` rev 1.5 (§4, §11, §18.6, §19.2), AuthZ Enrichment `iam-lld-authz-enrichment.md` v1.50 (operator path, CD-52; §8.9.1 OP-G4 lists Billing B-O1 to B-O15). Edge: `signup-bff-lld.md` (Signup BFF, `BillingClient.AuthorizeAndCharge`) |
@@ -19,6 +19,7 @@
 
 | Rev | Date | Change |
 |---|---|---|
+| 0.37 | 2026-11-24 | **Phase 7a decisions (Commercial Team).** (1) **§12, §13.2:** new key `PUSHGATEWAY_URL`. Each CronJob pushes `commercial_cross_tenant_job_runs_total{job, outcome}` there; when the key is empty the job logs the outcome instead. (2) **§8.16 step 3:** the renewal price notice waits for BL-OQ-12 (NTF-3). No event is defined, so none is emitted; B-P1's `scheduled_unit_price` is the notice until then. (3) **§8.13:** auto-repair applies from Phase 7 and replaces the rev 0.36 report-only note. A `status_mismatch` where the provider has ended the subscription is repaired by a ledger row `recon:<run_id>:<provider_object_id>` (`event_type = reconciliation.reread`); the normal processor re-reads that object (`BIL-PAY-4`). Other status mismatches stay reported. A missing event is ledgered from the provider's event listing, normalised as a delivery would be. (4) **§3.4:** `QuantityChange.KeepIfUnpaid` applies the quantity even when the invoice is unpaid (Stripe `payment_behavior = allow_incomplete`); it is used only for the renewal top-up (§8.6.3, BL-OQ-6). **§2:** new package `internal/bootstrap` holds the composition shared by `cmd/server` and `cmd/jobs`. **§13.2:** `idempotency-prune` also removes stored previews (scope `preview`), and the CronJobs select across tenants as `billing_system` (read-only) and write in tenant transactions on the app pool. |
 | 0.36 | 2026-11-24 | **Commercial Team decisions on eight items raised at the end of Phase 6.** (1) **§8.13:** reconciliation is report-only (non-mutating) until Phase 7. `auto_repair` is accepted and recorded, but no repair runs before then. (2) **§8.16:** until `renewal-repricing` ships in Phase 7, a renewal uses the committed (current) price. (3) **§14.7:** the `cert-1.0` case ids are now listed. (4) **New invariant `BIL-AUD-1`:** a global change (price book, token packs, provider certification, reconciliation run) and its AL-5 entry under `platform_tenant` commit in one `billing_system` transaction. Migration `000006` grants `billing_system` `SELECT, INSERT` on `pending_audit_entries` (§4.2, §4.4). (5) **B-P16:** the `checkout.session.completed` (setup) handler only completes the session. The lifecycle follow-up worker then reads the new payment method from the provider, makes it the default (key `pmdefault:<session_id>`, outside any transaction, `BIL-CONC-2`), sets `default_pm_set` and stamps the new column `checkout_sessions.default_applied_at` (§4.2.7). (6) **B-O11/B-O12:** new port method `VerifyPrice` (§3.4). The provider price must exist, be active, and match amount, currency and interval, else `422 PROVIDER_PRICE_MISMATCH`; `manual` is exempt. (7) **B-P24:** offset paging is accepted; keyset paging is planned if history volume grows. (8) **§14.4:** Stripe Test Clock scenarios run in test mode in Phase 7 and are go-live evidence. |
 | 0.35 | 2026-11-24 | **Three ordering corrections found during implementation (Phase 6); no design change.** (1) B-P2 and B-I1: `chk_ba_customer` requires the provider customer id when a Stripe account row is inserted, so on a tenant's first checkout or signup `EnsureCustomer` (`bsub:<id>:customer`) runs **before** transaction 1, still outside any transaction (`BIL-CONC-2`); a later request reuses the account's customer. (2) B-P2 and B-P14: `checkout_sessions.provider_session_id` is `NOT NULL` and unique, so transaction 1 stores the placeholder `pending:<session_id>`, which transaction 2 replaces with the provider's session id (§4.2.7 note). (3) §8.6.3: the renewal's fresh I-11 read and any top-up are HTTP calls and cannot run inside the cycle `invoice.paid` handler's transaction (`BIL-CONC-2`); the handler rolls the period and leaves the schedule `applying`, and the next `seat-renewal` run (≤ 15 min) reads I-11, charges any top-up and commits the result. |
 | 0.34 | 2026-11-24 | **Three implementation clarifications approved (Phase 5); no design change.** (1) §12: new setting `OPERATOR_PATH_LIVE` (default `false`), the explicit rollout control for `BIL-AUTH-6`: it models whether IAM's operator path (CD-52, OP-G1 to OP-G4) is available; until it is `true`, every operator route answers `403 INSUFFICIENT_ROLE` outside dev and test. (2) §5.1: `validationErrors[]` entries are the platform-standard `gincommon/v2` shape `{field, message}`; the `code` member previously documented is removed (neither emitted nor supported by gincommon; the platform standard is the source of truth). (3) §5.4.2, §13.1, §5.2 `BIL-AUTH-3`: the B-I1 caller principal is read from the Istio-generated `X-Forwarded-Client-Cert` header (SPIFFE URI of the nearest hop); the deployment must keep the sidecar's client-certificate forwarding enabled (`forwardClientCertDetails: SANITIZE_SET`), stated as a Helm/deployment requirement. |
@@ -305,6 +306,7 @@ commercial-billing-service/
 │   │   ├── permission.go                   # Permission constants + role → permission map (§5.2)
 │   │   ├── events.go                       # billing.events payload types (§7.3)
 │   │   └── errors.go                       # DomainError catalogue → errorCode (§17)
+│   ├── bootstrap/                          # composition shared by cmd/server and cmd/jobs (rev 0.37); no behaviour
 │   ├── app/                                # use cases (one file per aggregate) + ports
 │   │   ├── port/
 │   │   │   ├── payment_provider.go         # PaymentProvider (§3.4) — the CD-56 abstraction
@@ -396,6 +398,7 @@ components:
   entclient:     { in: adapters/entitlementsclient/** }
   httpx:         { in: adapters/httpx/** }
   metrics:       { in: adapters/metrics/** }
+  bootstrap:     { in: bootstrap/** }
 vendors:
   stripe-go:     { in: github.com/stripe/stripe-go/** }
 deps:
@@ -412,6 +415,7 @@ deps:
   registry:    { mayDependOn: [port, stripe, manual] }
   iamclient:   { mayDependOn: [domain, port, httpx] }
   entclient:   { mayDependOn: [domain, port, httpx] }
+  bootstrap:   { mayDependOn: [domain, port, app, config, postgres, eventbus, registry, stripe, manual, iamclient, entclient, metrics] }
 ```
 
 | # | Rule | Enforcement |
@@ -549,6 +553,7 @@ type PaymentOutcome struct {
 
 type QuantityChange struct {
 	Sub SubscriptionRef; From, To int; ProrationInstant time.Time; InvoiceNow bool
+	KeepIfUnpaid bool // renewal top-up only: quantity applied even if unpaid; the invoice follows dunning (§8.6.3, rev 0.37)
 }
 type PriceChange struct{ Sub SubscriptionRef; ToPriceRef string; ProrationInstant time.Time }
 type PeriodEndChange struct{ Sub SubscriptionRef; ToPriceRef string; ToQuantity int; At time.Time }
@@ -2953,7 +2958,12 @@ Keeping `billing_subscription_id` stable keeps RP's and Core's references valid.
 | Provider object with Billing metadata but no Billing row | `orphan_provider_object` | No |
 | Ledger rows `failed:unknown_customer` in window | `unknown_customer` | No |
 
-**Phase 6 build: report-only (rev 0.36).** Until Phase 7, the run records findings and repairs nothing, whatever `auto_repair` says. The auto-repair column above applies from Phase 7.
+**Auto-repair (rev 0.37; report-only in the Phase 6 build, rev 0.36).**
+- A missing event is ledgered from the provider's event listing, normalised as a delivery would be. The processor then applies it.
+- A `status_mismatch` where the provider has ended the subscription is repaired with a ledger row `recon:<run_id>:<provider_object_id>` (`event_type = reconciliation.reread`, kind `subscription_ended`). The processor re-reads that object and applies it (`BIL-PAY-4`). Other status mismatches are reported; the next callback or a replay (B-O13) applies them.
+- A missing invoice is fetched and mirrored.
+
+A repair failure is noted on the finding (`repair_note`) and never fails the run. `counts.repaired` is the number of findings repaired.
 
 3. Status `completed` with `counts`; one AL-5 `commercial.cross_tenant_job.ran` entry under `platform_tenant`, committed in the same `billing_system` transaction as the run's completion (`BIL-AUD-1`); findings not repaired → `BillingReconciliationDrift` after 24 h (§11.5). Phase 2 adds a nightly CronJob with the same code.
 
@@ -3017,11 +3027,11 @@ RETURNING p.*;
 
 **Mechanism (Commercial Team; acknowledged by Product and Finance 2026-11-23).** A provider subscription stays on its provider Price until Billing changes it, so without a step at renewal every existing customer would be grandfathered indefinitely. No grandfathering field or price override is added; one job moves subscriptions at renewal.
 
-**Phase 6 build (rev 0.36).** `renewal-repricing` ships in Phase 7. Until it does, a renewal keeps the committed price: the seat item's current provider price. A new price row affects only new checkouts and upgrades. Before Phase 7 goes live, existing subscriptions are not moved.
+**Phase 6 build (rev 0.36; superseded in Phase 7, rev 0.37).** `renewal-repricing` ships in Phase 7. Until it does, a renewal keeps the committed price: the seat item's current provider price. A new price row affects only new checkouts and upgrades. Before Phase 7 goes live, existing subscriptions are not moved.
 
 1. **`renewal-repricing`** (CronJob, hourly at `:20`) selects live subscriptions (`active`, `past_due`; not `auto_renew = false`) where the seat item's price differs from the **target row**: the `plan_prices` row effective at `R = current_period_end` for the item's plan, interval, currency and provider. Subscriptions with `R − now() < REPRICE_CUTOFF` (1 h) are skipped this period and moved at the following renewal.
 2. **Schedule.** `ScheduleAtPeriodEnd {ToPriceRef: target, ToQuantity: current quantity, At: R}`. The Stripe adapter updates the subscription's existing schedule if one exists, so a scheduled seat reduction (§8.6.2) or downgrade (§8.4.2) is kept. Every `ScheduleAtPeriodEnd` call, from any flow, sets `ToPriceRef` to the row effective at `R` for the plan that will be current at `R` (`BIL-SUB-8`). A downgrade therefore already renews at the target plan's new price, and a released schedule (blocked downgrade, §8.4.2) is re-created by the next run.
-3. **Record.** Commit `subscription_items.scheduled_price_id`, `scheduled_price_at = R`; history row; outbox message for the notice (BL-OQ-12). The job is idempotent: a subscription already scheduled to the target row is skipped; a newer row added before the cutoff replaces the schedule.
+3. **Record.** Commit `subscription_items.scheduled_price_id`, `scheduled_price_at = R`; history row. The notice message waits for BL-OQ-12 (NTF-3): until an event is agreed none is emitted, and B-P1 shows `scheduled_unit_price` (rev 0.37). The job is idempotent: a subscription already scheduled to the target row is skipped; a newer row added before the cutoff replaces the schedule.
 4. **At renewal.** On the cycle `invoice.paid` whose line uses the new price: seat item `price_id = scheduled_price_id`, scheduled columns cleared, history row. **No bus event to IAM**: the plan is unchanged, so there is nothing for Core or Entitlements to project.
 5. **`manual` subscriptions** (operator stub) get the same item change at `R`; they are invoiced outside the product.
 6. **Metric:** `commercial_billing_repricing_scheduled_total{direction}` (`increase`\|`decrease`).
@@ -3392,6 +3402,7 @@ Values from `deploy/helm/values.yaml` (`env:`) and OpenBao (`secretValues:` via 
 | `SQS_WAIT_TIME_SECONDS` / `SQS_VISIBILITY_TIMEOUT` | `20` / `60s` | 0–20 / 30–300 s | Long polling |
 | `MAX_LIFECYCLE_EVENT_SKEW_SECONDS` | `300` | 60–900 | Future-time clamp (`BIL-EVT-3`) |
 | `OUTBOX_POLL_INTERVAL` / `OUTBOX_BATCH_SIZE` / `OUTBOX_MAX_ATTEMPTS` / `OUTBOX_RETENTION_DAYS` | `500ms` / `50` / `5` / `8` | 100 ms–5 s / 1–500 / 1–10 / 7–30 | HLD §9.3 |
+| `PUSHGATEWAY_URL` | empty | URL | CronJob run metric target (§13.2); empty → logged only (rev 0.37) |
 | `PROCESSED_EVENTS_TTL_DAYS` | `8` | > SQS retention (4 d) | PE-1 |
 | `PII_MINIMISE_OFFBOARDED_DAYS` / `PII_MINIMISE_ABANDONED_DAYS` | `90` / `30` | 30–365 / 7–90 | §15.3 (`pii-minimisation`) |
 | `DEFAULT_PAYMENT_PROVIDER` | `stripe` | must be in `ENABLED_PAYMENT_PROVIDERS` | New accounts (§3.4); if not certified, account creation answers `503 PROVIDER_NOT_ENABLED` |
@@ -3487,9 +3498,9 @@ Node class `t3.small` share (HLD §14.2).
 | `outbox-prune` | `0 3 * * *` | `outbox.Runner.PrunePublished` (8 days) |
 | `processed-events-prune` | `0 4 * * *` | `inbox.Store.Prune` (8 days) |
 | `renewal-repricing` | `20 * * * *` | Schedule the move to a new price at the first renewal on or after its effective date (§8.16, `BIL-SUB-8`) |
-| `idempotency-prune` | `30 4 * * *` | `idempotency_records` past `expires_at` |
+| `idempotency-prune` | `30 4 * * *` | `idempotency_records` past `expires_at`, stored previews included (scope `preview`) |
 
-`concurrencyPolicy: Forbid`, `startingDeadlineSeconds: 120`; each job pushes `commercial_cross_tenant_job_runs_total` to the Pushgateway. Reconciliation is operator-triggered in Phase 1 (B-O5) and runs in the server pods; Phase 2 adds a nightly `reconciliation` CronJob calling the same code.
+`concurrencyPolicy: Forbid`, `startingDeadlineSeconds: 120`; each job pushes `commercial_cross_tenant_job_runs_total{job, outcome}` (`success`, `partial` or `failure`) to the Pushgateway at `PUSHGATEWAY_URL`, or logs it when the key is empty (rev 0.37). A job selects its work across tenants as `billing_system` (read-only on tenant tables, §4.3) and writes in tenant transactions on the app pool under the tenant lock. Reconciliation is operator-triggered in Phase 1 (B-O5) and runs in the server pods; Phase 2 adds a nightly `reconciliation` CronJob calling the same code.
 
 ### 13.3 CI/CD, deploy role and PCI review
 
