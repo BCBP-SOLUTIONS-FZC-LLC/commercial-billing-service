@@ -134,3 +134,5 @@ func sqlState(err error) string {
 func subscriptionNotFound(what, id string) error {
 	return domain.NewError(domain.ErrSubscriptionNotFound, fmt.Sprintf("%s %s not found", what, id))
 }
+
+func isNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }

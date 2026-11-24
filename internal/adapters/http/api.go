@@ -25,6 +25,9 @@ type APIConfig struct {
 	DevLike          bool
 	// BFFCallerPrincipal is BIL-AUTH-3's allowed mTLS principal.
 	BFFCallerPrincipal string
+	// Disabled lists routes behind a feature flag that is off: they are not
+	// registered, so they answer 404 (§12 feature flags).
+	Disabled map[string]bool
 }
 
 // Route is one endpoint of the catalogue (§5.3).
@@ -80,17 +83,30 @@ func (a *APIConfig) Register(r gin.IRouter) {
 	tenant := r.Group(tenantPrefix, append(gincommon.ProtectedMiddlewares(a.GinConfig),
 		rejectSystemCaller(), bodyLimit(apiBodyLimit), requireJSONContentType(), requirePathTenant())...)
 	for _, d := range tenantRoutes {
+		if a.Disabled[d.ID] {
+			continue
+		}
 		chain := []gin.HandlerFunc{requirePermission(d.ID), a.Idem.handle(idemRoute{scope: d.ID, mode: d.Idem, tenant: pathTenant})}
 		tenant.Handle(d.Method, d.Path[len(tenantPrefix):], append(chain, d.handler.make(a))...)
 	}
 
 	// Internal (B-I1): mTLS principal only; no gateway identity.
+	if !a.Disabled[internalRoute.ID] {
+		a.registerInternal(r)
+	}
+
+	// Operator: identity → BIL-AUTH-4 → BIL-AUTH-2/6 → 415 → per route.
+	a.registerOperator(r)
+}
+
+func (a *APIConfig) registerInternal(r gin.IRouter) {
 	r.Handle(internalRoute.Method, internalRoute.Path, requireBFFCaller(a.BFFCallerPrincipal), rejectSystemCaller(),
 		bodyLimit(apiBodyLimit), requireJSONContentType(),
 		a.Idem.handle(idemRoute{scope: "B-I1", mode: idemRequired, tenant: headerTenant, key: chargeKey, reused: subscriptionExists}),
 		internalRoute.handler.make(a))
+}
 
-	// Operator: identity → BIL-AUTH-4 → BIL-AUTH-2/6 → 415 → per route.
+func (a *APIConfig) registerOperator(r gin.IRouter) {
 	op := r.Group(operatorPrefix, append(gincommon.ProtectedMiddlewares(a.GinConfig),
 		rejectSystemCaller(), requireOperator(a.OperatorPathLive, a.DevLike), bodyLimit(apiBodyLimit), requireJSONContentType())...)
 	for _, d := range operatorRoutes {

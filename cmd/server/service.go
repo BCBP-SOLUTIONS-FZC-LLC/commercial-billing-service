@@ -24,7 +24,7 @@ func buildService(cfg config.Config, reg *provider.Registry, appPool, sysPool *p
 	return &app.Service{
 		Tx: pgadapter.NewTxRunner(appPool), Lock: pgadapter.TenantLocker{},
 		Accounts: pgadapter.NewAccountRepository(appPool), Subs: pgadapter.NewSubscriptionRepository(appPool),
-		Prices: pgadapter.NewPriceRepository(appPool), Checkouts: pgadapter.NewCheckoutRepository(appPool),
+		Prices: pgadapter.NewPriceRepository(appPool), Checkouts: pgadapter.NewCheckoutRepository(appPool), Invoices: pgadapter.NewInvoiceRepository(appPool),
 		Sagas: pgadapter.NewSagaRepository(appPool, sysPool), Emissions: pgadapter.NewEmissionRepository(appPool, sysPool),
 		Providers: reg,
 		Core:      iamclient.NewCore(cfg.CoreBaseURL, cfg.CoreTimeout),
@@ -33,7 +33,7 @@ func buildService(cfg config.Config, reg *provider.Registry, appPool, sysPool *p
 		Settings: app.Settings{
 			DefaultCurrency: cfg.DefaultCurrency, NewAccountProvider: "stripe", CheckoutTTL: cfg.CheckoutTTL,
 			TenantAppBaseURL: cfg.TenantAppBaseURL, SagaMaxBackoff: cfg.SagaMaxBackoff, SagaClaim: cfg.RPTimeout + sagaClaimMargin,
-			SeatsAfterConversionDelay: cfg.SeatsAfterConversionDelay, MaxSeatsPerPurchase: cfg.MaxSeatsPerPurchase,
+			SeatsAfterConversionDelay: cfg.SeatsAfterConversionDelay, SCAAbandonAfter: cfg.SCAAbandonAfter, MaxSeatsPerPurchase: cfg.MaxSeatsPerPurchase,
 			FeatureDirectSignup: cfg.FeatureDirectSignup, FeatureTokenAddons: cfg.FeatureTokenAddons, FeatureSeatPurchase: cfg.FeatureSeatPurchase,
 		},
 	}

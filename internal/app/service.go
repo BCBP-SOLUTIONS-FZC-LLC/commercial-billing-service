@@ -28,6 +28,7 @@ type Settings struct {
 	SagaMaxBackoff            time.Duration
 	SagaClaim                 time.Duration // lease while RP-3 runs (RP timeout + margin)
 	SeatsAfterConversionDelay time.Duration
+	SCAAbandonAfter           time.Duration
 	MaxSeatsPerPurchase       int
 	FeatureDirectSignup       bool
 	FeatureTokenAddons        bool
@@ -45,6 +46,7 @@ type Service struct {
 	Subs      port.SubscriptionRepo
 	Prices    port.PriceRepo
 	Checkouts port.CheckoutRepo
+	Invoices  port.InvoiceRepo
 	Sagas     port.SagaRepo
 	Emissions port.EmissionRepo
 	Providers ProviderRegistry
@@ -104,6 +106,8 @@ func actorOf(c Caller) string {
 }
 
 // history appends a §4.2.6 row.
+//
+//nolint:unparam // plans is set by the plan-change flow (§8.4)
 func (s *Service) history(ctx context.Context, sub domain.Subscription, from *domain.SubscriptionStatus, cause, actor string,
 	eventRef *string, seats *[2]*int, plans *[2]*domain.PlanCode) error {
 	h := domain.StatusHistoryEntry{TenantID: sub.TenantID, BillingSubscriptionID: sub.BillingSubscriptionID, FromStatus: from,

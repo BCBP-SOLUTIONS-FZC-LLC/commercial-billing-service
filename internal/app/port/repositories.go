@@ -115,3 +115,9 @@ type SagaRepo interface {
 	Update(ctx context.Context, s domain.ConversionSaga) error
 	Due(ctx context.Context, now time.Time, limit int) ([]SagaRef, error)
 }
+
+// InvoiceRepo mirrors provider invoices (§4.2.13, §4.2.14).
+type InvoiceRepo interface {
+	Mirror(ctx context.Context, tenantID, provider string, v InvoiceView, providerUpdatedAt time.Time) (invoiceID string, err error)
+	Link(ctx context.Context, invoiceID, tenantID, refType, refID string) error
+}

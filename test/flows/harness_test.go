@@ -7,6 +7,7 @@ package flows_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -105,10 +106,11 @@ func scalar[T any](t *testing.T, q string, args ...any) T {
 // fakeProvider is a PaymentProvider that records calls and their keys.
 type fakeProvider struct {
 	port.PaymentProvider
-	name  string
-	mu    sync.Mutex
-	calls []string
-	fail  error
+	name    string
+	mu      sync.Mutex
+	calls   []string
+	fail    error
+	confirm []confirmAnswer
 }
 
 func (p *fakeProvider) record(c string) error {
@@ -131,6 +133,55 @@ func (p *fakeProvider) EnsureCustomer(_ context.Context, in port.CustomerInput, 
 func (p *fakeProvider) CreateHostedCheckout(_ context.Context, in port.CheckoutInput, key string) (port.HostedSession, error) {
 	return port.HostedSession{ProviderSessionID: "cs_" + in.Metadata["billing_subscription_id"], URL: "https://checkout.example/" + in.Metadata["billing_subscription_id"],
 		ExpiresAt: in.ExpiresAt}, p.record("CreateHostedCheckout " + key)
+}
+
+func (p *fakeProvider) AttachDefaultPaymentMethod(_ context.Context, _ port.CustomerRef, pm, key string) error {
+	return p.record("AttachDefaultPaymentMethod " + pm + " " + key)
+}
+
+func (p *fakeProvider) CreateSubscription(_ context.Context, in port.SubscriptionInput, key string) (port.SubscriptionResult, error) {
+	return port.SubscriptionResult{Ref: port.SubscriptionRef{ProviderSubscriptionID: "sub_" + in.Metadata["billing_subscription_id"]},
+		Outcome: port.PaymentOutcome{Status: port.PaymentPending}}, p.record("CreateSubscription " + key)
+}
+
+// confirm scripts ConfirmInitialPayment answers in order (default: paid).
+func (p *fakeProvider) ConfirmInitialPayment(_ context.Context, _ port.SubscriptionRef, key string) (port.PaymentOutcome, error) {
+	_ = p.record("ConfirmInitialPayment " + key)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.confirm) == 0 {
+		return port.PaymentOutcome{Status: port.PaymentPaid}, nil
+	}
+	out := p.confirm[0]
+	p.confirm = p.confirm[1:]
+	return out.outcome, out.err
+}
+
+func (p *fakeProvider) CancelNow(_ context.Context, ref port.SubscriptionRef, key string) error {
+	return p.record("CancelNow " + ref.ProviderSubscriptionID + " " + key)
+}
+
+func (p *fakeProvider) FetchCurrent(_ context.Context, obj domain.ProviderObjectRef) (domain.ProviderObjectState, error) {
+	start := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	return domain.ProviderObjectState{Ref: obj, Status: "active", Fields: map[string]any{
+		"current_period_start": start, "current_period_end": start.AddDate(0, 1, 0)}}, p.record("FetchCurrent " + obj.ID)
+}
+
+func (p *fakeProvider) called(prefix string) []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []string
+	for _, c := range p.calls {
+		if len(c) >= len(prefix) && c[:len(prefix)] == prefix {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+type confirmAnswer struct {
+	outcome port.PaymentOutcome
+	err     error
 }
 
 type registry map[string]port.PaymentProvider
@@ -199,12 +250,12 @@ func newEnv(t *testing.T) *env {
 	e.svc = &app.Service{
 		Tx: pgadapter.NewTxRunner(appPool), Lock: pgadapter.TenantLocker{},
 		Accounts: pgadapter.NewAccountRepository(appPool), Subs: pgadapter.NewSubscriptionRepository(appPool),
-		Prices: pgadapter.NewPriceRepository(appPool), Checkouts: pgadapter.NewCheckoutRepository(appPool),
+		Prices: pgadapter.NewPriceRepository(appPool), Checkouts: pgadapter.NewCheckoutRepository(appPool), Invoices: pgadapter.NewInvoiceRepository(appPool),
 		Sagas: pgadapter.NewSagaRepository(appPool, systemPool), Emissions: pgadapter.NewEmissionRepository(appPool, systemPool),
 		Providers: registry{"stripe": e.stripe, "manual": manual}, Core: e.core, RP: e.rp,
 		Events: pgadapter.NewEventEnqueuer(eventbus.Source, eventbus.SpecVersion, schemas.Validate), Audit: pgadapter.NewAuditWriter(enq),
 		Settings: app.Settings{DefaultCurrency: "USD", NewAccountProvider: "stripe", CheckoutTTL: time.Hour, TenantAppBaseURL: "https://app.example",
-			SagaMaxBackoff: 5 * time.Minute, SagaClaim: 45 * time.Second, SeatsAfterConversionDelay: 120 * time.Second, MaxSeatsPerPurchase: 1000,
+			SagaMaxBackoff: 5 * time.Minute, SCAAbandonAfter: 30 * time.Minute, SagaClaim: 45 * time.Second, SeatsAfterConversionDelay: 120 * time.Second, MaxSeatsPerPurchase: 1000,
 			FeatureSeatPurchase: true},
 		Now: func() time.Time { return e.now },
 	}
@@ -230,3 +281,5 @@ func (e *env) handle(t *testing.T, tenant string, h port.PaymentEventHandler, ev
 }
 
 func txRunner() *pgadapter.TxRunner { return pgadapter.NewTxRunner(appPool) }
+
+func asDomain(err error, out **domain.DomainError) bool { return errors.As(err, out) }

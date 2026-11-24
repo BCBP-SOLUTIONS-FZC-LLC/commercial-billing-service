@@ -147,6 +147,7 @@ func apiRoutes(cfg config.Config, ginCfg gincommon.Config, appPool *pgcommon.Poo
 		Idem: &httpadapter.Idempotency{Repo: pgadapter.NewIdempotencyRepository(appPool), Tx: pgadapter.NewTxRunner(appPool),
 			TTL: cfg.IdempotencyTTL, Lock: idempotencyLock},
 		OperatorPathLive: cfg.OperatorPathLive, DevLike: config.IsDevLike(cfg.AppEnv), BFFCallerPrincipal: cfg.BFFCallerPrincipal,
+		Disabled: disabledRoutes(cfg),
 	}
 	return api.Register
 }
@@ -156,3 +157,20 @@ const sagaBatch = 20
 
 // idempotencyLock is §9.2's in-flight lock.
 const idempotencyLock = 30 * time.Second
+
+// disabledRoutes are the routes behind a feature flag that is off (§12):
+// not registered, so they answer 404.
+func disabledRoutes(cfg config.Config) map[string]bool {
+	off := map[string]bool{}
+	set := func(enabled bool, ids ...string) {
+		for _, id := range ids {
+			if !enabled {
+				off[id] = true
+			}
+		}
+	}
+	set(cfg.FeatureDirectSignup, "B-I1")
+	set(cfg.FeatureTokenAddons, "B-P19", "B-P20", "B-P21", "B-P22", "B-P23")
+	set(cfg.FeatureSeatPurchase, "B-P6", "B-P7")
+	return off
+}

@@ -459,3 +459,17 @@ func TestPrincipalFromXFCC(t *testing.T) {
 		}
 	}
 }
+
+// §12: a route behind a disabled feature flag is not registered (404).
+func TestDisabledRoutes(t *testing.T) {
+	rec := &recorder{charge: func() (app.ChargeResult, error) { return app.ChargeResult{}, nil }}
+	api := &APIConfig{Tenant: rec, Internal: rec, Operator: rec, Idem: &Idempotency{Repo: newMemIdem(), Tx: passTx{}, TTL: time.Hour, Lock: time.Second},
+		OperatorPathLive: true, BFFCallerPrincipal: "cluster.local/ns/bff/sa/bff-signup", Disabled: map[string]bool{"B-I1": true, "B-P19": true}}
+	r := NewRouter(RouterConfig{Routes: []func(gin.IRouter){api.Register}})
+	if w := do(r, req{"POST", "/api/v1/internal/subscriptions/authorize-and-charge", `{}`, nil}); w.Code != 404 {
+		t.Errorf("B-I1: %d", w.Code)
+	}
+	if w := do(r, req{"GET", "/api/v1/tenants/" + tenantA + "/token-packs", "", identity(tenantA, "tenant_owner")}); w.Code != 404 {
+		t.Errorf("B-P19: %d", w.Code)
+	}
+}
