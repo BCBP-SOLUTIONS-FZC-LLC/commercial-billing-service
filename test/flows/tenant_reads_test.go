@@ -32,8 +32,18 @@ func TestTenantReads(t *testing.T) {
 	if out, err := e.handle(t, tenant, app.PaymentMethodSet{S: e.svc}, callback("evt_pm", "checkout.session.completed", domain.KindPaymentMethodSet), cur); err != nil || out != "applied:payment_method_set" {
 		t.Fatalf("pm set: %s %v", out, err)
 	}
-	if !scalar[bool](t, `SELECT default_pm_set FROM billing_accounts WHERE tenant_id = $1`, tenant) {
-		t.Fatal("default_pm_set not set")
+	// The follow-up makes it the provider default, outside the callback's tx.
+	if scalar[bool](t, `SELECT default_pm_set FROM billing_accounts WHERE tenant_id = $1`, tenant) {
+		t.Fatal("default_pm_set before the provider default was set")
+	}
+	_, _ = e.svc.RunLifecycleFollowUps(ctx, 100)
+	session := scalar[string](t, `SELECT session_id::text FROM checkout_sessions WHERE tenant_id = $1 AND purpose = 'payment_method_setup'`, tenant)
+	if len(e.stripe.called("AttachDefaultPaymentMethod pm_new pmdefault:"+session)) != 1 {
+		t.Fatalf("default not set on the provider: %v", e.stripe.called("AttachDefaultPaymentMethod"))
+	}
+	if !scalar[bool](t, `SELECT default_pm_set AND (SELECT default_applied_at IS NOT NULL FROM checkout_sessions WHERE session_id = $2::uuid)
+		FROM billing_accounts WHERE tenant_id = $1`, tenant, session) {
+		t.Fatal("default_pm_set / default_applied_at not recorded")
 	}
 
 	// Invoices: a paid cycle invoice is listed; a draft is hidden; B-P18.

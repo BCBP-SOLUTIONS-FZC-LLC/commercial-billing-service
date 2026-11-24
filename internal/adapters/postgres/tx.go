@@ -136,3 +136,24 @@ func subscriptionNotFound(what, id string) error {
 }
 
 func isNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
+
+// SystemTxRunner is port.SystemTxRunner on sysPool (billing_system,
+// BYPASSRLS): global operator writes and their AL-5 entry in one
+// transaction (BIL-AUD-1).
+type SystemTxRunner struct{ pool *pgcommon.Pool }
+
+var _ port.SystemTxRunner = (*SystemTxRunner)(nil)
+
+// NewSystemTxRunner wraps the system pool.
+func NewSystemTxRunner(sysPool *pgcommon.Pool) *SystemTxRunner { return &SystemTxRunner{pool: sysPool} }
+
+// RunInSystemTx runs fn in one system-pool transaction; repositories and
+// the audit writer called with the returned ctx join it.
+func (r *SystemTxRunner) RunInSystemTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if _, ok := txFrom(ctx); ok {
+		return fn(ctx)
+	}
+	return mapDBError(pgcommon.RunInTxWithRetryOpts(ctx, r.pool, pgx.TxOptions{}, writeRetry, func(ctx context.Context, tx pgx.Tx) error {
+		return fn(withTx(ctx, tx))
+	}))
+}

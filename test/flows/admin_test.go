@@ -31,14 +31,23 @@ func TestPriceBook(t *testing.T) {
 	if got := scalar[time.Time](t, `SELECT effective_to FROM plan_prices WHERE price_id = $1`, p.PriceID); !got.Equal(from.AddDate(0, 6, 0)) {
 		t.Fatalf("previous row not closed: %s", got)
 	}
-	// A row starting before the current one's start overlaps.
+	// A row starting before the current one's start overlaps; the refused
+	// change leaves no audit entry (BIL-AUD-1: one transaction).
+	before := scalar[int](t, `SELECT count(*) FROM pending_audit_entries WHERE entry->>'entry_type' = 'billing.price_book.changed'`)
 	if _, err := e.svc.AddPlanPrice(ctx, operator, app.PlanPriceRequest{Plan: "starter", Interval: "month", Currency: "AED", UnitAmountMinor: 1,
 		Provider: "stripe", ProviderPriceID: "x", EffectiveFrom: from.AddDate(0, 3, 0), Reason: "overlapping row for test"}); !domain.HasCode(err, domain.ErrPriceOverlap) {
 		t.Fatalf("overlap: %v", err)
 	}
+	if after := scalar[int](t, `SELECT count(*) FROM pending_audit_entries WHERE entry->>'entry_type' = 'billing.price_book.changed'`); after != before {
+		t.Fatalf("audit entry written for a refused change: %d → %d", before, after)
+	}
 	if n := scalar[int](t, `SELECT count(*) FROM pending_audit_entries WHERE tenant_id = '00000000-0000-0000-0000-0000000000b1'
 		AND entry->>'entry_type' = 'billing.price_book.changed'`); n < 2 {
 		t.Fatalf("audit %d", n)
+	}
+	if _, err := e.svc.AddPlanPrice(ctx, operator, app.PlanPriceRequest{Plan: "pro", Interval: "month", Currency: "AED", UnitAmountMinor: 25300,
+		Provider: "stripe", ProviderPriceID: "price_bad", EffectiveFrom: from, Reason: "misconfigured price for test"}); !domain.HasCode(err, domain.ErrProviderPriceMismatch) {
+		t.Fatalf("price mismatch: %v", err)
 	}
 	if _, err := e.svc.UpsertTokenPack(ctx, operator, app.TokenPackRequest{PackCode: "tokens_25m", Tokens: 25_000_000, Currency: "USD", AmountMinor: 89900,
 		Provider: "stripe", ProviderPriceID: "price_t25", Active: ptr(true), EffectiveFrom: from, Reason: "BIZ-1 pack sizes approved"}); err != nil {

@@ -24,7 +24,7 @@ const sagaClaimMargin = 15 * time.Second
 func buildService(cfg config.Config, reg *provider.Registry, appPool, sysPool *pgcommon.Pool, events port.EventEnqueuer,
 	auditW port.AuditWriter, log port.Logger) *app.Service {
 	return &app.Service{
-		Tx: pgadapter.NewTxRunner(appPool), Lock: pgadapter.TenantLocker{},
+		Tx: pgadapter.NewTxRunner(appPool), SysTx: pgadapter.NewSystemTxRunner(sysPool), Lock: pgadapter.TenantLocker{},
 		Accounts: pgadapter.NewAccountRepository(appPool), Subs: pgadapter.NewSubscriptionRepository(appPool),
 		Prices: pgadapter.NewPriceRepository(appPool), Checkouts: pgadapter.NewCheckoutRepository(appPool), Invoices: pgadapter.NewInvoiceRepository(appPool),
 		Changes: pgadapter.NewPlanChangeRepository(appPool, sysPool), Previews: pgadapter.NewPreviewRepository(appPool),

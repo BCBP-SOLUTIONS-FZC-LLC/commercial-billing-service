@@ -2,6 +2,7 @@ package stripe
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -122,8 +123,27 @@ func (a *Adapter) AttachDefaultPaymentMethod(ctx context.Context, ref port.Custo
 	}
 	up := &stripego.CustomerUpdateParams{Params: idem(idemKey + ":default")}
 	up.InvoiceSettings = &stripego.CustomerUpdateInvoiceSettingsParams{DefaultPaymentMethod: stripego.String(pmRef)}
-	_, err := call(ctx, a, func() (*stripego.Customer, error) { return a.sc.V1Customers.Update(ctx, ref.ProviderCustomerID, up) })
-	return err
+	if _, err := call(ctx, a, func() (*stripego.Customer, error) { return a.sc.V1Customers.Update(ctx, ref.ProviderCustomerID, up) }); err != nil {
+		return err
+	}
+	// A subscription's own default (set by hosted checkout) overrides the
+	// customer's, so the live subscriptions get the new method too (B-P16:
+	// "the provider's next retry uses it").
+	lp := &stripego.SubscriptionListParams{Customer: stripego.String(ref.ProviderCustomerID)}
+	for sub, err := range a.sc.V1Subscriptions.List(ctx, lp).All(ctx) {
+		if err != nil {
+			return mapErr(err)
+		}
+		if sub.Status != stripego.SubscriptionStatusActive && sub.Status != stripego.SubscriptionStatusPastDue {
+			continue
+		}
+		sp := &stripego.SubscriptionUpdateParams{Params: idem(idemKey + ":" + sub.ID)}
+		sp.DefaultPaymentMethod = stripego.String(pmRef)
+		if _, err := call(ctx, a, func() (*stripego.Subscription, error) { return a.sc.V1Subscriptions.Update(ctx, sub.ID, sp) }); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ── Recurring subscription ─────────────────────────────────────────────
@@ -577,12 +597,19 @@ func (a *Adapter) FetchCurrent(ctx context.Context, obj domain.ProviderObjectRef
 			}
 		}
 	case domain.ObjectCheckoutSession:
-		s, err := a.sc.V1CheckoutSessions.Retrieve(ctx, obj.ID, nil)
+		sp := &stripego.CheckoutSessionRetrieveParams{}
+		sp.AddExpand("setup_intent")
+		s, err := a.sc.V1CheckoutSessions.Retrieve(ctx, obj.ID, sp)
 		if err != nil {
 			return st, mapErr(err)
 		}
 		st.Status, st.Metadata = string(s.Status), s.Metadata
 		st.Fields["mode"] = string(s.Mode)
+		// The payment method a setup session saved (an opaque reference; no
+		// card data), made the default by the lifecycle follow-up (B-P16).
+		if s.SetupIntent != nil && s.SetupIntent.PaymentMethod != nil {
+			st.Fields["setup_payment_method"] = s.SetupIntent.PaymentMethod.ID
+		}
 		if s.Subscription != nil {
 			st.Fields["subscription"] = s.Subscription.ID
 		}
@@ -829,4 +856,33 @@ func stringOrNil(v string) *string {
 		return nil
 	}
 	return stripego.String(v)
+}
+
+// VerifyPrice checks a Stripe Price for B-O11 / B-O12: active, same unit
+// amount and currency, recurring with the same interval (or one-off).
+func (a *Adapter) VerifyPrice(ctx context.Context, priceRef string, want port.PriceExpectation) error {
+	p, err := call(ctx, a, func() (*stripego.Price, error) { return a.sc.V1Prices.Retrieve(ctx, priceRef, nil) })
+	if err != nil {
+		return err
+	}
+	var problems []string
+	if !p.Active {
+		problems = append(problems, "inactive")
+	}
+	if p.UnitAmount != want.Amount.AmountMinor {
+		problems = append(problems, fmt.Sprintf("amount %d ≠ %d", p.UnitAmount, want.Amount.AmountMinor))
+	}
+	if !strings.EqualFold(string(p.Currency), want.Amount.Currency) {
+		problems = append(problems, "currency "+strings.ToUpper(string(p.Currency))+" ≠ "+want.Amount.Currency)
+	}
+	switch {
+	case want.Interval == "" && p.Recurring != nil:
+		problems = append(problems, "recurring price for a one-off pack")
+	case want.Interval != "" && (p.Recurring == nil || string(p.Recurring.Interval) != want.Interval):
+		problems = append(problems, "interval differs")
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("%w: %s", port.ErrPriceMismatch, strings.Join(problems, "; "))
+	}
+	return nil
 }

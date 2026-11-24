@@ -149,3 +149,6 @@ func (a *Adapter) FetchCurrent(context.Context, domain.ProviderObjectRef) (domai
 func (a *Adapter) ListSince(context.Context, port.ReconKind, time.Time, string) (port.ReconPage, error) {
 	return port.ReconPage{}, nil // nothing to reconcile
 }
+
+// VerifyPrice: manual prices have no provider object.
+func (a *Adapter) VerifyPrice(context.Context, string, port.PriceExpectation) error { return nil }

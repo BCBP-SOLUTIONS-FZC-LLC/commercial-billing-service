@@ -35,6 +35,8 @@ func (s *Service) RunLifecycleFollowUps(ctx context.Context, limit int) (int, er
 			err = s.setPause(ctx, Caller{}, f.TenantID, f.BillingSubscriptionID, false, "", "Automatic pause lifted on reactivation (CD-24)")
 		case "close":
 			err = s.closeOffboarded(ctx, f.TenantID, f.BillingSubscriptionID)
+		case "default_pm":
+			err = s.applyDefaultPM(ctx, f.TenantID, f.SessionID)
 		}
 		if err != nil && s.Log != nil {
 			s.Log.Warn("lifecycle follow-up failed; retried on the next pass", map[string]any{"tenant_id": f.TenantID, "action": f.Action, "error": err.Error()})

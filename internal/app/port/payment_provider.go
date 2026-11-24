@@ -55,6 +55,10 @@ type PaymentProvider interface {
 	Refund(ctx context.Context, in RefundInput, idemKey string) (RefundResult, error)
 	CreditBalance(ctx context.Context, in BalanceAdjustment, idemKey string) (string, error)
 
+	// Price book (B-O11, B-O12): the provider price exists, is active and
+	// matches; a mismatch is a PriceMismatch error.
+	VerifyPrice(ctx context.Context, priceRef string, want PriceExpectation) error
+
 	// Callbacks and re-read
 	VerifyAndNormalise(ctx context.Context, h http.Header, body []byte) (domain.PaymentEvent, error) // ErrInvalidSignature
 	FetchCurrent(ctx context.Context, obj domain.ProviderObjectRef) (domain.ProviderObjectState, error)
@@ -335,6 +339,13 @@ type InvoiceView struct {
 	Metadata                                 map[string]string
 }
 
+// PriceExpectation is what a price-book row says about a provider price.
+// Interval is "" for a one-off price (token packs).
+type PriceExpectation struct {
+	Amount   domain.Money
+	Interval string // month | year | ""
+}
+
 // URLWithExpiry is a short-lived provider URL.
 type URLWithExpiry struct {
 	URL       string
@@ -365,6 +376,7 @@ var (
 	ErrUnsupported         = errors.New("operation not supported by this provider")
 	ErrIdempotencyMismatch = errors.New("provider idempotency key reused with different parameters")
 	ErrNotFound            = errors.New("provider object not found")
+	ErrPriceMismatch       = errors.New("provider price does not match the price book row")
 )
 
 // ErrDeclined is a declined payment with its mapped, non-sensitive code.
@@ -401,6 +413,10 @@ func ProviderErrorToDomain(err error) error {
 		return &domain.DomainError{Code: domain.ErrProviderUnavailable, Message: "payment provider unavailable", Cause: err}
 	case errors.Is(err, ErrUnsupported):
 		return &domain.DomainError{Code: domain.ErrProviderOperationUnsupported, Message: "not supported by the account's payment provider", Cause: err}
+	case errors.Is(err, ErrPriceMismatch):
+		return &domain.DomainError{Code: domain.ErrProviderPriceMismatch, Message: err.Error(), Cause: err}
+	case errors.Is(err, ErrNotFound):
+		return &domain.DomainError{Code: domain.ErrProviderPriceMismatch, Message: "the provider object does not exist", Cause: err}
 	case errors.Is(err, ErrInvalidSignature):
 		return &domain.DomainError{Code: domain.ErrInvalidSignature, Message: "invalid webhook signature", Cause: err}
 	}

@@ -9,48 +9,56 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 )
 
-// platformAudit writes an AL-5 entry under platform_tenant (cross-tenant
-// operator actions, CD-21). The global row is committed by billing_system
-// first (billing_app cannot write it), so this is a second transaction; a
-// failure is logged for the operator to repeat the action.
-func (s *Service) platformAudit(ctx context.Context, e port.AuditEntry) {
+// platformAudit enqueues an AL-5 entry under platform_tenant (cross-tenant
+// operator actions, CD-21) in the billing_system transaction in ctx, so the
+// global change and its audit entry commit together (BIL-AUD-1).
+func (s *Service) platformAudit(ctx context.Context, e port.AuditEntry) error {
 	e.TenantID = PlatformTenantID
-	if err := s.Tx.RunInTenantTx(ctx, PlatformTenantID, func(ctx context.Context) error { return s.Audit.Write(ctx, e) }); err != nil && s.Log != nil {
-		s.Log.Error("AL-5 entry for a committed operator action was not written", map[string]any{"entry_type": e.EntryType,
-			"natural_id": e.NaturalID, "error": err.Error()})
-	}
+	return s.Audit.Write(ctx, e)
 }
 
 // AddPlanPrice is B-O11: a new price row; the current row for the key
 // ends where it starts (409 PRICE_OVERLAP on overlap).
 func (s *Service) AddPlanPrice(ctx context.Context, c Caller, r PlanPriceRequest) (domain.PlanPrice, error) {
+	if err := s.verifyPrice(ctx, r.Provider, r.ProviderPriceID, domain.Money{AmountMinor: r.UnitAmountMinor, Currency: r.Currency}, r.Interval); err != nil {
+		return domain.PlanPrice{}, err
+	}
 	p := domain.PlanPrice{Plan: domain.PlanCode(r.Plan), Interval: domain.BillingInterval(r.Interval), Currency: r.Currency,
 		UnitAmountMinor: r.UnitAmountMinor, Provider: r.Provider, ProviderPriceID: nonEmpty(r.ProviderPriceID), EffectiveFrom: r.EffectiveFrom.UTC(),
 		CreatedBy: c.UserID, Reason: r.Reason}
-	p, err := s.Admin.AddPlanPrice(ctx, p)
-	if err != nil {
-		return p, err
-	}
-	s.platformAudit(ctx, port.AuditEntry{EntryType: "billing.price_book.changed", Action: "plan_price.added", ActorID: c.UserID,
-		TargetType: "price_book", TargetID: p.PriceID, SourceEventType: "PriceBookChanged", NaturalID: "price:" + p.PriceID,
-		OccurredAt: s.now(), IPAddress: c.ClientIP, UserAgent: c.UserAgent,
-		Metadata: map[string]any{"plan": r.Plan, "interval": r.Interval, "currency": r.Currency, "unit_amount_minor": r.UnitAmountMinor,
-			"provider": r.Provider, "effective_from": p.EffectiveFrom, "reason": r.Reason}})
-	return p, nil
+	err := s.SysTx.RunInSystemTx(ctx, func(ctx context.Context) error {
+		var err error
+		if p, err = s.Admin.AddPlanPrice(ctx, p); err != nil {
+			return err
+		}
+		return s.platformAudit(ctx, port.AuditEntry{EntryType: "billing.price_book.changed", Action: "plan_price.added", ActorID: c.UserID,
+			TargetType: "price_book", TargetID: p.PriceID, SourceEventType: "PriceBookChanged", NaturalID: "price:" + p.PriceID,
+			OccurredAt: s.now(), IPAddress: c.ClientIP, UserAgent: c.UserAgent,
+			Metadata: map[string]any{"plan": r.Plan, "interval": r.Interval, "currency": r.Currency, "unit_amount_minor": r.UnitAmountMinor,
+				"provider": r.Provider, "effective_from": p.EffectiveFrom, "reason": r.Reason}})
+	})
+	return p, err
 }
 
 // UpsertTokenPack is B-O12: add, change or retire (active=false) a pack.
 func (s *Service) UpsertTokenPack(ctx context.Context, c Caller, r TokenPackRequest) (json.RawMessage, error) {
-	p := domain.TokenPack{PackCode: r.PackCode, Tokens: r.Tokens, Currency: r.Currency, AmountMinor: r.AmountMinor, Provider: r.Provider,
-		ProviderPriceID: nonEmpty(r.ProviderPriceID), MonthlyCapTokens: r.MonthlyCapTokens, Active: *r.Active, EffectiveFrom: r.EffectiveFrom.UTC()}
-	if err := s.Admin.AddTokenPack(ctx, p, c.UserID, r.Reason); err != nil {
+	if err := s.verifyPrice(ctx, r.Provider, r.ProviderPriceID, domain.Money{AmountMinor: r.AmountMinor, Currency: r.Currency}, ""); err != nil {
 		return nil, err
 	}
-	s.platformAudit(ctx, port.AuditEntry{EntryType: "billing.price_book.changed", Action: "token_pack.changed", ActorID: c.UserID,
-		TargetType: "price_book", TargetID: r.PackCode, SourceEventType: "PriceBookChanged",
-		NaturalID: "pack:" + r.PackCode + ":" + r.Currency + ":" + p.EffectiveFrom.Format("20060102T150405Z"), OccurredAt: s.now(),
-		IPAddress: c.ClientIP, UserAgent: c.UserAgent, Metadata: map[string]any{"pack_code": r.PackCode, "tokens": r.Tokens,
-			"currency": r.Currency, "amount_minor": r.AmountMinor, "active": *r.Active, "reason": r.Reason}})
+	p := domain.TokenPack{PackCode: r.PackCode, Tokens: r.Tokens, Currency: r.Currency, AmountMinor: r.AmountMinor, Provider: r.Provider,
+		ProviderPriceID: nonEmpty(r.ProviderPriceID), MonthlyCapTokens: r.MonthlyCapTokens, Active: *r.Active, EffectiveFrom: r.EffectiveFrom.UTC()}
+	if err := s.SysTx.RunInSystemTx(ctx, func(ctx context.Context) error {
+		if err := s.Admin.AddTokenPack(ctx, p, c.UserID, r.Reason); err != nil {
+			return err
+		}
+		return s.platformAudit(ctx, port.AuditEntry{EntryType: "billing.price_book.changed", Action: "token_pack.changed", ActorID: c.UserID,
+			TargetType: "price_book", TargetID: r.PackCode, SourceEventType: "PriceBookChanged",
+			NaturalID: "pack:" + r.PackCode + ":" + r.Currency + ":" + p.EffectiveFrom.Format("20060102T150405Z"), OccurredAt: s.now(),
+			IPAddress: c.ClientIP, UserAgent: c.UserAgent, Metadata: map[string]any{"pack_code": r.PackCode, "tokens": r.Tokens,
+				"currency": r.Currency, "amount_minor": r.AmountMinor, "active": *r.Active, "reason": r.Reason}})
+	}); err != nil {
+		return nil, err
+	}
 	return json.Marshal(map[string]any{"pack_code": p.PackCode, "tokens": p.Tokens, "currency": p.Currency, "amount_minor": p.AmountMinor,
 		"provider": p.Provider, "monthly_cap_tokens": p.MonthlyCapTokens, "active": p.Active, "effective_from": p.EffectiveFrom})
 }
@@ -108,14 +116,19 @@ func (s *Service) SubmitCertification(ctx context.Context, c Caller, r Certifica
 	run := port.CertificationRun{Provider: r.Provider, AdapterVersion: r.AdapterVersion, SuiteVersion: r.SuiteVersion, ProrationMode: r.ProrationMode,
 		CertifiedBy: c.UserID, ProviderAPIVersion: nonEmpty(r.ProviderAPIVersion), ProviderAccountRef: nonEmpty(r.ProviderAccountRef),
 		Status: status, Capabilities: r.Capabilities, Results: resultsJSON, RunStartedAt: r.RunStartedAt, RunFinishedAt: r.RunFinishedAt}
-	cert, err := s.Admin.InsertCertification(ctx, run)
-	if err != nil {
+	var cert domain.Certification
+	if err := s.SysTx.RunInSystemTx(ctx, func(ctx context.Context) error {
+		var err error
+		if cert, err = s.Admin.InsertCertification(ctx, run); err != nil {
+			return err
+		}
+		return s.platformAudit(ctx, port.AuditEntry{EntryType: "billing.provider.certified", Action: "certification.submitted", ActorID: c.UserID,
+			TargetType: "certification", TargetID: cert.ID, SourceEventType: "ProviderCertificationSubmitted", NaturalID: cert.ID,
+			OccurredAt: s.now(), IPAddress: c.ClientIP, UserAgent: c.UserAgent, Metadata: map[string]any{"provider": r.Provider,
+				"adapter_version": r.AdapterVersion, "suite_version": r.SuiteVersion, "status": string(status), "missing_cases": missing, "reason": r.Reason}})
+	}); err != nil {
 		return CertificationView{}, err
 	}
-	s.platformAudit(ctx, port.AuditEntry{EntryType: "billing.provider.certified", Action: "certification.submitted", ActorID: c.UserID,
-		TargetType: "certification", TargetID: cert.ID, SourceEventType: "ProviderCertificationSubmitted", NaturalID: cert.ID,
-		OccurredAt: s.now(), IPAddress: c.ClientIP, UserAgent: c.UserAgent, Metadata: map[string]any{"provider": r.Provider,
-			"adapter_version": r.AdapterVersion, "suite_version": r.SuiteVersion, "status": string(status), "missing_cases": missing, "reason": r.Reason}})
 	if status == domain.CertFailed {
 		return certView(cert), domain.NewError(domain.ErrCertificationIncomplete, "required cases did not pass; recorded as failed").
 			With("missing_cases", missing).With("id", cert.ID)
@@ -142,15 +155,19 @@ func (s *Service) ReviewCertification(ctx context.Context, c Caller, id string, 
 	if r.Decision == "approve" {
 		status = domain.CertPassed
 	}
-	cert, err = s.Admin.ReviewCertification(ctx, id, status, c.UserID, r.Reason, s.now())
-	if err != nil {
+	if err := s.SysTx.RunInSystemTx(ctx, func(ctx context.Context) error {
+		var err error
+		if cert, err = s.Admin.ReviewCertification(ctx, id, status, c.UserID, r.Reason, s.now()); err != nil {
+			return err
+		}
+		return s.platformAudit(ctx, port.AuditEntry{EntryType: "billing.provider.certification_reviewed", Action: "certification." + r.Decision,
+			ActorID: c.UserID, TargetType: "certification", TargetID: id, SourceEventType: "ProviderCertificationReviewed", NaturalID: id,
+			OccurredAt: s.now(), IPAddress: c.ClientIP, UserAgent: c.UserAgent, Metadata: map[string]any{"decision": r.Decision,
+				"provider": cert.Provider, "adapter_version": cert.AdapterVersion, "suite_version": cert.SuiteVersion,
+				"certified_by": cert.CertifiedBy, "reviewed_by": c.UserID, "reason": r.Reason}})
+	}); err != nil {
 		return CertificationView{}, err
 	}
-	s.platformAudit(ctx, port.AuditEntry{EntryType: "billing.provider.certification_reviewed", Action: "certification." + r.Decision,
-		ActorID: c.UserID, TargetType: "certification", TargetID: id, SourceEventType: "ProviderCertificationReviewed", NaturalID: id,
-		OccurredAt: s.now(), IPAddress: c.ClientIP, UserAgent: c.UserAgent, Metadata: map[string]any{"decision": r.Decision,
-			"provider": cert.Provider, "adapter_version": cert.AdapterVersion, "suite_version": cert.SuiteVersion,
-			"certified_by": cert.CertifiedBy, "reviewed_by": c.UserID, "reason": r.Reason}})
 	return certView(cert), nil
 }
 
@@ -168,16 +185,33 @@ func (s *Service) RevokeCertification(ctx context.Context, c Caller, id string, 
 		return CertificationView{}, domain.NewError(domain.ErrCertificationNotActive, "only a passed certification can be revoked").
 			With("status", string(cert.Status))
 	}
-	cert, err = s.Admin.RevokeCertification(ctx, id, c.UserID, r.Reason, s.now())
-	if err != nil {
+	if err := s.SysTx.RunInSystemTx(ctx, func(ctx context.Context) error {
+		var err error
+		if cert, err = s.Admin.RevokeCertification(ctx, id, c.UserID, r.Reason, s.now()); err != nil {
+			return err
+		}
+		return s.platformAudit(ctx, port.AuditEntry{EntryType: "billing.provider.certification_revoked", Action: "certification.revoked",
+			ActorID: c.UserID, TargetType: "certification", TargetID: id, SourceEventType: "ProviderCertificationRevoked", NaturalID: id,
+			OccurredAt: s.now(), IPAddress: c.ClientIP, UserAgent: c.UserAgent, Metadata: map[string]any{"provider": cert.Provider,
+				"adapter_version": cert.AdapterVersion, "reason": r.Reason}})
+	}); err != nil {
 		return CertificationView{}, err
 	}
-	s.platformAudit(ctx, port.AuditEntry{EntryType: "billing.provider.certification_revoked", Action: "certification.revoked",
-		ActorID: c.UserID, TargetType: "certification", TargetID: id, SourceEventType: "ProviderCertificationRevoked", NaturalID: id,
-		OccurredAt: s.now(), IPAddress: c.ClientIP, UserAgent: c.UserAgent, Metadata: map[string]any{"provider": cert.Provider,
-			"adapter_version": cert.AdapterVersion, "reason": r.Reason}})
 	v := certView(cert)
 	now := s.now()
 	v.RevokedAt = &now
 	return v, nil
+}
+
+// verifyPrice is B-O11 / B-O12's provider check: the referenced price
+// exists, is active and matches the row (422 PROVIDER_PRICE_MISMATCH).
+func (s *Service) verifyPrice(ctx context.Context, provider, priceRef string, amount domain.Money, interval string) error {
+	if provider == manualProvider {
+		return nil
+	}
+	prov, err := s.provider(provider)
+	if err != nil {
+		return err
+	}
+	return providerErr(prov.VerifyPrice(ctx, priceRef, port.PriceExpectation{Amount: amount, Interval: interval}))
 }

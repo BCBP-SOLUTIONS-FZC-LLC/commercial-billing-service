@@ -15,7 +15,7 @@ import (
 	pgmigrate "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/migrate"
 )
 
-// migrationsFS holds Billing's own migrations, 000001 to 000005 (LLD §4.4).
+// migrationsFS holds Billing's own migrations, 000001 to 000006 (LLD §4.4).
 //
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
@@ -31,7 +31,7 @@ const DomainMigrationsTable = "billing_schema_migrations"
 //     (processed_events): "000000_outbox_schema";
 //  2. platform-audit pending_audit_entries (auditoutbox.ApplySchema), which
 //     must exist before 000005 adds RLS to it;
-//  3. Billing's migrations 000001 to 000005.
+//  3. Billing's migrations 000001 to 000006.
 //
 // dsn must reach Postgres directly, never PgBouncer: the migration lock is a
 // session-scoped advisory lock (§12 MIGRATION_DATABASE_URL).

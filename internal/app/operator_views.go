@@ -196,14 +196,16 @@ func (s *Service) RunReconciliation(ctx context.Context, _ int) (int, error) {
 	if err != nil {
 		status, errText = "failed", ptr(err.Error())
 	}
-	if ferr := s.Recon.Finish(context.WithoutCancel(ctx), run.RunID, status, counts, errText); ferr != nil {
-		return 1, ferr
-	}
-	s.platformAudit(ctx, port.AuditEntry{EntryType: "commercial.cross_tenant_job.ran", Action: "reconciliation." + status,
-		TargetType: "reconciliation_run", TargetID: run.RunID, SourceEventType: "ReconciliationRunFinished", NaturalID: run.RunID,
-		OccurredAt: s.now(), Metadata: map[string]any{"provider": run.Provider, "window_start": run.WindowStart, "window_end": run.WindowEnd,
-			"counts": counts, "started_by": run.StartedBy}})
-	return 1, nil
+	ctx = context.WithoutCancel(ctx)
+	return 1, s.SysTx.RunInSystemTx(ctx, func(ctx context.Context) error {
+		if err := s.Recon.Finish(ctx, run.RunID, status, counts, errText); err != nil {
+			return err
+		}
+		return s.platformAudit(ctx, port.AuditEntry{EntryType: "commercial.cross_tenant_job.ran", Action: "reconciliation." + status,
+			TargetType: "reconciliation_run", TargetID: run.RunID, SourceEventType: "ReconciliationRunFinished", NaturalID: run.RunID,
+			OccurredAt: s.now(), Metadata: map[string]any{"provider": run.Provider, "window_start": run.WindowStart, "window_end": run.WindowEnd,
+				"counts": counts, "started_by": run.StartedBy}})
+	})
 }
 
 func (s *Service) reconcile(ctx context.Context, run port.ReconRun) (map[string]int, error) {

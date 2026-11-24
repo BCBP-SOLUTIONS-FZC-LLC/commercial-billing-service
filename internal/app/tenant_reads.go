@@ -90,7 +90,8 @@ func (s *Service) CreateSetupSession(ctx context.Context, c Caller, tenantID str
 }
 
 // PaymentMethodSet records a completed setup session (§7.4
-// payment_method_set): session completed, default_pm_set.
+// payment_method_set); applyDefaultPM then makes the new method the
+// provider default and sets default_pm_set.
 type PaymentMethodSet struct{ S *Service }
 
 // Handle implements port.PaymentEventHandler.
@@ -106,9 +107,8 @@ func (h PaymentMethodSet) Handle(ctx context.Context, tenantID string, _ domain.
 	if err := s.Checkouts.SetStatus(ctx, session.SessionID, domain.SessionCompleted); err != nil {
 		return "", err
 	}
-	if err := s.Accounts.SetDefaultPM(ctx, tenantID, true); err != nil {
-		return "", err
-	}
+	// Making it the provider default is a provider call, so the lifecycle
+	// follow-up does it outside this transaction (BIL-CONC-2).
 	return "applied:payment_method_set", nil
 }
 
@@ -292,4 +292,49 @@ func (s *Service) UpdateBillingContact(ctx context.Context, _ Caller, tenantID s
 		return err
 	})
 	return out, err
+}
+
+// applyDefaultPM is the lifecycle follow-up for a completed setup session
+// (B-P16): re-read the session for the saved method, make it the customer
+// and subscription default on the provider, then record it.
+func (s *Service) applyDefaultPM(ctx context.Context, tenantID, sessionID string) error {
+	var (
+		session domain.CheckoutSession
+		acct    domain.BillingAccount
+	)
+	if err := s.Tx.RunInTenantTx(ctx, tenantID, func(ctx context.Context) error {
+		var found bool
+		var err error
+		if session, found, err = s.Checkouts.GetSession(ctx, sessionID); err != nil || !found {
+			return err
+		}
+		acct, err = s.Accounts.Get(ctx, tenantID)
+		return err
+	}); err != nil || session.SessionID == "" {
+		return err
+	}
+	prov, err := s.provider(acct.Provider)
+	if err != nil {
+		return err
+	}
+	st, err := prov.FetchCurrent(ctx, domain.ProviderObjectRef{Kind: domain.ObjectCheckoutSession, ID: session.ProviderSessionID})
+	if err != nil {
+		return providerErr(err)
+	}
+	pm, _ := st.Fields["setup_payment_method"].(string)
+	if pm != "" {
+		if err := prov.AttachDefaultPaymentMethod(ctx, port.CustomerRef{ProviderCustomerID: deref(acct.ProviderCustomerID)}, pm,
+			"pmdefault:"+sessionID); err != nil {
+			return providerErr(err)
+		}
+	}
+	return s.Tx.RunInTenantTx(ctx, tenantID, func(ctx context.Context) error {
+		if err := s.Checkouts.MarkDefaultApplied(ctx, sessionID); err != nil {
+			return err
+		}
+		if pm == "" {
+			return nil // nothing saved (abandoned inside the page): only close it
+		}
+		return s.Accounts.SetDefaultPM(ctx, tenantID, true)
+	})
 }

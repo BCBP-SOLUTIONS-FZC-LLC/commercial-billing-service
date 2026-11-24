@@ -177,6 +177,10 @@ func (p *fakeProvider) CancelNow(_ context.Context, ref port.SubscriptionRef, ke
 }
 
 func (p *fakeProvider) FetchCurrent(_ context.Context, obj domain.ProviderObjectRef) (domain.ProviderObjectState, error) {
+	if obj.Kind == domain.ObjectCheckoutSession {
+		return domain.ProviderObjectState{Ref: obj, Status: "complete", Fields: map[string]any{"mode": "setup", "setup_payment_method": "pm_new"}},
+			p.record("FetchCurrent " + obj.ID)
+	}
 	start := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
 	return domain.ProviderObjectState{Ref: obj, Status: "active", Fields: map[string]any{
 		"current_period_start": start, "current_period_end": start.AddDate(0, 1, 0)}}, p.record("FetchCurrent " + obj.ID)
@@ -301,6 +305,14 @@ func (p *fakeProvider) ListSince(_ context.Context, kind port.ReconKind, _ time.
 	return port.ReconPage{Items: p.recon[kind]}, nil
 }
 
+// VerifyPrice accepts any price except "price_bad".
+func (p *fakeProvider) VerifyPrice(_ context.Context, ref string, _ port.PriceExpectation) error {
+	if ref == "price_bad" {
+		return fmt.Errorf("%w: amount differs", port.ErrPriceMismatch)
+	}
+	return p.record("VerifyPrice " + ref)
+}
+
 func (p *fakeProvider) called(prefix string) []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -397,7 +409,7 @@ func newEnv(t *testing.T) *env {
 	e := &env{stripe: &fakeProvider{name: "stripe"}, core: &fakeCore{}, rp: &fakeRP{}, ent: &fakeEnt{limit: ptrTo(int64(5_000_000))}, now: time.Now().UTC().Truncate(time.Microsecond)}
 	manual := manualadapter.New()
 	e.svc = &app.Service{
-		Tx: pgadapter.NewTxRunner(appPool), Lock: pgadapter.TenantLocker{},
+		Tx: pgadapter.NewTxRunner(appPool), SysTx: pgadapter.NewSystemTxRunner(systemPool), Lock: pgadapter.TenantLocker{},
 		Accounts: pgadapter.NewAccountRepository(appPool), Subs: pgadapter.NewSubscriptionRepository(appPool),
 		Prices: pgadapter.NewPriceRepository(appPool), Checkouts: pgadapter.NewCheckoutRepository(appPool), Invoices: pgadapter.NewInvoiceRepository(appPool),
 		Changes: pgadapter.NewPlanChangeRepository(appPool, systemPool), Previews: pgadapter.NewPreviewRepository(appPool),

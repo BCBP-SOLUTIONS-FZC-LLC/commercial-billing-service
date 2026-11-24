@@ -94,6 +94,20 @@ func (r *CheckoutRepository) ExpireAll(ctx context.Context, tenantID string) err
 	})
 }
 
+// MarkDefaultApplied implements port.CheckoutRepo: the setup session's
+// payment method is now the provider default.
+func (r *CheckoutRepository) MarkDefaultApplied(ctx context.Context, sessionID string) error {
+	return inTx(ctx, r.pool, func(q querier) error {
+		_, err := q.Exec(ctx, `UPDATE checkout_sessions SET default_applied_at = now() WHERE session_id = $1::uuid`, sessionID)
+		return err
+	})
+}
+
+// GetSession implements port.CheckoutRepo.
+func (r *CheckoutRepository) GetSession(ctx context.Context, sessionID string) (domain.CheckoutSession, bool, error) {
+	return r.one(ctx, `WHERE session_id = $1::uuid`, sessionID)
+}
+
 // SagaRepository is port.SagaRepo (§4.2.8).
 type SagaRepository struct{ app, sys *pgcommon.Pool }
 

@@ -48,6 +48,7 @@ type Service struct {
 	Unimplemented
 
 	Tx            port.TxRunner
+	SysTx         port.SystemTxRunner
 	Lock          port.TenantLocker
 	Accounts      port.AccountRepo
 	Subs          port.SubscriptionRepo

@@ -18,6 +18,12 @@ type TxRunner interface {
 	RunInTenantTx(ctx context.Context, tenantID string, fn func(ctx context.Context) error) error
 }
 
+// SystemTxRunner runs work in one billing_system transaction: global
+// operator changes together with their AL-5 entry (BIL-AUD-1).
+type SystemTxRunner interface {
+	RunInSystemTx(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
 // SystemReader is the billing_system (BYPASSRLS) side, used only by the
 // paths of §4.3 (webhook pre-resolution, cron tenant listing,
 // reconciliation, price book and certification writes). Tenant route
@@ -104,6 +110,8 @@ type CheckoutRepo interface {
 	SetProviderSession(ctx context.Context, sessionID, providerSessionID string, expiresAt time.Time) error
 	SetStatus(ctx context.Context, sessionID, status string) error
 	ExpireAll(ctx context.Context, tenantID string) error
+	MarkDefaultApplied(ctx context.Context, sessionID string) error
+	GetSession(ctx context.Context, sessionID string) (domain.CheckoutSession, bool, error)
 }
 
 // SagaRef names a due saga.
@@ -169,7 +177,8 @@ type InvoiceRow struct {
 
 // FollowUp is one lifecycle follow-up a tenant needs (§8.8.4, §8.10).
 type FollowUp struct {
-	TenantID, BillingSubscriptionID, Action string // pause | resume | close
+	TenantID, BillingSubscriptionID, Action string // pause | resume | close | default_pm
+	SessionID                               string // default_pm: the completed setup session
 }
 
 // FollowUpRepo finds tenants whose IAM lifecycle needs a provider action
