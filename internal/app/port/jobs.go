@@ -61,7 +61,7 @@ type JobRepo interface {
 	PruneIdempotency(ctx context.Context, now time.Time) (int64, error)
 }
 
-// Purchase kinds for commercial_purchase_confirmation_to_event_seconds.
+// Purchase kinds for commercial_billing_purchase_confirmation_to_event_seconds.
 const (
 	PurchaseKindSeats           = "seats"
 	PurchaseKindTokenAddon      = "token_addon"

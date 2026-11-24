@@ -1,6 +1,6 @@
 # Paid purchase not active within 60 s
 
-**Alert:** `CommercialPurchaseNotActive` (SEV-2, HLD §8.6.3, §12.4). Composed p99 over 10 min: Billing's confirmation → event (`commercial_purchase_confirmation_to_event_seconds{kind=seats|token_addon}`) + bus propagation on `billing-orgm-q` / `billing-entitlements-q` (`platform_event_propagation_seconds`) + Usage & Metering render latency, above 60 s.
+**Alert:** `CommercialPurchaseNotActive` (SEV-2, HLD §8.6.3, §12.4). Composed p99 over 10 min: Billing's confirmation → event (`commercial_billing_purchase_confirmation_to_event_seconds{kind=seats|token_addon}`) + bus propagation on `billing-orgm-q` / `billing-entitlements-q` (`platform_event_propagation_seconds`) + Usage & Metering render latency, above 60 s.
 
 1. Find the slow leg on the Billing dashboard ("Commercial / Billing" → purchases):
    - **Billing leg high:** the event commits in the same transaction as the confirmation (BIL-OPS-8), so a high value means the confirmation itself was late — the paid callback queued. Check [webhook-backlog.md](webhook-backlog.md) and `platform_outbox_pending_events{service="commercial-billing"}`.

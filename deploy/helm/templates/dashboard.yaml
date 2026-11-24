@@ -1,0 +1,18 @@
+{{- if .Values.dashboard.enabled }}
+# §11.5 "Commercial / Billing" dashboard, loaded by Grafana's sidecar
+# (label grafana_dashboard). files/dashboard-commercial-billing.json is a
+# byte copy of deploy/monitoring/dashboards/commercial-billing.json.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "commercial-billing.fullname" . }}-dashboard
+  namespace: {{ .Values.dashboard.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Commercial
+data:
+  commercial-billing.json: |-
+    {{- .Files.Get "files/dashboard-commercial-billing.json" | nindent 4 }}
+{{- end }}

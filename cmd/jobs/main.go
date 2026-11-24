@@ -129,7 +129,7 @@ func execute(name string) int {
 	_ = gincommon.ObservabilityMiddlewares(ginCfg)
 	// Billing's metrics on gincommon's registry; the run's commercial_*
 	// families are pushed from it after the run (metrics.PushRun).
-	jobMetrics, err := metrics.New(gincommon.MetricsRegisterer())
+	jobMetrics, err := metrics.New(gincommon.MetricsRegisterer(), metrics.Options{Legacy: cfg.LegacyMetrics})
 	app.SetTracer(observability.NewTracer(cfg.AppName))
 	httpx.SetObserver(jobMetrics.Dependency)
 	if err != nil {
@@ -156,7 +156,7 @@ func execute(name string) int {
 }
 
 // runJob runs one job and logs its outcome with the
-// commercial_cross_tenant_job_runs_total labels (job, outcome).
+// commercial_billing_cross_tenant_job_runs_total labels (job_name, result).
 func runJob(ctx context.Context, name string, d deps, log port.Logger) (int, string) {
 	started := time.Now()
 	ctx, end := app.StartSpan(ctx, "billing.job "+name)
@@ -170,7 +170,7 @@ func runJob(ctx context.Context, name string, d deps, log port.Logger) (int, str
 		outcome = "partial"
 	}
 	fields := map[string]any{"job": name, "outcome": outcome, "handled": res.Handled, "failed": res.Failed,
-		"duration_ms": time.Since(started).Milliseconds(), "metric": "commercial_cross_tenant_job_runs_total"}
+		"duration_ms": time.Since(started).Milliseconds(), "metric": "commercial_billing_cross_tenant_job_runs_total"}
 	if err != nil {
 		fields["error"] = err.Error()
 		log.Error("job run failed", fields)

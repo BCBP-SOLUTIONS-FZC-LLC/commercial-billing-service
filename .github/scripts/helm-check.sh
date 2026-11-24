@@ -29,7 +29,13 @@ for vf in "" values-dev.yaml values-staging.yaml values-prod.yaml; do
     kubeconform -strict -kubernetes-version 1.31.0 -ignore-missing-schemas -summary || fail=1
 done
 
-promtool check rules deploy/monitoring/app-alerts.yml deploy/monitoring/platform-audit.rules.yml || fail=1
+promtool check rules deploy/monitoring/app-alerts.yml deploy/monitoring/recording-rules.yml deploy/monitoring/slo-rules.yml \
+  deploy/monitoring/platform-audit.rules.yml || fail=1
+cmp -s deploy/monitoring/dashboards/commercial-billing.json "$CHART/files/dashboard-commercial-billing.json" \
+  || { echo "$CHART/files/dashboard-commercial-billing.json differs from the dashboard source"; fail=1; }
+for f in app-alerts.yml recording-rules.yml slo-rules.yml; do
+  cmp -s "deploy/monitoring/$f" "$CHART/files/$f" || { echo "$CHART/files/$f differs from deploy/monitoring/$f"; fail=1; }
+done
 go test -tags=helm -count=1 ./test/helm/ || fail=1
 
 if [[ $fail -ne 0 ]]; then echo "helm-check FAILED"; exit 1; fi

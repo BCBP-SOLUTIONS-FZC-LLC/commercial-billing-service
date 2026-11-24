@@ -146,3 +146,7 @@ certify-rehearsal: ## Run the cert-1.0 suite against stripe-mock and a throwaway
 .PHONY: check-first-deploy
 check-first-deploy: ## Check the LLD §19.1 first-deployment order for ENV (read-only)
 	bash scripts/check-first-deploy.sh $(ENV)
+
+.PHONY: metrics-inventory
+metrics-inventory: ## Regenerate docs/observability/metric-registry.md from the code (LLD §11.2)
+	UPDATE_INVENTORY=1 $(GO) test -count=1 -run TestInventoryUpToDate ./internal/adapters/metrics/

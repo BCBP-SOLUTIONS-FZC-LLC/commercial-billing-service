@@ -28,7 +28,7 @@ type APIConfig struct {
 	// Disabled lists routes behind a feature flag that is off: they are not
 	// registered, so they answer 404 (§12 feature flags).
 	Disabled map[string]bool
-	// OnOperatorAction counts commercial_operator_actions_total{action,
+	// OnOperatorAction counts commercial_billing_operator_actions_total{action,
 	// outcome}: success < 400, failure 4xx, error 5xx (§11.2). Optional.
 	OnOperatorAction func(action, outcome string)
 }

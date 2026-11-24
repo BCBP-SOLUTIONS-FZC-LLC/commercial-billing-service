@@ -1,16 +1,24 @@
-// Package metrics registers Billing's Tier 2 (commercial_*) and Tier 3
-// (commercial_billing_*) metrics with the exact names and labels of LLD
-// §11.2 and implements port.Metrics. Every collector is registered on
-// platform-gincommon's registry (gincommon.MetricsRegisterer) and every
-// scrape and push reads gincommon.MetricsGatherer: Billing keeps no
-// registry of its own. With adapters/observability this is the only
-// package allowed to name Prometheus types (depguard).
+// Package metrics registers Billing's metrics under the Enterprise Platform
+// Observability Standard (LLD §11.2) and implements port.Metrics.
 //
-// Tier 3 metrics are built with gincommon's validated constructors. The
-// Tier 2 commercial_* names are "proposed" in the Platform Observability
-// Registry (§11.2): gincommon.NewShared* accepts only ratified entries, so
-// they are registered directly with the central const labels until the
-// registry ratifies them, then move to NewShared* with no name change.
+//   - Tier 1 platform_*: only registry entries, through gincommon's shared
+//     constructors (platform_dependency_request_seconds here; the HTTP,
+//     messaging, outbox and pool series come from the platform libraries).
+//   - Tier 2 commercial_*: none. No Commercial domain metric is ratified in
+//     the Platform Observability Registry, and services may not invent
+//     shared names (standard rule 11); candidates are proposed in
+//     docs/observability/registry-proposals.md.
+//   - Tier 3 commercial_billing_*: everything Billing owns, built with
+//     gincommon's validated constructors (prefix, suffixes, label names).
+//
+// Every collector is registered on gincommon's registry and every scrape
+// and push reads gincommon.MetricsGatherer; domain, service and environment
+// are gincommon's central const labels. With adapters/observability this
+// is the only package allowed to name Prometheus types (depguard).
+//
+// Compatibility period (rev 0.43): the four former Tier 2 names are emitted
+// in parallel with their Tier 3 replacements while Options.Legacy is true
+// (OBSERVABILITY_LEGACY_METRICS), then removed after the sunset.
 package metrics
 
 import (
@@ -27,10 +35,10 @@ import (
 // Names (§11.2). Kept as constants so alerts, tests and the inventory
 // agree with the code.
 const (
-	PurchaseToEventSeconds    = "commercial_purchase_confirmation_to_event_seconds"
-	EventsEmittedTotal        = "commercial_events_emitted_total"
-	OperatorActionsTotal      = "commercial_operator_actions_total"
-	CrossTenantJobRunsTotal   = "commercial_cross_tenant_job_runs_total"
+	PurchaseToEventSeconds    = "commercial_billing_purchase_confirmation_to_event_seconds"
+	EventsEmittedTotal        = "commercial_billing_events_emitted_total"
+	OperatorActionsTotal      = "commercial_billing_operator_actions_total"
+	CrossTenantJobRunsTotal   = "commercial_billing_cross_tenant_job_runs_total"
 	WebhooksTotal             = "commercial_billing_webhooks_total"
 	WebhookSignatureFailures  = "commercial_billing_webhook_signature_failures_total"
 	WebhookProcessingSeconds  = "commercial_billing_webhook_processing_seconds"
@@ -59,6 +67,30 @@ const (
 	DependencyRequestSeconds  = "platform_dependency_request_seconds"
 )
 
+// Legacy names (former unratified Tier 2), deprecated by rev 0.43 and
+// emitted only during the compatibility period.
+const (
+	LegacyPurchaseToEventSeconds  = "commercial_purchase_confirmation_to_event_seconds"
+	LegacyEventsEmittedTotal      = "commercial_events_emitted_total"
+	LegacyOperatorActionsTotal    = "commercial_operator_actions_total"
+	LegacyCrossTenantJobRunsTotal = "commercial_cross_tenant_job_runs_total"
+)
+
+// Replacements maps each legacy name to its Tier 3 replacement (used by the
+// migration check over alerts, rules, dashboards and runbooks).
+var Replacements = map[string]string{
+	LegacyPurchaseToEventSeconds:  PurchaseToEventSeconds,
+	LegacyEventsEmittedTotal:      EventsEmittedTotal,
+	LegacyOperatorActionsTotal:    OperatorActionsTotal,
+	LegacyCrossTenantJobRunsTotal: CrossTenantJobRunsTotal,
+}
+
+// Options configure registration.
+type Options struct {
+	// Legacy emits the deprecated former Tier 2 names in parallel.
+	Legacy bool
+}
+
 // Buckets: purchase → event targets 60 s (§11.1); webhook processing < 10 s
 // p95; sagas page at 30 min.
 var (
@@ -79,6 +111,13 @@ type Metrics struct {
 	certified                                                         *prometheus.GaugeVec
 	overdue                                                           prometheus.Gauge
 	dependency                                                        *prometheus.HistogramVec // shared platform_dependency_request_seconds
+	legacy                                                            *legacy                  // nil after the sunset
+}
+
+// legacy holds the deprecated former Tier 2 collectors.
+type legacy struct {
+	purchaseToEvent                         *prometheus.HistogramVec
+	eventsEmitted, operatorActions, jobRuns *prometheus.CounterVec
 }
 
 var _ port.Metrics = (*Metrics)(nil)
@@ -86,7 +125,7 @@ var _ port.Metrics = (*Metrics)(nil)
 // New registers the collectors on reg (gincommon.MetricsRegisterer() in
 // the server; a fresh registry in jobs and tests). gincommon's metrics
 // identity must be initialised first (ObservabilityMiddlewares).
-func New(reg prometheus.Registerer) (*Metrics, error) {
+func New(reg prometheus.Registerer, o Options) (*Metrics, error) {
 	m := &Metrics{}
 	var errs []error
 	cv := func(name, help string, labels ...string) *prometheus.CounterVec {
@@ -104,19 +143,14 @@ func New(reg prometheus.Registerer) (*Metrics, error) {
 		errs = append(errs, err)
 		return h
 	}
-	// Tier 2 (proposed in the registry): registered directly.
-	tier2c := func(name, help string, labels ...string) *prometheus.CounterVec {
-		c := prometheus.NewCounterVec(prometheus.CounterOpts{Name: name, Help: help, ConstLabels: gincommon.MetricsConstLabels()}, labels)
-		errs = append(errs, reg.Register(c))
-		return c
+	m.purchaseToEvent = hv(PurchaseToEventSeconds, "Payment confirmed to the billing.events event committed, by purchase kind (Billing's share of the 60 s targets).",
+		purchaseBuckets, "kind")
+	m.eventsEmitted = cv(EventsEmittedTotal, "billing.events events enqueued, by event type.", "event_type")
+	m.operatorActions = cv(OperatorActionsTotal, "Operator route calls, by action (route id) and outcome.", "action", "outcome")
+	m.jobRuns = cv(CrossTenantJobRunsTotal, "Cross-tenant job runs (CronJobs and reconciliation), by job name and result (success | partial | failure).", "job_name", "result")
+	if o.Legacy {
+		m.legacy, errs = registerLegacy(reg, errs)
 	}
-	m.purchaseToEvent = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: PurchaseToEventSeconds,
-		Help:        "Payment confirmed to the billing.events event committed, by purchase kind (Billing's share of the 60 s targets).",
-		ConstLabels: gincommon.MetricsConstLabels(), Buckets: purchaseBuckets}, []string{"kind"})
-	errs = append(errs, reg.Register(m.purchaseToEvent))
-	m.eventsEmitted = tier2c(EventsEmittedTotal, "billing.events events enqueued, by event type.", "event_type")
-	m.operatorActions = tier2c(OperatorActionsTotal, "Operator route calls, by action (route id) and outcome.", "action", "outcome")
-	m.jobRuns = tier2c(CrossTenantJobRunsTotal, "Cross-tenant job runs (CronJobs and reconciliation), by job and outcome.", "job", "outcome")
 
 	m.webhooks = cv(WebhooksTotal, "Provider callbacks, by provider, normalised type and result.", "provider", "type", "result")
 	m.signatureFailures = cv(WebhookSignatureFailures, "Callbacks refused for a bad signature or livemode (BIL-PAY-2).", "provider")
@@ -172,6 +206,9 @@ func (m *Metrics) Dependency(dependency, operation, outcome string, d time.Durat
 // PurchaseToEvent implements port.Metrics.
 func (m *Metrics) PurchaseToEvent(kind string, d time.Duration) {
 	m.purchaseToEvent.WithLabelValues(kind).Observe(seconds(d))
+	if m.legacy != nil {
+		m.legacy.purchaseToEvent.WithLabelValues(kind).Observe(seconds(d))
+	}
 }
 
 // SagaConfirmed implements port.Metrics.
@@ -252,16 +289,27 @@ func (m *Metrics) ReconciliationFindings(counts map[[2]string]int) {
 }
 
 // CrossTenantJobRun implements port.Metrics.
-func (m *Metrics) CrossTenantJobRun(job, outcome string) {
-	m.jobRuns.WithLabelValues(job, outcome).Inc()
+func (m *Metrics) CrossTenantJobRun(job, result string) {
+	m.jobRuns.WithLabelValues(job, result).Inc()
+	if m.legacy != nil {
+		m.legacy.jobRuns.WithLabelValues(job, result).Inc()
+	}
 }
 
 // EventEmitted counts one billing.events event enqueued.
-func (m *Metrics) EventEmitted(eventType string) { m.eventsEmitted.WithLabelValues(eventType).Inc() }
+func (m *Metrics) EventEmitted(eventType string) {
+	m.eventsEmitted.WithLabelValues(eventType).Inc()
+	if m.legacy != nil {
+		m.legacy.eventsEmitted.WithLabelValues(eventType).Inc()
+	}
+}
 
 // OperatorAction counts one operator route call.
 func (m *Metrics) OperatorAction(action, outcome string) {
 	m.operatorActions.WithLabelValues(action, outcome).Inc()
+	if m.legacy != nil {
+		m.legacy.operatorActions.WithLabelValues(action, outcome).Inc()
+	}
 }
 
 // ProviderCertified sets the certification gauge for one loaded adapter.
@@ -298,3 +346,23 @@ func seconds(d time.Duration) float64 { return max(d.Seconds(), 0) }
 
 // Repaired is the reconciliation_findings repaired label value.
 func Repaired(b bool) string { return strconv.FormatBool(b) }
+
+// registerLegacy registers the deprecated former Tier 2 collectors with the
+// labels they had. They are not in the registry, so they are registered
+// directly with gincommon's central const labels (gincommon's constructors
+// rightly refuse them).
+func registerLegacy(reg prometheus.Registerer, errs []error) (*legacy, []error) {
+	l := &legacy{}
+	c := func(name, help string, labels ...string) *prometheus.CounterVec {
+		v := prometheus.NewCounterVec(prometheus.CounterOpts{Name: name, Help: help, ConstLabels: gincommon.MetricsConstLabels()}, labels)
+		errs = append(errs, reg.Register(v))
+		return v
+	}
+	l.purchaseToEvent = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: LegacyPurchaseToEventSeconds,
+		Help: "DEPRECATED (rev 0.43): use " + PurchaseToEventSeconds + ".", ConstLabels: gincommon.MetricsConstLabels(), Buckets: purchaseBuckets}, []string{"kind"})
+	errs = append(errs, reg.Register(l.purchaseToEvent))
+	l.eventsEmitted = c(LegacyEventsEmittedTotal, "DEPRECATED (rev 0.43): use "+EventsEmittedTotal+".", "event_type")
+	l.operatorActions = c(LegacyOperatorActionsTotal, "DEPRECATED (rev 0.43): use "+OperatorActionsTotal+".", "action", "outcome")
+	l.jobRuns = c(LegacyCrossTenantJobRunsTotal, "DEPRECATED (rev 0.43): use "+CrossTenantJobRunsTotal+".", "job", "outcome")
+	return l, errs
+}

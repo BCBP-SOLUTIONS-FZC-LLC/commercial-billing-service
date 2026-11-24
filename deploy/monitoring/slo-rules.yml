@@ -1,0 +1,79 @@
+# SLO definitions for commercial-billing (LLD §11.1). Each SLO has its SLI
+# recording rules and, for the availability objective, multi-window
+# multi-burn-rate alerts (fast 14.4× over 1 h and 5 m, slow 6× over 6 h and
+# 30 m; 30-day window). Latency objectives are good-event ratios on the
+# bucket at the threshold where the histogram has one; B-I1's 6 s / 12 s
+# targets are watched as quantiles (recording-rules.yml).
+#
+# | SLO                                   | Objective      | SLI                                                           |
+# |---------------------------------------|----------------|---------------------------------------------------------------|
+# | Availability (tenant/internal/operator) | 99.9 % / 30 d | 1 − 5xx / all on /api/v1/(tenants|internal|operator)/*        |
+# | Webhook acknowledgement               | 99 % < 2 s     | B-W1 requests ≤ 2 s bucket                                    |
+# | Webhook processing                    | 95 % < 10 s    | commercial_billing_webhook_processing_seconds ≤ 10 s          |
+# | Purchase → event (Billing share)      | 99 % ≤ 5 s     | commercial_billing_purchase_confirmation_to_event_seconds ≤ 5 s (seats, token_addon) |
+# | Tenant reads (B-P1, B-P17)            | 99 % < 150 ms  | GET subscription / invoices ≤ 0.15 s bucket                   |
+groups:
+  - name: commercial_billing.slo
+    interval: 30s
+    rules:
+      - record: commercial_billing:slo_availability:error_ratio_rate5m
+        expr: |
+          sum(rate(platform_http_requests_total{service="commercial-billing",route=~"/api/v1/(tenants|internal|operator)/.*",status_class="5xx"}[5m]))
+            / sum(rate(platform_http_requests_total{service="commercial-billing",route=~"/api/v1/(tenants|internal|operator)/.*"}[5m]))
+      - record: commercial_billing:slo_availability:error_ratio_rate30m
+        expr: |
+          sum(rate(platform_http_requests_total{service="commercial-billing",route=~"/api/v1/(tenants|internal|operator)/.*",status_class="5xx"}[30m]))
+            / sum(rate(platform_http_requests_total{service="commercial-billing",route=~"/api/v1/(tenants|internal|operator)/.*"}[30m]))
+      - record: commercial_billing:slo_availability:error_ratio_rate1h
+        expr: |
+          sum(rate(platform_http_requests_total{service="commercial-billing",route=~"/api/v1/(tenants|internal|operator)/.*",status_class="5xx"}[1h]))
+            / sum(rate(platform_http_requests_total{service="commercial-billing",route=~"/api/v1/(tenants|internal|operator)/.*"}[1h]))
+      - record: commercial_billing:slo_availability:error_ratio_rate6h
+        expr: |
+          sum(rate(platform_http_requests_total{service="commercial-billing",route=~"/api/v1/(tenants|internal|operator)/.*",status_class="5xx"}[6h]))
+            / sum(rate(platform_http_requests_total{service="commercial-billing",route=~"/api/v1/(tenants|internal|operator)/.*"}[6h]))
+      - record: commercial_billing:slo_webhook_ack:good_ratio_rate1h
+        expr: |
+          sum(rate(platform_http_request_duration_seconds_bucket{service="commercial-billing",route="/api/v1/webhooks/:provider",le="2"}[1h]))
+            / sum(rate(platform_http_request_duration_seconds_count{service="commercial-billing",route="/api/v1/webhooks/:provider"}[1h]))
+      - record: commercial_billing:slo_webhook_processing:good_ratio_rate1h
+        expr: |
+          sum(rate(commercial_billing_webhook_processing_seconds_bucket{service="commercial-billing",le="10"}[1h]))
+            / sum(rate(commercial_billing_webhook_processing_seconds_count{service="commercial-billing"}[1h]))
+      - record: commercial_billing:slo_purchase_to_event:good_ratio_rate1h
+        expr: |
+          sum(rate(commercial_billing_purchase_confirmation_to_event_seconds_bucket{service="commercial-billing",kind=~"seats|token_addon",le="5"}[1h]))
+            / sum(rate(commercial_billing_purchase_confirmation_to_event_seconds_count{service="commercial-billing",kind=~"seats|token_addon"}[1h]))
+      - record: commercial_billing:slo_tenant_reads:good_ratio_rate1h
+        expr: |
+          sum(rate(platform_http_request_duration_seconds_bucket{service="commercial-billing",method="GET",route=~"/api/v1/tenants/:id/(subscription|invoices)",le="0.15"}[1h]))
+            / sum(rate(platform_http_request_duration_seconds_count{service="commercial-billing",method="GET",route=~"/api/v1/tenants/:id/(subscription|invoices)"}[1h]))
+
+  - name: commercial_billing.slo_alerts
+    rules:
+      - alert: BillingAvailabilityBudgetBurnFast
+        expr: |
+          commercial_billing:slo_availability:error_ratio_rate1h > (14.4 * 0.001)
+            and commercial_billing:slo_availability:error_ratio_rate5m > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: sev2
+          team: commercial
+          metric_status: proposed
+        annotations:
+          summary: Billing is burning its 99.9 % availability budget 14× too fast
+          description: '5xx ratio {{ $value | humanizePercentage }} over 1 h.'
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/slo-burn.md
+      - alert: BillingAvailabilityBudgetBurnSlow
+        expr: |
+          commercial_billing:slo_availability:error_ratio_rate6h > (6 * 0.001)
+            and commercial_billing:slo_availability:error_ratio_rate30m > (6 * 0.001)
+        for: 15m
+        labels:
+          severity: sev3
+          team: commercial
+          metric_status: proposed
+        annotations:
+          summary: Billing is burning its 99.9 % availability budget 6× too fast
+          description: '5xx ratio {{ $value | humanizePercentage }} over 6 h.'
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/slo-burn.md

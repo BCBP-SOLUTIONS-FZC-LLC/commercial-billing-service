@@ -254,6 +254,7 @@ func TestAlertsAndRunbooks(t *testing.T) {
 	if len(a) == 0 || !bytes.Equal(a, b) {
 		t.Fatal("deploy/helm/files/app-alerts.yml differs from deploy/monitoring/app-alerts.yml")
 	}
+	slo, _ := os.ReadFile("../../deploy/monitoring/slo-rules.yml")
 	var rules struct {
 		Groups []struct {
 			Rules []struct {
@@ -262,12 +263,26 @@ func TestAlertsAndRunbooks(t *testing.T) {
 			}
 		}
 	}
-	if err := yaml.Unmarshal(a, &rules); err != nil {
-		t.Fatal(err)
+	for _, doc := range [][]byte{a, slo} {
+		var part struct {
+			Groups []struct {
+				Rules []struct {
+					Alert       string
+					Annotations map[string]string
+				}
+			}
+		}
+		if err := yaml.Unmarshal(doc, &part); err != nil {
+			t.Fatal(err)
+		}
+		rules.Groups = append(rules.Groups, part.Groups...)
 	}
 	var names []string
 	for _, g := range rules.Groups {
 		for _, r := range g.Rules {
+			if r.Alert == "" { // recording rule
+				continue
+			}
 			names = append(names, r.Alert)
 			u := r.Annotations["runbook_url"]
 			i := strings.Index(u, "/blob/main/")
