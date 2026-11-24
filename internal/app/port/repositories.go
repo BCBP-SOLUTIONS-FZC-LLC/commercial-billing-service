@@ -33,6 +33,7 @@ type AccountRepo interface {
 	Get(ctx context.Context, tenantID string) (domain.BillingAccount, error)
 	// UpdateContact sets contact fields with optimistic locking on record_version.
 	UpdateContact(ctx context.Context, tenantID string, expectedVersion int64, name, email, company, country, taxID *string) (domain.BillingAccount, error)
+	SetDefaultPM(ctx context.Context, tenantID string, set bool) error
 }
 
 // SubscriptionRepo stores subscriptions, their seat item and history.
@@ -171,4 +172,15 @@ type ScheduleRepo interface {
 	Get(ctx context.Context, scheduleID string) (domain.SeatChangeSchedule, bool, error)
 	Update(ctx context.Context, s domain.SeatChangeSchedule) error
 	Due(ctx context.Context, until time.Time, limit int) ([]domain.SeatChangeSchedule, error)
+}
+
+// AddonRepo stores the token pack catalog and add-on purchases (§4.2.3, §4.2.12).
+type AddonRepo interface {
+	ActivePacks(ctx context.Context, currency, provider string, at time.Time) ([]domain.TokenPack, error)
+	Insert(ctx context.Context, p domain.QuotaAddonPurchase) error
+	Get(ctx context.Context, purchaseID string) (domain.QuotaAddonPurchase, bool, error)
+	ByProviderInvoice(ctx context.Context, tenantID, providerInvoiceID string) (domain.QuotaAddonPurchase, bool, error)
+	List(ctx context.Context, tenantID, afterID string, limit int) ([]domain.QuotaAddonPurchase, error)
+	Update(ctx context.Context, p domain.QuotaAddonPurchase) error
+	ConfirmedTokensSince(ctx context.Context, tenantID, packCode string, since time.Time) (int64, error)
 }

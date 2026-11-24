@@ -91,3 +91,12 @@ func (r *AccountRepository) UpdateContact(ctx context.Context, tenantID string, 
 	})
 	return a, err
 }
+
+// SetDefaultPM records whether the provider reports a default payment
+// method (no payment-method data is stored, BIL-PCI-2).
+func (r *AccountRepository) SetDefaultPM(ctx context.Context, tenantID string, set bool) error {
+	return inTx(ctx, r.pool, func(q querier) error {
+		_, err := q.Exec(ctx, `UPDATE billing_accounts SET default_pm_set = $2 WHERE tenant_id = $1::uuid`, tenantID, set)
+		return err
+	})
+}

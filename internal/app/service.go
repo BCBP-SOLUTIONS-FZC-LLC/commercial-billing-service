@@ -56,6 +56,8 @@ type Service struct {
 	SeatPurchases port.SeatPurchaseRepo
 	Schedules     port.ScheduleRepo
 	FollowUps     port.FollowUpRepo
+	Addons        port.AddonRepo
+	Entitlements  port.EntitlementsReader
 	Sagas         port.SagaRepo
 	Emissions     port.EmissionRepo
 	Providers     ProviderRegistry
@@ -66,6 +68,8 @@ type Service struct {
 	Settings      Settings
 	Now           func() time.Time
 	Log           port.Logger
+
+	quotas quotaCache
 }
 
 var (

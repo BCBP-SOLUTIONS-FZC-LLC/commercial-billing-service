@@ -117,7 +117,8 @@ func (s *Service) AuthorizeAndCharge(ctx context.Context, c Caller, r AuthorizeC
 	err = s.locked(ctx, tenantID, func(ctx context.Context) error {
 		if acct == nil {
 			a := domain.BillingAccount{TenantID: tenantID, Provider: prov.Name(), ProviderCustomerID: &custRef, Currency: currency,
-				IAMLifecycle: domain.LifecycleTrial, CompanyName: nonEmpty(r.CompanyName), Country: nonEmpty(r.Country)}
+				IAMLifecycle: domain.LifecycleTrial, CompanyName: nonEmpty(r.CompanyName), Country: nonEmpty(r.Country),
+				DefaultPMSet: true} // the signup card becomes the customer default (AttachDefaultPaymentMethod)
 			if r.BillingContact != nil {
 				a.BillingContactName, a.BillingContactEmail = nonEmpty(r.BillingContact.Name), nonEmpty(r.BillingContact.Email)
 			}

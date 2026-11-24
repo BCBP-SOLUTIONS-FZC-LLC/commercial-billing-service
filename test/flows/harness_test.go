@@ -72,6 +72,13 @@ func run(m *testing.M) int {
 		fmt.Fprintf(os.Stderr, "seed prices: %v\n", err)
 		return 1
 	}
+	if err := sql(ctx, `INSERT INTO token_packs (pack_code, tokens, currency, amount_minor, provider, provider_price_id, monthly_cap_tokens,
+		effective_from, created_by, reason) VALUES
+		('tokens_1m', 1000000, 'USD', 4900, 'stripe', 'price_tokens_1m', NULL, '2026-01-01', '00000000-0000-0000-0000-0000000000c1', 'test pack'),
+		('tokens_5m', 5000000, 'USD', 19900, 'stripe', 'price_tokens_5m', 20000000, '2026-01-01', '00000000-0000-0000-0000-0000000000c1', 'test pack')`); err != nil {
+		fmt.Fprintf(os.Stderr, "seed packs: %v\n", err)
+		return 1
+	}
 	return m.Run()
 }
 
@@ -240,6 +247,20 @@ func (p *fakeProvider) VoidInvoice(_ context.Context, ref port.InvoiceRef, key s
 	return p.record("VoidInvoice " + ref.ProviderInvoiceID + " " + key)
 }
 
+func (p *fakeProvider) ChargeOneOff(_ context.Context, in port.OneOffCharge, key string) (port.ChargeResult, error) {
+	_ = p.record(fmt.Sprintf("ChargeOneOff %s x%d %d %s", in.PriceRef, in.Quantity, in.Amount.AmountMinor, key))
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	res := port.ChargeResult{Invoice: port.InvoiceRef{ProviderInvoiceID: "in_" + key}, Outcome: port.PaymentOutcome{Status: port.PaymentPaid}}
+	if len(p.change) > 0 {
+		a := p.change[0]
+		p.change = p.change[1:]
+		res.Outcome = a.outcome
+		return res, a.err
+	}
+	return res, nil
+}
+
 func (p *fakeProvider) called(prefix string) []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -300,7 +321,22 @@ func (r *fakeRP) RevertConversion(context.Context, string, string, string) domai
 }
 func (r *fakeRP) Realm(context.Context, string) (port.RealmView, error) { return port.RealmView{}, nil }
 
+type fakeEnt struct {
+	limit *int64
+	elig  string
+	err   error
+	calls int
+}
+
+func (f *fakeEnt) TokenQuota(context.Context, string) (port.TokenQuota, error) {
+	f.calls++
+	return port.TokenQuota{MonthlyLimit: f.limit, Eligibility: f.elig}, f.err
+}
+
+func ptrTo[T any](v T) *T { return &v }
+
 type env struct {
+	ent    *fakeEnt
 	svc    *app.Service
 	stripe *fakeProvider
 	core   *fakeCore
@@ -318,7 +354,7 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{stripe: &fakeProvider{name: "stripe"}, core: &fakeCore{}, rp: &fakeRP{}, now: time.Now().UTC().Truncate(time.Microsecond)}
+	e := &env{stripe: &fakeProvider{name: "stripe"}, core: &fakeCore{}, rp: &fakeRP{}, ent: &fakeEnt{limit: ptrTo(int64(5_000_000))}, now: time.Now().UTC().Truncate(time.Microsecond)}
 	manual := manualadapter.New()
 	e.svc = &app.Service{
 		Tx: pgadapter.NewTxRunner(appPool), Lock: pgadapter.TenantLocker{},
@@ -326,8 +362,8 @@ func newEnv(t *testing.T) *env {
 		Prices: pgadapter.NewPriceRepository(appPool), Checkouts: pgadapter.NewCheckoutRepository(appPool), Invoices: pgadapter.NewInvoiceRepository(appPool),
 		Changes: pgadapter.NewPlanChangeRepository(appPool, systemPool), Previews: pgadapter.NewPreviewRepository(appPool),
 		SeatPurchases: pgadapter.NewSeatPurchaseRepository(appPool), Schedules: pgadapter.NewScheduleRepository(appPool, systemPool),
-		FollowUps: pgadapter.NewFollowUpRepository(systemPool),
-		Sagas:     pgadapter.NewSagaRepository(appPool, systemPool), Emissions: pgadapter.NewEmissionRepository(appPool, systemPool),
+		FollowUps: pgadapter.NewFollowUpRepository(systemPool), Addons: pgadapter.NewAddonRepository(appPool), Entitlements: e.ent,
+		Sagas: pgadapter.NewSagaRepository(appPool, systemPool), Emissions: pgadapter.NewEmissionRepository(appPool, systemPool),
 		Providers: registry{"stripe": e.stripe, "manual": manual}, Core: e.core, RP: e.rp,
 		Events: pgadapter.NewEventEnqueuer(eventbus.Source, eventbus.SpecVersion, schemas.Validate), Audit: pgadapter.NewAuditWriter(enq),
 		Settings: app.Settings{DefaultCurrency: "USD", NewAccountProvider: "stripe", CheckoutTTL: time.Hour, TenantAppBaseURL: "https://app.example",
@@ -384,7 +420,7 @@ func itoa(n int64) string { return fmt.Sprint(n) }
 // paidChain is the server's invoice.paid handler chain.
 func paidChain(svc *app.Service) port.PaymentEventHandler {
 	return app.FirstInvoicePaid{S: svc, Next: app.UpgradeInvoicePaid{S: svc, Next: app.SeatInvoicePaid{S: svc,
-		Next: app.DowngradeOnCycle{S: svc, Next: app.CycleInvoicePaid{S: svc}}}}}
+		Next: app.AddonInvoicePaid{S: svc, Next: app.DowngradeOnCycle{S: svc, Next: app.CycleInvoicePaid{S: svc}}}}}}
 }
 
 // invoiceState is a re-read invoice for subscription sub.
@@ -405,3 +441,12 @@ func events(t *testing.T, tenant string) []string {
 }
 
 func errActionRequired() error { return port.ErrActionRequired{ClientSecret: "pi_s"} }
+
+var errNoPM = errors.New("stripe: no default payment method")
+
+func mustNoErr(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}

@@ -56,3 +56,35 @@ type SeatChangeSchedule struct {
 	RecordVersion         int64
 	CreatedAt, UpdatedAt  time.Time
 }
+
+// TokenPack is a token_packs row (§4.2.3).
+type TokenPack struct {
+	PackCode         string
+	Tokens           int64
+	Currency         string
+	AmountMinor      int64
+	Provider         string
+	ProviderPriceID  *string
+	MonthlyCapTokens *int64
+	Active           bool
+	EffectiveFrom    time.Time
+}
+
+// QuotaAddonPurchase is §4.2.12.
+type QuotaAddonPurchase struct {
+	PurchaseID        string
+	TenantID          string
+	PackCode          string
+	PackQuantity      int
+	TokensTotal       int64
+	AmountMinor       int64
+	Currency          string
+	Status            PurchaseStatus
+	ProviderInvoiceID *string
+	ClientAction      []byte
+	RequestedBy       string
+	IdempotencyKey    string
+	ConfirmedAt       *time.Time
+	EventID           *string
+	CreatedAt         time.Time
+}
