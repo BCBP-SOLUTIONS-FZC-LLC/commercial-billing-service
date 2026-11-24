@@ -14,7 +14,7 @@ import (
 // IssueAdjustment is B-O2: a customer balance credit (reduces the next
 // invoice) or debit (adds to it); AL-5 billing.adjustment.issued.
 func (s *Service) IssueAdjustment(ctx context.Context, c Caller, tenantID string, r AdjustmentRequest) (AdjustmentResult, error) {
-	ctx, end := StartSpan(ctx, "billing.adjustment.issue", AttrTenant.String(tenantID))
+	ctx, end := StartSpan(ctx, "billing.adjustment.issue", AttrTenant(tenantID))
 	out, err := s.issueAdjustment(ctx, c, tenantID, r)
 	end(err)
 	return out, err
@@ -85,7 +85,7 @@ func keyOr(c Caller, prefix string) string {
 
 // IssueRefund is B-O3 (§8.11).
 func (s *Service) IssueRefund(ctx context.Context, c Caller, tenantID string, r RefundRequest) (RefundResult, error) {
-	ctx, end := StartSpan(ctx, "billing.refund.issue", AttrTenant.String(tenantID))
+	ctx, end := StartSpan(ctx, "billing.refund.issue", AttrTenant(tenantID))
 	out, err := s.issueRefund(ctx, c, tenantID, r)
 	end(err)
 	return out, err

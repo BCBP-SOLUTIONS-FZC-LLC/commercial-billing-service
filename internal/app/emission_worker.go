@@ -57,7 +57,7 @@ func (w *EmissionWorker) RunOnce(ctx context.Context) (int, error) {
 }
 
 func (w *EmissionWorker) emit(ctx context.Context, e domain.ScheduledEmission) (err error) {
-	ctx, end := StartSpan(ctx, "billing.emission "+e.PayloadBuilder, AttrTenant.String(e.TenantID), AttrSubscription.String(e.RefID))
+	ctx, end := StartSpan(ctx, "billing.emission "+e.PayloadBuilder, AttrTenant(e.TenantID), AttrSubscription(e.RefID))
 	defer func() { end(err) }()
 	reason, ok := domain.SeatsReasonFor(e.PayloadBuilder)
 	if !ok || e.EventType != domain.EventTenantSeatsChanged {

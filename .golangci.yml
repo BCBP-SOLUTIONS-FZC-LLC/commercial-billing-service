@@ -8,6 +8,7 @@ linters:
   default: standard
   enable:
     - bodyclose
+    - depguard
     - exhaustive
     - forbidigo
     - nilerr
@@ -17,6 +18,30 @@ linters:
     - unparam
 
   settings:
+    # LLD §11: every log, metric and span goes through platform-gincommon.
+    # Only the two observability adapters may name the underlying types
+    # (gincommon has no helper yet for span attributes and links, the span
+    # id, the Prometheus AlreadyRegistered case or the Pushgateway); they
+    # take the tracer, registry and logger from gincommon.
+    depguard:
+      rules:
+        observability:
+          files:
+            - "$all"
+            - "!$test"
+            - "!**/internal/adapters/observability/**"
+            - "!**/internal/adapters/metrics/**"
+          deny:
+            - pkg: "go.opentelemetry.io"
+              desc: "spans go through port.Tracer / gincommon (adapters/observability)"
+            - pkg: "github.com/prometheus"
+              desc: "metrics go through port.Metrics / gincommon (adapters/metrics)"
+            - pkg: "log$"
+              desc: "logs go through gincommon's logger (port.Logger)"
+            - pkg: "log/slog"
+              desc: "logs go through gincommon's logger (port.Logger)"
+            - pkg: "go.uber.org/zap"
+              desc: "logs go through gincommon's logger (port.Logger)"
     # A default branch is an explicit choice for the rest of an enum (as with
     # provider enums Billing does not mirror).
     exhaustive:

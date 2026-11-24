@@ -17,7 +17,7 @@ const webhookUA = "commercial-billing/webhook"
 // CancelSubscription is B-P12: cancel at period end. No event now:
 // TenantSubscriptionCancelled is emitted when the provider ends it (§8.8.2).
 func (s *Service) CancelSubscription(ctx context.Context, c Caller, tenantID string, r CancelRequest) (SubscriptionView, error) {
-	ctx, end := StartSpan(ctx, "billing.subscription.cancel", AttrTenant.String(tenantID))
+	ctx, end := StartSpan(ctx, "billing.subscription.cancel", AttrTenant(tenantID))
 	out, err := s.cancelSubscription(ctx, c, tenantID, r)
 	end(err)
 	return out, err
@@ -372,7 +372,7 @@ func (h CycleInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain
 // for a new provider subscription on the same billing_subscription_id
 // (cancelled).
 func (s *Service) Reactivate(ctx context.Context, c Caller, tenantID string, r ReactivateRequest) (ReactivationResult, error) {
-	ctx, end := StartSpan(ctx, "billing.subscription.reactivate", AttrTenant.String(tenantID))
+	ctx, end := StartSpan(ctx, "billing.subscription.reactivate", AttrTenant(tenantID))
 	out, err := s.reactivate(ctx, c, tenantID, r)
 	end(err)
 	return out, err

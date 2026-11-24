@@ -41,7 +41,7 @@ func (h *Handler) Register(r gin.IRouter) { r.POST(Route, h.receive) }
 
 func (h *Handler) receive(c *gin.Context) {
 	name := c.Param("provider")
-	ctx, end := app.StartSpan(c.Request.Context(), "billing.webhook.receive", app.AttrProvider.String(name))
+	ctx, end := app.StartSpan(c.Request.Context(), "billing.webhook.receive", app.AttrProvider(name))
 	defer end(nil)
 	c.Request = c.Request.WithContext(ctx)
 	provider, ok := h.Providers.Loaded(name)
@@ -76,7 +76,7 @@ func (h *Handler) receive(c *gin.Context) {
 		problem(c, http.StatusBadRequest, domain.ErrInvalidSignature, "invalid webhook signature")
 		return
 	}
-	insertCtx, endInsert := app.StartSpan(ctx, "billing.ledger.insert", app.AttrEventID.String(ev.ProviderEventID))
+	insertCtx, endInsert := app.StartSpan(ctx, "billing.ledger.insert", app.AttrEventID(ev.ProviderEventID))
 	err = h.store(insertCtx, ev)
 	endInsert(err)
 	if err != nil {

@@ -6,10 +6,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/expfmt"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/metrics"
@@ -18,20 +18,36 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/logger"
 )
 
-// scrape registers every §11.2 metric, records one sample of each and
-// returns the text exposition.
+var (
+	once    sync.Once
+	shared  *metrics.Metrics
+	initErr error
+)
+
+// registered registers Billing's metrics on gincommon's registry once per
+// test binary, as the server does.
+func registered(t *testing.T) *metrics.Metrics {
+	t.Helper()
+	once.Do(func() {
+		log, err := logger.NewLogger("dev")
+		if err != nil {
+			initErr = err
+			return
+		}
+		_ = gincommon.ObservabilityMiddlewares(gincommon.Config{Logger: log, ServiceName: "commercial-billing", Domain: "commercial", Environment: "test", BuildVersion: "test"})
+		shared, initErr = metrics.New(gincommon.MetricsRegisterer())
+	})
+	if initErr != nil {
+		t.Fatal(initErr)
+	}
+	return shared
+}
+
+// scrape records one sample of every §11.2 metric and returns gincommon's
+// exposition (Billing keeps no registry of its own).
 func scrape(t *testing.T) string {
 	t.Helper()
-	log, err := logger.NewLogger("dev")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = gincommon.ObservabilityMiddlewares(gincommon.Config{Logger: log, ServiceName: "commercial-billing", Domain: "commercial", Environment: "test", BuildVersion: "test"})
-	reg := prometheus.NewRegistry()
-	m, err := metrics.New(reg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	m := registered(t)
 	m.PurchaseToEvent(port.PurchaseKindSeats, time.Second)
 	m.SagaConfirmed("trial_conversion", time.Minute)
 	m.RPConvertAttempt("ok")
@@ -53,10 +69,11 @@ func scrape(t *testing.T) string {
 	m.EventEmitted("TenantSeatsChanged")
 	m.OperatorAction("B-O3", "success")
 	m.ProviderCertified("stripe", "1.0.0+2025-10-29", true)
+	m.Dependency("stripe", "subscriptions.update", "success", time.Second)
 	m.SetSnapshot(port.MetricsSnapshot{WebhookBacklog: map[string]int{"received": 1}, SagasInFlight: map[string]int{"rp_convert_pending": 1},
 		SagasOverdue: 1, Subscriptions: map[[3]string]int{{"active", "pro", "stripe"}: 2}, CollectionPaused: map[string]int{"operator": 1},
 		InvoicesHeld: map[string]int{"USD": 1}, EmissionsPending: map[string]int{"seats_resync": 1}})
-	fams, err := reg.Gather()
+	fams, err := gincommon.MetricsGatherer().Gather()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,6 +136,9 @@ func TestScrapePassesMetricsLint(t *testing.T) {
 // label-vocabulary findings were resolved in rev 0.38 (result, saga_state).
 // Remove an entry when it is resolved; the test then guards it.
 var knownFindings = []string{
+	// Platform-owned registry entries gincommon registers, still "proposed".
+	"[status] platform_build_info:",
+	"[status] platform_dependency_request_seconds:",
 	"[namespace] commercial_cross_tenant_job_runs_total:",
 	"[namespace] commercial_events_emitted_total:",
 	"[namespace] commercial_operator_actions_total:",

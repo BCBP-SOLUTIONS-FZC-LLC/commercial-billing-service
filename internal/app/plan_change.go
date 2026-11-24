@@ -136,7 +136,7 @@ func blockerCodes(c port.PlanChangeCheck) []string {
 
 // ChangePlan is B-P4 (§8.4).
 func (s *Service) ChangePlan(ctx context.Context, c Caller, tenantID string, r PlanChangeRequest) (PlanChangeResult, error) {
-	ctx, end := StartSpan(ctx, "billing.plan.change", AttrTenant.String(tenantID))
+	ctx, end := StartSpan(ctx, "billing.plan.change", AttrTenant(tenantID))
 	out, err := s.changePlan(ctx, c, tenantID, r)
 	end(err)
 	return out, err

@@ -7,8 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"go.opentelemetry.io/otel/attribute"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 )
@@ -79,7 +77,7 @@ func (s *Service) subscriptionView(ctx context.Context, c Caller, sub domain.Sub
 
 // StartCheckout is B-P2 (§8.1.1).
 func (s *Service) StartCheckout(ctx context.Context, c Caller, tenantID string, r CheckoutRequest) (CheckoutResult, error) {
-	ctx, end := StartSpan(ctx, "billing.checkout.start", AttrTenant.String(tenantID))
+	ctx, end := StartSpan(ctx, "billing.checkout.start", AttrTenant(tenantID))
 	out, err := s.startCheckout(ctx, c, tenantID, r)
 	end(err)
 	return out, err
@@ -473,7 +471,7 @@ func (s *Service) RunSagas(ctx context.Context, limit int) (int, error) {
 }
 
 func (s *Service) runSaga(ctx context.Context, ref port.SagaRef) error {
-	ctx, end := StartSpan(ctx, "billing.saga.step", AttrTenant.String(ref.TenantID), attribute.String("billing.saga_id", ref.SagaID))
+	ctx, end := StartSpan(ctx, "billing.saga.step", AttrTenant(ref.TenantID), AttrSagaID(ref.SagaID))
 	err := s.runSagaStep(ctx, ref)
 	end(err)
 	return err
@@ -547,7 +545,7 @@ func (s *Service) runSagaStep(ctx context.Context, ref port.SagaRef) error {
 // ConfirmConversion is the saga side of TenantConverted: in the event's
 // transaction under the tenant lock; exempt from the recency skip.
 func (s *Service) ConfirmConversion(ctx context.Context, ev TenantLifecycleEvent) (bool, error) {
-	ctx, end := StartSpan(ctx, "billing.saga.confirm", AttrTenant.String(ev.TenantID))
+	ctx, end := StartSpan(ctx, "billing.saga.confirm", AttrTenant(ev.TenantID))
 	out, err := s.confirmConversion(ctx, ev)
 	end(err)
 	return out, err

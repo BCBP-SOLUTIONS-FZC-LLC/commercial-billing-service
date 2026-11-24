@@ -3,14 +3,8 @@ package main
 import (
 	"context"
 	"errors"
-	"io"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app"
 )
@@ -81,28 +75,4 @@ func TestRunJobExitStatus(t *testing.T) {
 		t.Fatalf("processed-events-prune: want %d, got %d", exitFailed, got)
 	}
 	_ = app.JobResult{}
-}
-
-// pushRun PUTs the run's metrics to /metrics/job/<cronjob name>.
-func TestPushRun(t *testing.T) {
-	var path, body string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		path, body = r.Method+" "+r.URL.Path, string(b)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	reg := prometheus.NewRegistry()
-	c := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "commercial_cross_tenant_job_runs_total", Help: "h"}, []string{"job", "outcome"})
-	reg.MustRegister(c)
-	c.WithLabelValues("seat-renewal", "success").Inc()
-	if err := pushRun(srv.URL, "seat-renewal", reg); err != nil {
-		t.Fatal(err)
-	}
-	if path != "PUT /metrics/job/seat-renewal" || !strings.Contains(body, "commercial_cross_tenant_job_runs_total") {
-		t.Fatalf("%s %q", path, body)
-	}
-	if err := pushRun("", "seat-renewal", reg); err != nil {
-		t.Fatal("empty URL must be a no-op")
-	}
 }

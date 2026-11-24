@@ -26,8 +26,11 @@ import (
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/api"
 	httpadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/http"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/httpx"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/metrics"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/observability"
 	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/bootstrap"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/config"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
@@ -117,6 +120,9 @@ func run() int {
 		log.Error("init billing metrics", map[string]any{"error": err.Error()})
 		return 1
 	}
+	// Spans and outbound-call metrics through gincommon (§11.2, §11.3).
+	app.SetTracer(observability.NewTracer(ginCfg.ServiceName))
+	httpx.SetObserver(billingMetrics.Dependency)
 
 	// Schema: in Kubernetes the migrate hook Job owns migrations and replicas
 	// run with RUN_MIGRATIONS=false (§12, §19.1); local runs may migrate here.

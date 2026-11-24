@@ -11,17 +11,14 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"slices"
 	"sort"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/push"
-	dto "github.com/prometheus/client_model/go"
-
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/httpx"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/metrics"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/observability"
 	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
@@ -130,8 +127,11 @@ func execute(name string) int {
 		defer shutdownTracing()
 	}
 	_ = gincommon.ObservabilityMiddlewares(ginCfg)
-	reg := prometheus.NewRegistry()
-	jobMetrics, err := metrics.New(reg)
+	// Billing's metrics on gincommon's registry; the run's commercial_*
+	// families are pushed from it after the run (metrics.PushRun).
+	jobMetrics, err := metrics.New(gincommon.MetricsRegisterer())
+	app.SetTracer(observability.NewTracer(cfg.AppName))
+	httpx.SetObserver(jobMetrics.Dependency)
 	if err != nil {
 		log.Error("init job metrics", map[string]any{"error": err.Error()})
 		return exitFailed
@@ -149,36 +149,10 @@ func execute(name string) int {
 	defer closeAll()
 	code, outcome := runJob(ctx, name, d, log)
 	jobMetrics.CrossTenantJobRun(name, outcome)
-	if err := pushRun(cfg.PushgatewayURL, name, reg); err != nil {
+	if err := metrics.PushRun(cfg.PushgatewayURL, name); err != nil {
 		log.Warn("job metrics not pushed", map[string]any{"job": name, "error": err.Error()})
 	}
 	return code
-}
-
-// pushRun replaces this CronJob's group on the Pushgateway with the run's
-// metrics. The Pushgateway reserves the job label for the grouping key, so
-// the group is job=<cronjob name> and the metrics' own job label (the same
-// value) is dropped; scraped with honor_labels the series keep
-// {job, outcome} (§13.2). push_time_seconds marks the last run. Empty url →
-// logged only (rev 0.37).
-func pushRun(url, name string, g prometheus.Gatherer) error {
-	if url == "" {
-		return nil
-	}
-	return push.New(url, name).Gatherer(withoutJobLabel{g}).Push()
-}
-
-// withoutJobLabel drops the job label from gathered metrics.
-type withoutJobLabel struct{ next prometheus.Gatherer }
-
-func (w withoutJobLabel) Gather() ([]*dto.MetricFamily, error) {
-	fams, err := w.next.Gather()
-	for _, f := range fams {
-		for _, m := range f.Metric {
-			m.Label = slices.DeleteFunc(m.Label, func(l *dto.LabelPair) bool { return l.GetName() == "job" })
-		}
-	}
-	return fams, err
 }
 
 // runJob runs one job and logs its outcome with the

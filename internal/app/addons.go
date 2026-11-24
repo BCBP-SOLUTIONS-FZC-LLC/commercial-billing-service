@@ -148,7 +148,7 @@ func (s *Service) confirmedThisMonth(ctx context.Context, tenantID, pack string)
 
 // PurchaseTokenAddon is B-P20 (§8.7).
 func (s *Service) PurchaseTokenAddon(ctx context.Context, c Caller, tenantID string, r AddonPurchaseRequest) (PurchaseView, error) {
-	ctx, end := StartSpan(ctx, "billing.addon.purchase", AttrTenant.String(tenantID))
+	ctx, end := StartSpan(ctx, "billing.addon.purchase", AttrTenant(tenantID))
 	out, err := s.purchaseTokenAddon(ctx, c, tenantID, r)
 	end(err)
 	return out, err

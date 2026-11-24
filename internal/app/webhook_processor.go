@@ -8,8 +8,6 @@ import (
 	"errors"
 	"time"
 
-	"go.opentelemetry.io/otel/attribute"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 )
@@ -78,9 +76,9 @@ func (p *WebhookProcessor) Run(ctx context.Context, interval time.Duration) {
 }
 
 func (p *WebhookProcessor) processOne(ctx context.Context, row domain.LedgerEntry) {
-	attrs := []attribute.KeyValue{AttrProvider.String(row.Provider), AttrEventID.String(row.ProviderEventID)}
+	attrs := []port.Attr{AttrProvider(row.Provider), AttrEventID(row.ProviderEventID)}
 	if row.TenantID != nil {
-		attrs = append(attrs, AttrTenant.String(*row.TenantID))
+		attrs = append(attrs, AttrTenant(*row.TenantID))
 	}
 	ctx, end := StartSpan(ctx, "billing.webhook.process "+row.NormalisedKind, attrs...)
 	defer end(nil)

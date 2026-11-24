@@ -1,6 +1,10 @@
 // Package metrics registers Billing's Tier 2 (commercial_*) and Tier 3
 // (commercial_billing_*) metrics with the exact names and labels of LLD
-// §11.2 and implements port.Metrics.
+// §11.2 and implements port.Metrics. Every collector is registered on
+// platform-gincommon's registry (gincommon.MetricsRegisterer) and every
+// scrape and push reads gincommon.MetricsGatherer: Billing keeps no
+// registry of its own. With adapters/observability this is the only
+// package allowed to name Prometheus types (depguard).
 //
 // Tier 3 metrics are built with gincommon's validated constructors. The
 // Tier 2 commercial_* names are "proposed" in the Platform Observability
@@ -52,6 +56,7 @@ const (
 	InvoiceDispositionsTotal  = "commercial_billing_invoice_dispositions_total"
 	ScheduledEmissionsPending = "commercial_billing_scheduled_emissions_pending"
 	ProviderCertified         = "commercial_billing_provider_certified"
+	DependencyRequestSeconds  = "platform_dependency_request_seconds"
 )
 
 // Buckets: purchase → event targets 60 s (§11.1); webhook processing < 10 s
@@ -73,6 +78,7 @@ type Metrics struct {
 	backlog, inFlight, subscriptions, findings, paused, held, pending *prometheus.GaugeVec
 	certified                                                         *prometheus.GaugeVec
 	overdue                                                           prometheus.Gauge
+	dependency                                                        *prometheus.HistogramVec // shared platform_dependency_request_seconds
 }
 
 var _ port.Metrics = (*Metrics)(nil)
@@ -141,10 +147,26 @@ func New(reg prometheus.Registerer) (*Metrics, error) {
 	errs = append(errs, err)
 	m.overdue, err = gincommon.NewGauge(reg, SagasOverdue, "Sagas not confirmed 30 minutes after payment (alert source).")
 	errs = append(errs, err)
+	// Tier 1 shared histogram: platform-events registers the same registry
+	// entry for SNS/SQS calls; reuse its collector when it is already there.
+	if h, err := gincommon.NewSharedHistogramVec(reg, DependencyRequestSeconds); err == nil {
+		m.dependency = h
+	} else if are := (prometheus.AlreadyRegisteredError{}); errors.As(err, &are) {
+		m.dependency, _ = are.ExistingCollector.(*prometheus.HistogramVec)
+	} else {
+		errs = append(errs, err)
+	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
 	return m, nil
+}
+
+// Dependency records one outbound call (httpx.SetObserver).
+func (m *Metrics) Dependency(dependency, operation, outcome string, d time.Duration) {
+	if m.dependency != nil {
+		m.dependency.WithLabelValues(dependency, operation, outcome).Observe(seconds(d))
+	}
 }
 
 // PurchaseToEvent implements port.Metrics.

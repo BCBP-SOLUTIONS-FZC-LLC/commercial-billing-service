@@ -4,8 +4,6 @@ import (
 	"context"
 	"maps"
 
-	"go.opentelemetry.io/otel/trace"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 )
 
@@ -17,17 +15,17 @@ type ctxLogger struct {
 	fields map[string]any
 }
 
-// LoggerFor returns log with ctx's trace and span ids added; a nil log
-// discards.
+// LoggerFor returns log with ctx's correlation fields (trace_id, span_id
+// from the gincommon tracer) added; a nil log discards.
 func LoggerFor(ctx context.Context, log port.Logger) port.Logger {
 	if log == nil {
 		return nopLogger{}
 	}
-	sc := trace.SpanContextFromContext(ctx)
-	if !sc.IsValid() {
+	f := Tracer().LogFields(ctx)
+	if len(f) == 0 {
 		return log
 	}
-	return ctxLogger{next: log, fields: map[string]any{"trace_id": sc.TraceID().String(), "span_id": sc.SpanID().String()}}
+	return ctxLogger{next: log, fields: f}
 }
 
 func (l ctxLogger) with(f map[string]any) map[string]any {

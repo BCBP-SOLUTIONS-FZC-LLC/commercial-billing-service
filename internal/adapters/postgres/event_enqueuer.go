@@ -6,12 +6,11 @@ import (
 	"fmt"
 	"time"
 
-	"go.opentelemetry.io/otel/trace"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events/v2/pkg/events"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events/v2/pkg/outbox"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
 )
 
 // systemIP is the envelope ip_address for work no caller drove (§7.3.1).
@@ -72,8 +71,8 @@ func (e *EventEnqueuer) Enqueue(ctx context.Context, p domain.EventPayload, meta
 	if meta.CorrelationID != "" {
 		opts = append(opts, events.WithCorrelationID(meta.CorrelationID))
 	}
-	if sc := trace.SpanContextFromContext(ctx); sc.HasTraceID() {
-		opts = append(opts, events.WithTraceID(sc.TraceID().String()))
+	if tid := gincommon.SpanTraceID(ctx); tid != "" {
+		opts = append(opts, events.WithTraceID(tid))
 	}
 	env := events.NewEnvelope(typ, e.source, json.RawMessage(data), opts...)
 	env.Timestamp = at

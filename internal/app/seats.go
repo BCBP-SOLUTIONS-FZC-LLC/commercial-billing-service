@@ -94,7 +94,7 @@ func (s *Service) PreviewSeats(ctx context.Context, _ Caller, tenantID string, r
 
 // PurchaseSeats is B-P7 (§8.5 step 2–4).
 func (s *Service) PurchaseSeats(ctx context.Context, c Caller, tenantID string, r SeatPurchaseRequest) (PurchaseView, error) {
-	ctx, end := StartSpan(ctx, "billing.seats.purchase", AttrTenant.String(tenantID))
+	ctx, end := StartSpan(ctx, "billing.seats.purchase", AttrTenant(tenantID))
 	out, err := s.purchaseSeats(ctx, c, tenantID, r)
 	end(err)
 	return out, err
@@ -346,7 +346,7 @@ const reductionNote = "Renewal bills the greater of %d and the seats in use at r
 
 // ScheduleReduction is B-P10: no provider call and no event (BIL-SEAT-4).
 func (s *Service) ScheduleReduction(ctx context.Context, c Caller, tenantID string, r ReductionRequest) (ScheduleView, error) {
-	ctx, end := StartSpan(ctx, "billing.seats.schedule_reduction", AttrTenant.String(tenantID))
+	ctx, end := StartSpan(ctx, "billing.seats.schedule_reduction", AttrTenant(tenantID))
 	out, err := s.scheduleReduction(ctx, c, tenantID, r)
 	end(err)
 	return out, err

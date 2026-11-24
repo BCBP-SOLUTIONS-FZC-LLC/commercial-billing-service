@@ -1,24 +1,31 @@
 // Package httpx builds the outbound HTTP client every service client uses
-// (LLD §3, §11.3): otelhttp transport (trace propagation and client spans),
-// platform_dependency_request_seconds{dependency, operation, outcome}
-// (§11.2 Tier 1) and the per-dependency timeout from §12.
+// (LLD §3, §11.3): a client span per call on gincommon's tracer, W3C trace
+// context injected with gincommon.InjectTraceContext, the call's duration
+// reported to Observe (platform_dependency_request_seconds, registered by
+// adapters/metrics on gincommon's registry), and the per-dependency timeout
+// from §12. No OpenTelemetry or Prometheus types here.
 package httpx
 
 import (
-	"errors"
 	"net/http"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
 )
 
-// DependencyMetric is the platform registry histogram name.
-const DependencyMetric = "platform_dependency_request_seconds"
+// Observer records one dependency call (dependency, operation, outcome:
+// success | failure | error).
+type Observer func(dependency, operation, outcome string, d time.Duration)
+
+var observer atomic.Pointer[Observer]
+
+// SetObserver installs the dependency metric (adapters/metrics), once at startup.
+func SetObserver(o Observer) { observer.Store(&o) }
+
+// tracerScope names the client spans' instrumentation scope.
+const tracerScope = "commercial-billing/httpx"
 
 // New returns a client with the dependency's timeout. name labels spans and
 // the dependency metric (stripe, core, realm_provisioner, entitlements).
@@ -26,56 +33,44 @@ func New(name string, timeout time.Duration) *http.Client {
 	base := http.DefaultTransport.(*http.Transport).Clone()
 	base.MaxIdleConnsPerHost = 16
 	base.IdleConnTimeout = 90 * time.Second
-	return &http.Client{
-		Timeout: timeout,
-		Transport: otelhttp.NewTransport(timed{name: name, next: base}, otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
-			return name + " " + Operation(r.Method, r.URL.Path)
-		})),
-	}
+	return &http.Client{Timeout: timeout, Transport: instrumented{name: name, next: base}}
 }
 
-// timed records the call's wall time by outcome.
-type timed struct {
+// instrumented traces, propagates and times each call.
+type instrumented struct {
 	name string
 	next http.RoundTripper
 }
 
-func (t timed) RoundTrip(r *http.Request) (*http.Response, error) {
+func (t instrumented) RoundTrip(r *http.Request) (*http.Response, error) {
+	op := Operation(r.Method, r.URL.Path)
+	// Looked up per call, so it is always the provider gincommon installed.
+	ctx, end := gincommon.NewSpanTracer(tracerScope).StartSpan(r.Context(), t.name+" "+op)
+	defer end()
+	r = r.Clone(ctx)
+	gincommon.InjectTraceContext(ctx, r.Header)
 	start := time.Now()
 	resp, err := t.next.RoundTrip(r)
 	outcome := "success"
 	switch {
-	case err != nil || resp.StatusCode >= 500:
+	case err != nil:
 		outcome = "error"
+		gincommon.RecordSpanError(ctx, err, "dependency call failed")
+	case resp.StatusCode >= 500:
+		outcome = "error"
+		gincommon.RecordSpanError(ctx, errStatus(resp.StatusCode), "dependency answered 5xx")
 	case resp.StatusCode >= 400:
 		outcome = "failure"
 	}
-	if h := dependencyHistogram(); h != nil {
-		h.WithLabelValues(t.name, Operation(r.Method, r.URL.Path), outcome).Observe(time.Since(start).Seconds())
+	if o := observer.Load(); o != nil {
+		(*o)(t.name, op, outcome, time.Since(start))
 	}
 	return resp, err
 }
 
-var (
-	histOnce sync.Once
-	hist     *prometheus.HistogramVec
-)
+type errStatus int
 
-// dependencyHistogram registers (or reuses, when platform-events already
-// did) the shared histogram once gincommon's metrics are initialised.
-func dependencyHistogram() *prometheus.HistogramVec {
-	histOnce.Do(func() {
-		h, err := gincommon.NewSharedHistogramVec(nil, DependencyMetric)
-		var are prometheus.AlreadyRegisteredError
-		switch {
-		case err == nil:
-			hist = h
-		case errors.As(err, &are):
-			hist, _ = are.ExistingCollector.(*prometheus.HistogramVec)
-		}
-	})
-	return hist
-}
+func (e errStatus) Error() string { return http.StatusText(int(e)) }
 
 // Operation is a bounded label for a call: the method and the path with
 // identifiers removed, as dotted segments (POST /v1/subscriptions/sub_1 →

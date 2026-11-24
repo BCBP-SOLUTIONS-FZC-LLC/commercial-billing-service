@@ -34,7 +34,7 @@ func declineReason(code string) string {
 // with the client secret, and the BFF's retry with the same key re-reads
 // the payment; declined → provider subscription cancelled, ended.
 func (s *Service) AuthorizeAndCharge(ctx context.Context, c Caller, r AuthorizeChargeRequest) (ChargeResult, error) {
-	ctx, end := StartSpan(ctx, "billing.signup.charge", AttrTenant.String(r.TenantID))
+	ctx, end := StartSpan(ctx, "billing.signup.charge", AttrTenant(r.TenantID))
 	out, err := s.authorizeAndCharge(ctx, c, r)
 	end(err)
 	return out, err
