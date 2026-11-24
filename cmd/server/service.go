@@ -28,7 +28,7 @@ func buildService(cfg config.Config, reg *provider.Registry, appPool, sysPool *p
 		Prices: pgadapter.NewPriceRepository(appPool), Checkouts: pgadapter.NewCheckoutRepository(appPool), Invoices: pgadapter.NewInvoiceRepository(appPool),
 		Changes: pgadapter.NewPlanChangeRepository(appPool, sysPool), Previews: pgadapter.NewPreviewRepository(appPool),
 		SeatPurchases: pgadapter.NewSeatPurchaseRepository(appPool), Schedules: pgadapter.NewScheduleRepository(appPool, sysPool),
-		FollowUps: pgadapter.NewFollowUpRepository(sysPool), Addons: pgadapter.NewAddonRepository(appPool),
+		FollowUps: pgadapter.NewFollowUpRepository(sysPool), Addons: pgadapter.NewAddonRepository(appPool), Money: pgadapter.NewMoneyRepository(appPool),
 		Sagas: pgadapter.NewSagaRepository(appPool, sysPool), Emissions: pgadapter.NewEmissionRepository(appPool, sysPool),
 		Providers:    reg,
 		Core:         iamclient.NewCore(cfg.CoreBaseURL, cfg.CoreTimeout),
@@ -40,7 +40,8 @@ func buildService(cfg config.Config, reg *provider.Registry, appPool, sysPool *p
 			TenantAppBaseURL: cfg.TenantAppBaseURL, SagaMaxBackoff: cfg.SagaMaxBackoff, SagaClaim: cfg.RPTimeout + sagaClaimMargin,
 			SeatsAfterConversionDelay: cfg.SeatsAfterConversionDelay, SCAAbandonAfter: cfg.SCAAbandonAfter, MaxSeatsPerPurchase: cfg.MaxSeatsPerPurchase, SeatPreviewTTL: cfg.SeatPreviewTTL,
 			MinChargeMinor: cfg.MinChargeMinor, BelowMinimumPolicy: domain.BelowMinimumPolicy(cfg.ProrationBelowMinimum),
-			FeatureDirectSignup: cfg.FeatureDirectSignup, AutoPauseOnOperatorSuspension: cfg.AutoPauseOnOperatorSuspension, FeatureTokenAddons: cfg.FeatureTokenAddons, FeatureSeatPurchase: cfg.FeatureSeatPurchase,
+			FeatureDirectSignup: cfg.FeatureDirectSignup, AutoPauseOnOperatorSuspension: cfg.AutoPauseOnOperatorSuspension,
+			ReviewThresholdMinor: cfg.ReviewThresholdMinor, FeatureTokenAddons: cfg.FeatureTokenAddons, FeatureSeatPurchase: cfg.FeatureSeatPurchase,
 		},
 	}
 }
@@ -56,6 +57,11 @@ func paymentHandlers(svc *app.Service) map[domain.NormalisedKind]port.PaymentEve
 		domain.KindSubscriptionEnded:    app.SubscriptionEnded{S: svc},
 		domain.KindInvoiceUpdated:       app.InvoiceUpdated{S: svc},
 		domain.KindPaymentMethodSet:     app.PaymentMethodSet{S: svc},
+		domain.KindRefundUpdated:        app.RefundUpdated{S: svc},
+		domain.KindDisputeOpened:        app.DisputeOpened{S: svc},
+		domain.KindDisputeUpdated:       app.DisputeOpened{S: svc},
+		domain.KindDisputeClosed:        app.DisputeOpened{S: svc},
+		domain.KindFraudWarning:         app.DisputeOpened{S: svc},
 	}
 }
 

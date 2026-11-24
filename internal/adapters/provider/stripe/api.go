@@ -586,10 +586,57 @@ func (a *Adapter) FetchCurrent(ctx context.Context, obj domain.ProviderObjectRef
 		if s.Subscription != nil {
 			st.Fields["subscription"] = s.Subscription.ID
 		}
+	case domain.ObjectRefund:
+		r, err := a.sc.V1Refunds.Retrieve(ctx, obj.ID, nil)
+		if err != nil {
+			return st, mapErr(err)
+		}
+		st.Status, st.Metadata = string(r.Status), r.Metadata
+		st.Fields["amount_minor"], st.Fields["currency"] = r.Amount, strings.ToUpper(string(r.Currency))
+	case domain.ObjectDispute:
+		d, err := a.sc.V1Disputes.Retrieve(ctx, obj.ID, nil)
+		if err != nil {
+			return st, mapErr(err)
+		}
+		st.Status = string(d.Status)
+		st.Fields["reason"], st.Fields["amount_minor"], st.Fields["created"] = string(d.Reason), d.Amount, time.Unix(d.Created, 0).UTC()
+		a.paymentFields(ctx, st.Fields, d.Charge, d.PaymentIntent)
+	case domain.ObjectEarlyFraudWarning:
+		w, err := a.sc.V1RadarEarlyFraudWarnings.Retrieve(ctx, obj.ID, nil)
+		if err != nil {
+			return st, mapErr(err)
+		}
+		st.Status, st.Fields["reason"], st.Fields["created"] = "open", string(w.FraudType), time.Unix(w.Created, 0).UTC()
+		a.paymentFields(ctx, st.Fields, w.Charge, w.PaymentIntent)
 	default:
 		return st, port.ErrUnsupported
 	}
 	return st, nil
+}
+
+// paymentFields records the disputed payment and the invoice it paid (via
+// the invoice payments of its PaymentIntent), so the dispute handler can
+// tell a conversion payment without another provider call (CD-10).
+func (a *Adapter) paymentFields(ctx context.Context, f map[string]any, ch *stripego.Charge, pi *stripego.PaymentIntent) {
+	if ch != nil {
+		f["payment_ref"] = ch.ID
+	}
+	if pi == nil {
+		return
+	}
+	f["payment_intent"] = pi.ID
+	if f["payment_ref"] == nil {
+		f["payment_ref"] = pi.ID
+	}
+	lp := &stripego.InvoicePaymentListParams{Payment: &stripego.InvoicePaymentListPaymentParams{Type: stripego.String("payment_intent"),
+		PaymentIntent: stripego.String(pi.ID)}}
+	lp.Limit = stripego.Int64(1)
+	for ip, err := range a.sc.V1InvoicePayments.List(ctx, lp).All(ctx) {
+		if err == nil && ip.Invoice != nil {
+			f["invoice"] = ip.Invoice.ID
+		}
+		break
+	}
 }
 
 // ListSince lists subscriptions, invoices or events created since a time,

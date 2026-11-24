@@ -34,6 +34,7 @@ type Settings struct {
 	MinChargeMinor                int64
 	BelowMinimumPolicy            domain.BelowMinimumPolicy
 	FeatureDirectSignup           bool
+	ReviewThresholdMinor          int64
 	AutoPauseOnOperatorSuspension bool
 	FeatureTokenAddons            bool
 	FeatureSeatPurchase           bool
@@ -57,6 +58,7 @@ type Service struct {
 	Schedules     port.ScheduleRepo
 	FollowUps     port.FollowUpRepo
 	Addons        port.AddonRepo
+	Money         port.MoneyRepo
 	Entitlements  port.EntitlementsReader
 	Sagas         port.SagaRepo
 	Emissions     port.EmissionRepo

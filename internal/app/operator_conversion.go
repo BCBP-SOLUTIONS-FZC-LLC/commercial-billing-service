@@ -136,11 +136,6 @@ func (s *Service) SagaAction(ctx context.Context, c Caller, tenantID, sagaID str
 	return out, err
 }
 
-// sagaRefund is B-O9 refund; it needs the refund flow (§8.11).
-func (s *Service) sagaRefund(context.Context, Caller, string, string, SagaActionRequest) (SagaView, error) {
-	return SagaView{}, notImplemented("B-O9 refund", "6g")
-}
-
 func sagaView(s domain.ConversionSaga) SagaView {
 	return SagaView{SagaID: s.SagaID, Kind: string(s.Kind), State: string(s.State), BillingSubscriptionID: s.BillingSubscriptionID,
 		NextAttemptAt: s.NextAttemptAt, ConfirmedAt: s.ConfirmedAt}

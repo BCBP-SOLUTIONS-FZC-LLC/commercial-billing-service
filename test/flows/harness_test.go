@@ -113,13 +113,14 @@ func scalar[T any](t *testing.T, q string, args ...any) T {
 // fakeProvider is a PaymentProvider that records calls and their keys.
 type fakeProvider struct {
 	port.PaymentProvider
-	name     string
-	mu       sync.Mutex
-	calls    []string
-	fail     error
-	confirm  []confirmAnswer
-	change   []confirmAnswer
-	fallback bool
+	name         string
+	mu           sync.Mutex
+	calls        []string
+	fail         error
+	confirm      []confirmAnswer
+	change       []confirmAnswer
+	fallback     bool
+	refundStatus string
 }
 
 func (p *fakeProvider) record(c string) error {
@@ -278,6 +279,20 @@ func (p *fakeProvider) UpdateCustomer(_ context.Context, _ port.CustomerRef, in 
 	return p.record("UpdateCustomer " + in.Email + " " + key)
 }
 
+func (p *fakeProvider) CreditBalance(_ context.Context, in port.BalanceAdjustment, key string) (string, error) {
+	return "cbtxn_" + key, p.record(fmt.Sprintf("CreditBalance %d %s", in.Amount.AmountMinor, key))
+}
+
+// refundStatus is what Refund answers (default pending).
+func (p *fakeProvider) Refund(_ context.Context, in port.RefundInput, key string) (port.RefundResult, error) {
+	_ = p.record(fmt.Sprintf("Refund %s %d %s %s", in.Invoice.ProviderInvoiceID, in.Amount.AmountMinor, in.Reason, key))
+	st := p.refundStatus
+	if st == "" {
+		st = "pending"
+	}
+	return port.RefundResult{ProviderRefundID: "re_" + key, Status: st}, nil
+}
+
 func (p *fakeProvider) called(prefix string) []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -379,13 +394,13 @@ func newEnv(t *testing.T) *env {
 		Prices: pgadapter.NewPriceRepository(appPool), Checkouts: pgadapter.NewCheckoutRepository(appPool), Invoices: pgadapter.NewInvoiceRepository(appPool),
 		Changes: pgadapter.NewPlanChangeRepository(appPool, systemPool), Previews: pgadapter.NewPreviewRepository(appPool),
 		SeatPurchases: pgadapter.NewSeatPurchaseRepository(appPool), Schedules: pgadapter.NewScheduleRepository(appPool, systemPool),
-		FollowUps: pgadapter.NewFollowUpRepository(systemPool), Addons: pgadapter.NewAddonRepository(appPool), Entitlements: e.ent,
+		FollowUps: pgadapter.NewFollowUpRepository(systemPool), Addons: pgadapter.NewAddonRepository(appPool), Money: pgadapter.NewMoneyRepository(appPool), Entitlements: e.ent,
 		Sagas: pgadapter.NewSagaRepository(appPool, systemPool), Emissions: pgadapter.NewEmissionRepository(appPool, systemPool),
 		Providers: registry{"stripe": e.stripe, "manual": manual}, Core: e.core, RP: e.rp,
 		Events: pgadapter.NewEventEnqueuer(eventbus.Source, eventbus.SpecVersion, schemas.Validate), Audit: pgadapter.NewAuditWriter(enq),
 		Settings: app.Settings{DefaultCurrency: "USD", NewAccountProvider: "stripe", CheckoutTTL: time.Hour, TenantAppBaseURL: "https://app.example",
 			SagaMaxBackoff: 5 * time.Minute, SCAAbandonAfter: 30 * time.Minute, SagaClaim: 45 * time.Second, SeatsAfterConversionDelay: 120 * time.Second, MaxSeatsPerPurchase: 1000, SeatPreviewTTL: 10 * time.Minute, MinChargeMinor: 200, BelowMinimumPolicy: domain.FreeUntilRenewal,
-			FeatureSeatPurchase: true, AutoPauseOnOperatorSuspension: true},
+			FeatureSeatPurchase: true, AutoPauseOnOperatorSuspension: true, ReviewThresholdMinor: 100000},
 		Now: func() time.Time { return e.now },
 	}
 	return e

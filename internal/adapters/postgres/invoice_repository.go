@@ -92,10 +92,10 @@ func (r *InvoiceRepository) Get(ctx context.Context, invoiceID string) (domain.I
 	var v domain.Invoice
 	err := inTx(ctx, r.pool, func(q querier) error {
 		return q.QueryRow(ctx, `SELECT invoice_id::text, tenant_id::text, provider, provider_invoice_id, kind, status, currency,
-			amount_due_minor, amount_paid_minor, held_for_review, disposition, disposition_reason, disposed_by::text, disposed_at
+			amount_due_minor, amount_paid_minor, amount_refunded_minor, held_for_review, disposition, disposition_reason, disposed_by::text, disposed_at
 			FROM invoices WHERE invoice_id = $1::uuid FOR UPDATE`, invoiceID).
 			Scan(&v.InvoiceID, &v.TenantID, &v.Provider, &v.ProviderInvoiceID, &v.Kind, &v.Status, &v.Currency, &v.AmountDueMinor,
-				&v.AmountPaidMinor, &v.HeldForReview, &v.Disposition, &v.DispositionReason, &v.DisposedBy, &v.DisposedAt)
+				&v.AmountPaidMinor, &v.AmountRefundedMinor, &v.HeldForReview, &v.Disposition, &v.DispositionReason, &v.DisposedBy, &v.DisposedAt)
 	})
 	if isNoRows(err) {
 		return v, false, nil
@@ -146,4 +146,45 @@ func (r *InvoiceRepository) List(ctx context.Context, tenantID, status, kind, af
 		return err
 	})
 	return out, err
+}
+
+// ByProvider implements port.InvoiceRepo.
+func (r *InvoiceRepository) ByProvider(ctx context.Context, provider, providerInvoiceID string) (domain.Invoice, bool, error) {
+	var id string
+	err := inTx(ctx, r.pool, func(q querier) error {
+		return q.QueryRow(ctx, `SELECT invoice_id::text FROM invoices WHERE provider = $1 AND provider_invoice_id = $2`, provider, providerInvoiceID).Scan(&id)
+	})
+	if isNoRows(err) {
+		return domain.Invoice{}, false, nil
+	}
+	if err != nil {
+		return domain.Invoice{}, false, err
+	}
+	return r.Get(ctx, id)
+}
+
+// ConversionInvoice implements port.InvoiceRepo: the tenant's first paid
+// subscription-create invoice (the conversion payment).
+func (r *InvoiceRepository) ConversionInvoice(ctx context.Context, tenantID string) (domain.Invoice, bool, error) {
+	var id string
+	err := inTx(ctx, r.pool, func(q querier) error {
+		return q.QueryRow(ctx, `SELECT invoice_id::text FROM invoices WHERE tenant_id = $1::uuid AND kind = 'subscription_create' AND status = 'paid'
+			ORDER BY coalesce(paid_at, issued_at, provider_updated_at) LIMIT 1`, tenantID).Scan(&id)
+	})
+	if isNoRows(err) {
+		return domain.Invoice{}, false, nil
+	}
+	if err != nil {
+		return domain.Invoice{}, false, err
+	}
+	return r.Get(ctx, id)
+}
+
+// AddRefunded implements port.InvoiceRepo.
+func (r *InvoiceRepository) AddRefunded(ctx context.Context, invoiceID string, amountMinor int64) error {
+	return inTx(ctx, r.pool, func(q querier) error {
+		_, err := q.Exec(ctx, `UPDATE invoices SET amount_refunded_minor = amount_refunded_minor + $2, updated_at = now()
+			WHERE invoice_id = $1::uuid`, invoiceID, amountMinor)
+		return err
+	})
 }

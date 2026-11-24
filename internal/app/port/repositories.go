@@ -127,6 +127,22 @@ type InvoiceRepo interface {
 	SetHeld(ctx context.Context, invoiceID string) error
 	Dispose(ctx context.Context, invoiceID, action, reason, by string, at time.Time, status string) error
 	List(ctx context.Context, tenantID, status, kind, afterID string, withDrafts bool, limit int) ([]InvoiceRow, error)
+	ByProvider(ctx context.Context, provider, providerInvoiceID string) (domain.Invoice, bool, error)
+	ConversionInvoice(ctx context.Context, tenantID string) (domain.Invoice, bool, error)
+	AddRefunded(ctx context.Context, invoiceID string, amountMinor int64) error
+}
+
+// MoneyRepo stores adjustments, refunds and disputes (§4.2.16–§4.2.18).
+type MoneyRepo interface {
+	InsertAdjustment(ctx context.Context, a domain.Adjustment) error
+	SetAdjustmentRef(ctx context.Context, adjustmentID, providerRef string) error
+	InsertRefund(ctx context.Context, r domain.Refund) error
+	RefundByProvider(ctx context.Context, providerRefundID string) (domain.Refund, bool, error)
+	RefundsForInvoice(ctx context.Context, invoiceID string) ([]domain.Refund, error)
+	UpdateRefund(ctx context.Context, r domain.Refund) error
+	UpsertDispute(ctx context.Context, d domain.Dispute) (domain.Dispute, error)
+	Dispute(ctx context.Context, disputeID string) (domain.Dispute, bool, error)
+	DecideDispute(ctx context.Context, disputeID, decision, by string) error
 }
 
 // InvoiceRow is one invoice of a list (B-P17, B-O4).
