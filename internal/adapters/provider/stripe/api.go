@@ -23,6 +23,7 @@ func (a *Adapter) EnsureCustomer(ctx context.Context, in port.CustomerInput, ide
 	p.Metadata = map[string]string{"tenant_id": in.TenantID}
 	setIf(&p.Name, in.Name)
 	setIf(&p.Email, in.Email)
+	setIf(&p.TestClock, a.cfg.TestClock)
 	c, err := call(ctx, a, func() (*stripego.Customer, error) { return a.sc.V1Customers.Create(ctx, p) })
 	if err != nil {
 		return port.CustomerRef{}, err

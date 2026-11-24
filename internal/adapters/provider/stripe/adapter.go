@@ -44,6 +44,10 @@ type Config struct {
 	// HTTPClient is the otelhttp client from adapters/httpx; nil uses a plain client.
 	HTTPClient *http.Client
 	Now        func() time.Time
+	// TestClock attaches every new customer to a Stripe Test Clock, so the
+	// certification suite can advance time (§14.7, cmd/certify). Test mode
+	// only: New refuses it with Livemode. Never set by the server.
+	TestClock string
 }
 
 // Adapter implements port.PaymentProvider for Stripe.
@@ -63,6 +67,9 @@ func New(cfg Config) (*Adapter, error) {
 	}
 	if len(cfg.WebhookSecrets) == 0 {
 		return nil, errors.New("stripe: at least one webhook secret is required")
+	}
+	if cfg.TestClock != "" && cfg.Livemode {
+		return nil, errors.New("stripe: a test clock is test mode only")
 	}
 	if cfg.Tolerance <= 0 {
 		cfg.Tolerance = 300 * time.Second

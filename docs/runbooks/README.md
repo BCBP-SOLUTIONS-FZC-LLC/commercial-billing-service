@@ -19,6 +19,7 @@ Operational runbooks for `commercial-billing` (LLD §20). Every alert in
 | `BillingReconciliationDrift` | SEV-3 | [reconciliation-drift.md](reconciliation-drift.md) |
 | `BillingSeatProjectionDrift` | SEV-3 | [seat-projection-drift.md](seat-projection-drift.md) |
 | `BillingReversalDecisionNeeded` (log-based) | SEV-2 | [reversal-decision.md](reversal-decision.md) |
+| Provider certification (cmd/certify) | planned | [certification.md](certification.md) |
 | Stripe key / webhook secret rotation | planned | [key-rotation.md](key-rotation.md) |
 | Disaster recovery (RTO 30 min, RPO 5 min) | — | [disaster-recovery.md](disaster-recovery.md) |
 | Dependency degradation matrix, business signals | reference | [dependency-degradation.md](dependency-degradation.md) |

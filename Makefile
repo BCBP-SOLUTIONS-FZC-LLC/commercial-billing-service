@@ -35,6 +35,7 @@ build:
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(APP_NAME) ./cmd/server
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/jobs ./cmd/jobs
 	$(GO) build -trimpath -ldflags "-s -w" -o bin/migrate ./cmd/migrate
+	$(GO) build -trimpath -ldflags "-s -w" -o bin/certify ./cmd/certify
 	$(GO) build ./internal/... ./pkg/... ./api/...
 
 .PHONY: tidy
@@ -136,3 +137,11 @@ helm-check: ## Lint, render and validate the Helm chart and alert rules (LLD §1
 .PHONY: testclock
 testclock: ## Stripe Test Clock rehearsal against staging (LLD §14.4; see docs/runbooks/test-clock-rehearsal.md)
 	bash scripts/testclock/run.sh
+
+.PHONY: certify-rehearsal
+certify-rehearsal: ## Run the cert-1.0 suite against stripe-mock and a throwaway Postgres (LLD §14.7)
+	$(GO) test -tags=integration -count=1 ./test/certify/
+
+.PHONY: check-first-deploy
+check-first-deploy: ## Check the LLD §19.1 first-deployment order for ENV (read-only)
+	bash scripts/check-first-deploy.sh $(ENV)

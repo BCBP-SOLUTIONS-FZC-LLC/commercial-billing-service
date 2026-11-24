@@ -31,6 +31,7 @@ components:
   httpx:     { in: adapters/httpx/** }
   metrics:   { in: adapters/metrics/** }
   bootstrap: { in: bootstrap/** }
+  certify:   { in: certify/** }
 
 # Components without an entry (domain, config, httpx) may depend on
 # no other project component.
@@ -49,4 +50,6 @@ deps:
   entclient: { mayDependOn: [domain, port, httpx] }
   metrics:   { mayDependOn: [domain, port] }
   # Composition shared by cmd/server and cmd/jobs.
+  # Certification suite tool (cmd/certify, §14.7).
+  certify:   { mayDependOn: [domain, port, app, config, bootstrap, postgres, stripe, webhook] }
   bootstrap: { mayDependOn: [domain, port, app, config, postgres, eventbus, registry, stripe, manual, iamclient, entclient, httpx, metrics] }
