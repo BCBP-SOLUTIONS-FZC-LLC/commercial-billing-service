@@ -175,6 +175,8 @@ Detail: `billing-decided-items-entitlements-build.md` (W-1 to W-7) and `billing-
 
 The work is probably unpushed. **These items stay open until the code can be seen.**
 
+**Second reply, 2026-11-24.** Entitlements returned `billing-decided-items-entitlements-build.md` with W-1 to W-7 ticked, naming functions, files, migration `000002_addon_billing_ref` and LLD rev 1.18. Rechecked on 2026-11-24: still nothing is pushed after `b5ba492` (2026-11-19), and none of the named items exist. The LLD in the repository is rev 1.15. **Still claimed, unverified.** The per-item comparison and what closes each item are in that document, under "Reply of 2026-11-24 and verification". The ask is unchanged: push the branch and open a PR.
+
 | # | Billing ID | What Entitlements must do | Done when |
 |---|---|---|---|
 | **Push** | — | Push the branch with the described work and open a PR | Code reviewable |

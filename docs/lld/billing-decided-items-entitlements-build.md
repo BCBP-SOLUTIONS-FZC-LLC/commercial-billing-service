@@ -9,6 +9,7 @@
 | Decided by | Commercial TL, 2026-11-19. Confirmed by BL-OQ-23 (c) on 2026-11-23 and HLD v0.65 (D-8) |
 | Related | `billing-open-items-entitlements.md` (E-1, E-2, E-4, E-5, E-7: payloads and tests in full) |
 | Deployment state | No service is in production; all run in dev only. "Done" means merged and promoted with each environment |
+| Last checked | 2026-11-24, against the Entitlements reply of the same date (see "Reply of 2026-11-24 and verification") |
 
 ## What this document is
 
@@ -222,19 +223,55 @@ The operator path (BL-OQ-14: OP-G1 to OP-G4) also affects Entitlements' own oper
 5. **W-12** deployed before add-on refunds are possible in that environment.
 6. Token add-ons switch on (`FEATURE_TOKEN_ADDONS=true`) only once these are done **and** BL-OQ-19 (Model Gateway proof) is closed. Packs are already loaded (BL-OQ-18, closed).
 
+## Reply of 2026-11-24 and verification
+
+Entitlements returned this document with W-1 to W-7 ticked, and Audit Log reported W-12's code complete. Each claim was checked against the repositories on 2026-11-24. **None can be seen yet, so every item stays open.** The rule is unchanged: an item closes when its code is merged where the reviewer can see it, not when it is reported.
+
+**Entitlements (`commercial-entitlements-service`).** The newest commit on any branch is `b5ba492` on `initial-commit`, dated 2026-11-19 (before the reply). `main` holds only the initial commit, and the local working tree is clean.
+
+| Item | Claimed in the reply | What the pushed code shows |
+|---|---|---|
+| W-1 | `computeAddonEligibility` in `effective_set.go`; `addon_eligibility` in `http/dto.go` | Neither name exists. `addon_eligible: bool` is still in `http/dto.go` and `domain/entitlement.go` (the shape rejected by BL-OQ-3) |
+| W-2 | `billingReadOnly()` middleware; NetworkPolicy and Istio policy in Helm | No `billingReadOnly`. No Billing admission rule found |
+| W-3 | `tenant_quota_add_on_changed` schema deleted; codec and AsyncAPI updated | Still present in `api/asyncapi.yaml`, `eventbus/glue_codec.go`, `domain/event.go` and `eventbus/schemas/tenant_quota_add_on_changed.json` |
+| W-4 | `ApplyBillingPurchase`; `billing_consumer.go`; migration `000002_addon_billing_ref` | None exist. Only migration `000001_initial_schema` is present; `billing_ref` appears only in the LLD text |
+| W-5 | `ApplyBillingRefund`; refund routed on `reason: refund` | No `ApplyBillingRefund`; `purchase_ref` appears nowhere in the code |
+| W-6 | `recordAddonAudit`; `billing.token_addon.granted` / `revoked` / `expired` | None exist |
+| W-7 | Entitlements LLD rev 1.18 (§7.1 no-event rule, §7.2 consumer row, §8.4 flow) | The pushed LLD is rev 1.15 (2026-11-18) |
+
+**Audit Log (`iam-audit-log`).** `main` is at `0e12f2c` (2026-11-19, `billing.token_addon.refunded`, PR #24), which this document already recorded. Nothing newer is pushed, and the working tree is clean. The extra items in the reply are not visible:
+
+- a second AsyncAPI message `billingAuditTenantQuotaAddOnRefunded` does not exist;
+- the B-4 and B-5 override entry types are not in the code;
+- "LLD bumped to rev 0.34" cannot be right as written, because the Audit Log LLD is already at rev 0.37. Probably another document is meant.
+
+The reply itself says this work is a "working tree ready to commit".
+
+**Reply text not taken.** The returned copy restored older wording that BL-OQ-18 (token packs) is still open. BL-OQ-18 closed on 2026-11-23, so this document keeps the current wording.
+
+**What closes these items.**
+
+1. Entitlements pushes the W-1 to W-7 work (branch name and commit ids) and opens a PR, including the LLD at rev 1.18.
+2. Audit Log pushes its C-2, B-4 and B-5 changes and names the LLD revision they belong to.
+3. The Billing reviewer re-runs the checks in the table above against those commits and ticks each item that matches.
+
+The design in the reply matches the decisions. In particular, purchase and refund are idempotent on `billing_ref`, refunds touch only the grant named by `purchase_ref`, and corrections and expiry are audited through AL-5 with no bus event. Nothing in the reply needs a Billing design change.
+
 ## Checklist
 
+Status per item as of 2026-11-24. "Claimed" means reported done by the owning team but not visible in pushed code.
+
 **Entitlements service**
-- [ ] W-1: `addon_eligibility` per resource on the effective set (`trial`, `not_active`, `unlimited_quota`)
-- [ ] W-2: `commercial-billing` admitted read-only on `GET /api/v1/internal/tenants/:id/entitlements` only, in each environment
-- [ ] W-3: `tenant_quota_add_on_changed` removed from produced events, schemas, codec and AsyncAPI
-- [ ] W-4: purchase consumed from `billing-entitlements-q`; idempotent on `billing_ref`; expiry from `purchased_at`
-- [ ] W-5: refund consumed; unused tokens of `purchase_ref` only; never below zero; idempotent on `billing_ref`
-- [ ] W-6: corrections and expiry audited through AL-5 only; no event on `entitlement-events`
-- [ ] W-7: Entitlements LLD states the consumed schema, reason ownership and the no-event rule
+- [ ] W-1: `addon_eligibility` per resource on the effective set (`trial`, `not_active`, `unlimited_quota`) — *claimed 2026-11-24, not in pushed code*
+- [ ] W-2: `commercial-billing` admitted read-only on `GET /api/v1/internal/tenants/:id/entitlements` only, in each environment — *claimed 2026-11-24, not in pushed code*
+- [ ] W-3: `tenant_quota_add_on_changed` removed from produced events, schemas, codec and AsyncAPI — *claimed 2026-11-24, not in pushed code*
+- [ ] W-4: purchase consumed from `billing-entitlements-q`; idempotent on `billing_ref`; expiry from `purchased_at` — *claimed 2026-11-24, not in pushed code*
+- [ ] W-5: refund consumed; unused tokens of `purchase_ref` only; never below zero; idempotent on `billing_ref` — *claimed 2026-11-24, not in pushed code*
+- [ ] W-6: corrections and expiry audited through AL-5 only; no event on `entitlement-events` — *claimed 2026-11-24, not in pushed code*
+- [ ] W-7: Entitlements LLD states the consumed schema, reason ownership and the no-event rule — *claimed 2026-11-24, not in pushed code*
 
 **Billing service** (in the LLD; built with Billing)
-- [ ] W-8: `TenantQuotaAddOnChanged` for `purchase` and `refund` (`BIL-ADD-2`, `BIL-ADD-4`); schema in Glue `billing-events`
+- [ ] W-8: `TenantQuotaAddOnChanged` for `purchase` and `refund` (`BIL-ADD-2`, `BIL-ADD-4`); schema in Glue `billing-events` — *schema, payload validation and Glue registration built (Billing Phase 4); emission on purchase and refund confirmation comes with the add-on flow (Phase 6)*
 - [ ] W-9: fresh read on purchase, 60 s cache on pack list, `503` fail-closed, interim finite-quota check
 - [ ] W-10: egress to Entitlements on that `GET` only
 
@@ -242,4 +279,5 @@ The operator path (BL-OQ-14: OP-G1 to OP-G4) also affects Entitlements' own oper
 - [ ] W-11: `billing-entitlements-q`, DLQ and SNS subscription to `billing-events`, per environment
 
 **Audit Log (IAM)**
-- [ ] W-12: release at or after `0e12f2c` deployed per environment
+- [x] W-12 (code): `billing.token_addon.refunded` merged at `0e12f2c` (verified)
+- [ ] W-12 (deploy): release at or after `0e12f2c` deployed per environment
