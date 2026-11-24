@@ -30,7 +30,7 @@ func TestSeatPurchase(t *testing.T) {
 	if err != nil || res.Status != "confirmed" || *res.SeatsAfter != 15 || res.SeatUpdate != "in_progress" {
 		t.Fatalf("purchase %+v %v", res, err)
 	}
-	if len(e.stripe.called("ChangeQuantity 10->15 invoice_now=true seatpur:"+res.PurchaseID)) != 1 {
+	if len(e.stripe.called("ChangeQuantity 10->15 invoice_now=true keep=false seatpur:"+res.PurchaseID)) != 1 {
 		t.Fatalf("provider: %v", e.stripe.called("ChangeQuantity"))
 	}
 	if q := scalar[int](t, `SELECT quantity FROM subscription_items WHERE billing_subscription_id = $1`, sub); q != 15 {

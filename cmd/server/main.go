@@ -27,6 +27,7 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/api"
 	httpadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/http"
 	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/bootstrap"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/config"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/logger"
@@ -159,7 +160,7 @@ func run() int {
 	}
 	// Payment providers and the certification gate (§3.5): read once at
 	// startup; a provider without a valid record stays loaded for running work.
-	registry, err := providers(cfg, sysPool, log)
+	registry, err := bootstrap.Providers(cfg, sysPool, log)
 	if err != nil {
 		log.Error("payment providers", map[string]any{"error": err.Error()})
 		return 1
@@ -169,20 +170,20 @@ func run() int {
 	}
 
 	// AL-5 direct-write in outbox mode (§3.3, §10.6).
-	auditP, err := buildAudit(context.Background(), cfg, appCfg, appPool, cfg.AppEnv, log)
+	auditP, err := bootstrap.Audit(context.Background(), cfg, appCfg, appPool, cfg.AppEnv, log)
 	if err != nil {
 		log.Error("platform-audit", map[string]any{"error": err.Error()})
 		return 1
 	}
-	if auditP.pool != nil {
-		defer auditP.pool.Close()
+	if auditP.Pool != nil {
+		defer auditP.Pool.Close()
 	}
 
 	// Use cases (§8), then the event bus (§7): billing.events publisher (Glue
 	// schema versions are resolved here, so a deploy ahead of schema
 	// registration fails to start), tenant-billing-q (whose TenantConverted
 	// confirms sagas) and usage-billing-q, delayed emissions.
-	svc := buildService(cfg, registry, appPool, sysPool, nil, auditP.writer, log)
+	svc := bootstrap.NewService(cfg, registry, appPool, sysPool, nil, auditP.Writer, nil, log)
 	eventBus, err := buildBusWith(context.Background(), cfg, appPool, sysPool, svc, log)
 	if err != nil {
 		log.Error("event bus", map[string]any{"error": err.Error()})
@@ -202,7 +203,7 @@ func run() int {
 			httpadapter.DocsRoutes(api.AsyncAPI),
 		},
 	})
-	bg := startWorkers(cfg, registry, appPool, sysPool, eventBus, svc, auditP.runner, log)
+	bg := startWorkers(cfg, registry, appPool, sysPool, eventBus, svc, auditP.Runner, log)
 
 	srv := &http.Server{
 		Addr:              ":" + strconv.Itoa(cfg.AppPort),

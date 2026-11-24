@@ -343,6 +343,10 @@ func (h CycleInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain
 			}); err != nil {
 				return "", err
 			}
+			// §8.16 step 4: a scheduled renewal price takes effect now.
+			if err := s.applyScheduledPrice(ctx, sub, start, "webhook:"+ev.EventType); err != nil {
+				return "", err
+			}
 			return "applied:renewed", nil
 		}
 		return "applied:invoice_mirrored", nil

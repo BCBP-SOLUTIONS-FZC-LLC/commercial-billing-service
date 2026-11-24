@@ -44,8 +44,19 @@ func (a *Adapter) VerifyAndNormalise(_ context.Context, h http.Header, body []by
 	if ev.Livemode != a.cfg.Livemode {
 		return domain.PaymentEvent{}, fmt.Errorf("%w: livemode %v in a livemode=%v environment", port.ErrInvalidSignature, ev.Livemode, a.cfg.Livemode)
 	}
+	return normalise(ev.ID, ev.Type, ev.Created, ev.Livemode, ev.Data.Object)
+}
+
+// normalise builds the PaymentEvent and the allow-listed payload
+// (BIL-PCI-3) from a verified event, or from one listed by reconciliation.
+func normalise(id, typ string, created int64, livemode bool, object json.RawMessage) (domain.PaymentEvent, error) {
+	ev := struct {
+		ID, Type string
+		Created  int64
+		Livemode bool
+	}{id, typ, created, livemode}
 	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(ev.Data.Object, &obj); err != nil {
+	if err := json.Unmarshal(object, &obj); err != nil {
 		return domain.PaymentEvent{}, fmt.Errorf("%w: malformed event object", port.ErrInvalidSignature)
 	}
 	kind, objKind := normaliseKind(ev.Type, str(obj["mode"]))

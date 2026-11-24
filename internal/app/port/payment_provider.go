@@ -244,6 +244,9 @@ type QuantityChange struct {
 	From, To         int
 	ProrationInstant time.Time
 	InvoiceNow       bool
+	// KeepIfUnpaid applies the quantity even when the invoice is not paid;
+	// the invoice then follows dunning (renewal top-up, §8.6.3, BL-OQ-6).
+	KeepIfUnpaid bool
 }
 
 // PriceChange changes the price (upgrade now).

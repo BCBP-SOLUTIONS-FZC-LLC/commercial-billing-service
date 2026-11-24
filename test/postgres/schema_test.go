@@ -17,8 +17,8 @@ import (
 func TestMigrationsAppliedAndIdempotent(t *testing.T) {
 	ctx := context.Background()
 	v, dirty, err := pgadapter.DomainVersion(ctx, migrateDSN)
-	if err != nil || dirty || v != 5 {
-		t.Fatalf("domain version %d dirty=%v err=%v, want 5 clean", v, dirty, err)
+	if err != nil || dirty || v != 6 {
+		t.Fatalf("domain version %d dirty=%v err=%v, want 6 clean", v, dirty, err)
 	}
 	if err := pgadapter.MigrateSchema(ctx, migrateDSN, nil); err != nil {
 		t.Fatalf("re-run must be a no-op: %v", err)

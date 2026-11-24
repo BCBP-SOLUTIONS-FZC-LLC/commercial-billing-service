@@ -30,6 +30,7 @@ components:
   entclient: { in: adapters/entitlementsclient/** }
   httpx:     { in: adapters/httpx/** }
   metrics:   { in: adapters/metrics/** }
+  bootstrap: { in: bootstrap/** }
 
 # Components without an entry (domain, config, httpx, metrics) may depend on
 # no other project component.
@@ -46,3 +47,5 @@ deps:
   registry:  { mayDependOn: [port, stripe, manual] }
   iamclient: { mayDependOn: [domain, port, httpx] }
   entclient: { mayDependOn: [domain, port, httpx] }
+  # Composition shared by cmd/server and cmd/jobs.
+  bootstrap: { mayDependOn: [domain, port, app, config, postgres, eventbus, registry, stripe, manual, iamclient, entclient, metrics] }

@@ -229,3 +229,17 @@ func (r *EmissionRepository) Finish(ctx context.Context, emissionID string, emit
 		return err
 	})
 }
+
+// Prune deletes every consumer's processed_events older than retention
+// (processed-events-prune, §13.2).
+func (r *InboxRunner) Prune(ctx context.Context, retention time.Duration) (int64, error) {
+	var total int64
+	for _, s := range r.stores {
+		n, err := s.Prune(ctx, retention, 0)
+		total += n
+		if err != nil {
+			return total, err
+		}
+	}
+	return total, nil
+}

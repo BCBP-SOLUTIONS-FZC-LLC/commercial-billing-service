@@ -40,6 +40,15 @@ type Settings struct {
 	AutoPauseOnOperatorSuspension bool
 	FeatureTokenAddons            bool
 	FeatureSeatPurchase           bool
+	// CronJobs (§13.2).
+	SagaAlertAfter            time.Duration
+	SeatRenewalLead           time.Duration
+	DowngradeRecheckLead      time.Duration
+	PurchaseAbandonAfter      time.Duration
+	SeatResyncAfter           time.Duration
+	RepriceCutoff             time.Duration
+	PIIMinimiseOffboardedDays int
+	PIIMinimiseAbandonedDays  int
 }
 
 // Service implements the tenant, internal and operator use cases (§5, §8).
@@ -65,9 +74,13 @@ type Service struct {
 	Admin         port.AdminRepo
 	Recon         port.ReconRepo
 	Ledger        port.LedgerReader
+	LedgerStore   port.LedgerRepo // reconciliation repairs (§8.13)
 	Entitlements  port.EntitlementsReader
 	Sagas         port.SagaRepo
 	Emissions     port.EmissionRepo
+	Jobs          port.JobRepo
+	Customers     port.SystemReader
+	Metrics       port.Metrics
 	Providers     ProviderRegistry
 	Core          port.CoreClient
 	RP            port.RealmProvisionerClient

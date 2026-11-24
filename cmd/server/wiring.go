@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"slices"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -11,11 +9,10 @@ import (
 	httpadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/http"
 	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/provider"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/provider/manual"
-	stripeadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/provider/stripe"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/webhook"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/bootstrap"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/config"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-audit/pkg/auditoutbox"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events/v2/pkg/events"
@@ -23,30 +20,6 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
 )
-
-// providers builds the compiled adapters and the registry (§3.5). In a
-// developer environment a listed Stripe without credentials is left out with
-// a warning; elsewhere config validation has already refused to start.
-func providers(cfg config.Config, sysPool *pgcommon.Pool, log port.Logger) (*provider.Registry, error) {
-	compiled := []port.PaymentProvider{manual.New()}
-	enabled := slices.Clone(cfg.EnabledPaymentProviders)
-	if slices.Contains(enabled, stripeadapter.Name) {
-		if cfg.StripeAPIKey == "" || len(cfg.StripeWebhookSecrets) == 0 {
-			log.Warn("stripe listed in ENABLED_PAYMENT_PROVIDERS but STRIPE_API_KEY / STRIPE_WEBHOOK_SECRETS are unset; stripe not loaded (dev only)", nil)
-			enabled = slices.DeleteFunc(enabled, func(n string) bool { return n == stripeadapter.Name })
-		} else {
-			s, err := stripeadapter.New(stripeadapter.Config{
-				APIKey: cfg.StripeAPIKey, WebhookSecrets: cfg.StripeWebhookSecrets, Tolerance: cfg.WebhookTolerance,
-				Livemode: cfg.AppEnv == "prod", Timeout: cfg.StripeTimeout, MaxRetries: int64(cfg.StripeMaxRetries), MaxRPS: cfg.StripeMaxRPS,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("stripe adapter: %w", err)
-			}
-			compiled = append(compiled, s)
-		}
-	}
-	return provider.New(compiled, enabled, pgadapter.NewCertificationRepository(sysPool), cfg.ProviderCertSuiteVersion, log)
-}
 
 // workers holds the in-pod background loops (§13.1).
 type workers struct {
@@ -93,7 +66,7 @@ func startWorkers(cfg config.Config, reg *provider.Registry, appPool, sysPool *p
 		Ledger:      pgadapter.NewLedgerRepository(sysPool),
 		Providers:   reg,
 		Tx:          pgadapter.NewTxRunner(appPool),
-		Handlers:    paymentHandlers(svc),
+		Handlers:    bootstrap.PaymentHandlers(svc),
 		MaxAttempts: cfg.WebhookMaxAttempts,
 		Log:         log,
 	}

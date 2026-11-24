@@ -207,6 +207,10 @@ func (a *Adapter) ChangeQuantity(ctx context.Context, in port.QuantityChange, id
 	}
 	p := &stripego.SubscriptionUpdateParams{Params: idem(idemKey)}
 	p.Items = []*stripego.SubscriptionUpdateItemParams{{ID: stripego.String(itemID), Quantity: stripego.Int64(int64(in.To))}}
+	if in.KeepIfUnpaid {
+		// Renewal top-up: the seats stay even if the charge fails (§8.6.3).
+		p.PaymentBehavior = stripego.String("allow_incomplete")
+	}
 	return a.immediateChange(ctx, in.Sub, p, in.ProrationInstant)
 }
 
@@ -223,7 +227,9 @@ func (a *Adapter) ChangePrice(ctx context.Context, in port.PriceChange, idemKey 
 
 func (a *Adapter) immediateChange(ctx context.Context, sub port.SubscriptionRef, p *stripego.SubscriptionUpdateParams, at time.Time) (port.ChangeResult, error) {
 	p.ProrationBehavior = stripego.String("always_invoice")
-	p.PaymentBehavior = stripego.String("pending_if_incomplete")
+	if p.PaymentBehavior == nil {
+		p.PaymentBehavior = stripego.String("pending_if_incomplete")
+	}
 	if !at.IsZero() {
 		p.ProrationDate = stripego.Int64(at.Unix())
 	}
@@ -718,7 +724,14 @@ func (a *Adapter) ListSince(ctx context.Context, kind port.ReconKind, since time
 			if err != nil {
 				return page, mapErr(err)
 			}
-			page.Items = append(page.Items, domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: "event", ID: ev.ID}, Status: string(ev.Type)})
+			st := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: "event", ID: ev.ID}, Status: string(ev.Type)}
+			if ev.Data != nil && ev.Livemode == a.cfg.Livemode {
+				// Normalised as a delivery would be, so a repair can ledger it (§8.13).
+				if pe, err := normalise(ev.ID, string(ev.Type), ev.Created, ev.Livemode, ev.Data.Raw); err == nil {
+					st.Fields = map[string]any{"event": pe}
+				}
+			}
+			page.Items = append(page.Items, st)
 			if len(page.Items) == limit {
 				page.NextCursor = ev.ID
 				break

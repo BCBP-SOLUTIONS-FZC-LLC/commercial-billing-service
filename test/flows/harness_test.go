@@ -181,6 +181,10 @@ func (p *fakeProvider) FetchCurrent(_ context.Context, obj domain.ProviderObject
 		return domain.ProviderObjectState{Ref: obj, Status: "complete", Fields: map[string]any{"mode": "setup", "setup_payment_method": "pm_new"}},
 			p.record("FetchCurrent " + obj.ID)
 	}
+	if obj.Kind == domain.ObjectInvoice {
+		return domain.ProviderObjectState{Ref: obj, Status: "open", Metadata: map[string]string{}, Fields: map[string]any{
+			"currency": "USD", "amount_due_minor": int64(1000), "kind": "subscription_cycle"}}, p.record("FetchCurrent " + obj.ID)
+	}
 	start := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
 	return domain.ProviderObjectState{Ref: obj, Status: "active", Fields: map[string]any{
 		"current_period_start": start, "current_period_end": start.AddDate(0, 1, 0)}}, p.record("FetchCurrent " + obj.ID)
@@ -220,7 +224,7 @@ func (p *fakeProvider) PreviewQuantityChange(_ context.Context, in port.Quantity
 }
 
 func (p *fakeProvider) ChangeQuantity(_ context.Context, in port.QuantityChange, key string) (port.ChangeResult, error) {
-	_ = p.record(fmt.Sprintf("ChangeQuantity %d->%d invoice_now=%v %s", in.From, in.To, in.InvoiceNow, key))
+	_ = p.record(fmt.Sprintf("ChangeQuantity %d->%d invoice_now=%v keep=%v %s", in.From, in.To, in.InvoiceNow, in.KeepIfUnpaid, key))
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	res := port.ChangeResult{Invoice: port.InvoiceRef{ProviderInvoiceID: "in_" + key}, Outcome: port.PaymentOutcome{Status: port.PaymentPaid}}
@@ -388,12 +392,47 @@ func (f *fakeEnt) TokenQuota(context.Context, string) (port.TokenQuota, error) {
 func ptrTo[T any](v T) *T { return &v }
 
 type env struct {
-	ent    *fakeEnt
-	svc    *app.Service
-	stripe *fakeProvider
-	core   *fakeCore
-	rp     *fakeRP
-	now    time.Time
+	ent     *fakeEnt
+	svc     *app.Service
+	stripe  *fakeProvider
+	core    *fakeCore
+	rp      *fakeRP
+	now     time.Time
+	metrics *fakeMetrics
+}
+
+// fakeMetrics counts the domain metrics the use cases record.
+type fakeMetrics struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func (m *fakeMetrics) inc(k string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.counts == nil {
+		m.counts = map[string]int{}
+	}
+	m.counts[k]++
+}
+
+func (m *fakeMetrics) get(k string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.counts[k]
+}
+
+func (m *fakeMetrics) DowngradeBlocked(b string)   { m.inc("downgrade_blocked:" + b) }
+func (m *fakeMetrics) RepricingScheduled(d string) { m.inc("repricing:" + d) }
+func (m *fakeMetrics) SeatChange(d, o string)      { m.inc("seat_change:" + d + ":" + o) }
+func (m *fakeMetrics) SeatProjectionMismatch()     { m.inc("seat_projection_mismatch") }
+func (m *fakeMetrics) SagasOverdue(int)            {}
+func (m *fakeMetrics) ReconciliationFindings(c map[[2]string]int) {
+	for k, n := range c {
+		for range n {
+			m.inc("recon:" + k[0] + ":" + k[1])
+		}
+	}
 }
 
 func newEnv(t *testing.T) *env {
@@ -406,7 +445,7 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{stripe: &fakeProvider{name: "stripe"}, core: &fakeCore{}, rp: &fakeRP{}, ent: &fakeEnt{limit: ptrTo(int64(5_000_000))}, now: time.Now().UTC().Truncate(time.Microsecond)}
+	e := &env{stripe: &fakeProvider{name: "stripe"}, core: &fakeCore{}, rp: &fakeRP{}, ent: &fakeEnt{limit: ptrTo(int64(5_000_000))}, metrics: &fakeMetrics{}, now: time.Now().UTC().Truncate(time.Microsecond)}
 	manual := manualadapter.New()
 	e.svc = &app.Service{
 		Tx: pgadapter.NewTxRunner(appPool), SysTx: pgadapter.NewSystemTxRunner(systemPool), Lock: pgadapter.TenantLocker{},
@@ -417,11 +456,15 @@ func newEnv(t *testing.T) *env {
 		FollowUps: pgadapter.NewFollowUpRepository(systemPool), Addons: pgadapter.NewAddonRepository(appPool), Money: pgadapter.NewMoneyRepository(appPool), Admin: pgadapter.NewAdminRepository(systemPool),
 		Recon: pgadapter.NewReconRepository(systemPool), Ledger: pgadapter.NewLedgerRepository(systemPool), Entitlements: e.ent,
 		Sagas: pgadapter.NewSagaRepository(appPool, systemPool), Emissions: pgadapter.NewEmissionRepository(appPool, systemPool),
+		Jobs: pgadapter.NewJobRepository(appPool, systemPool), Customers: pgadapter.NewSystemRepository(systemPool),
+		LedgerStore: pgadapter.NewLedgerRepository(systemPool), Metrics: e.metrics,
 		Providers: registry{"stripe": e.stripe, "manual": manual}, Core: e.core, RP: e.rp,
 		Events: pgadapter.NewEventEnqueuer(eventbus.Source, eventbus.SpecVersion, schemas.Validate), Audit: pgadapter.NewAuditWriter(enq),
 		Settings: app.Settings{DefaultCurrency: "USD", NewAccountProvider: "stripe", CheckoutTTL: time.Hour, TenantAppBaseURL: "https://app.example",
 			SagaMaxBackoff: 5 * time.Minute, SCAAbandonAfter: 30 * time.Minute, SagaClaim: 45 * time.Second, SeatsAfterConversionDelay: 120 * time.Second, MaxSeatsPerPurchase: 1000, SeatPreviewTTL: 10 * time.Minute, MinChargeMinor: 200, BelowMinimumPolicy: domain.FreeUntilRenewal,
-			FeatureSeatPurchase: true, AutoPauseOnOperatorSuspension: true, ReviewThresholdMinor: 100000, CertSuiteVersion: "cert-1.0", WorkerName: "test"},
+			FeatureSeatPurchase: true, AutoPauseOnOperatorSuspension: true, ReviewThresholdMinor: 100000, CertSuiteVersion: "cert-1.0", WorkerName: "test",
+			SagaAlertAfter: 30 * time.Minute, SeatRenewalLead: 24 * time.Hour, DowngradeRecheckLead: 2 * time.Hour, PurchaseAbandonAfter: 30 * time.Minute,
+			SeatResyncAfter: 10 * time.Minute, RepriceCutoff: time.Hour, PIIMinimiseOffboardedDays: 90, PIIMinimiseAbandonedDays: 30},
 		Now: func() time.Time { return e.now },
 	}
 	return e

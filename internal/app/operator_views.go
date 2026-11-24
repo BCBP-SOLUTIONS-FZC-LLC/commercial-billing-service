@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
@@ -182,9 +184,11 @@ func providerStatus(st string) domain.SubscriptionStatus {
 
 // RunReconciliation claims one queued run and compares the provider's
 // subscriptions, invoices and events in the window with Billing's records
-// (§8.13). It reports findings; auto-repair is not applied by this worker
-// (each finding says so) — repairs go through replay (B-O13) or the
-// processor. Returns 1 when a run was processed.
+// (§8.13). With auto_repair it repairs what the §8.13 table allows: a
+// missing ledger event is ledgered (the processor then applies it), an
+// ended provider subscription is re-read through the processor
+// (BIL-PAY-4), a missing invoice is mirrored. The rest are reported.
+// Returns 1 when a run was processed.
 func (s *Service) RunReconciliation(ctx context.Context, _ int) (int, error) {
 	run, ok, err := s.Recon.Claim(ctx, s.Settings.WorkerName)
 	if err != nil || !ok {
@@ -214,14 +218,27 @@ func (s *Service) reconcile(ctx context.Context, run port.ReconRun) (map[string]
 	if err != nil {
 		return counts, err
 	}
-	note := ptr("reported only: repair by replay (B-O13) or the processor")
-	if !run.AutoRepair {
-		note = nil
-	}
+	byKind := map[[2]string]int{}
 	add := func(f port.ReconFinding) error {
-		f.RepairNote = note
 		counts["findings"]++
+		if f.AutoRepaired {
+			counts["repaired"]++
+		}
+		byKind[[2]string{f.Kind, strconv.FormatBool(f.AutoRepaired)}]++
 		return s.Recon.AddFinding(ctx, run.RunID, f)
+	}
+	defer func() { s.metrics().ReconciliationFindings(byKind) }()
+	// repair applies one auto-repair when the run asks for it; a failure is
+	// recorded on the finding, never fails the run.
+	repair := func(f *port.ReconFinding, fn func() error) {
+		if !run.AutoRepair {
+			return
+		}
+		if err := fn(); err != nil {
+			f.RepairNote = ptr("repair failed: " + err.Error())
+			return
+		}
+		f.AutoRepaired = true
 	}
 	billing, err := s.Recon.BillingSubscriptions(ctx, run.Provider)
 	if err != nil {
@@ -259,8 +276,14 @@ func (s *Service) reconcile(ctx context.Context, run port.ReconRun) (map[string]
 			want := providerStatus(it.Status)
 			got := domain.SubscriptionStatus(b[1])
 			if want != got && (want != domain.StatusCancelled || got != domain.StatusEnded) {
-				if err := add(port.ReconFinding{TenantID: b[0], Kind: "status_mismatch", BillingValue: mustJSON(map[string]string{"status": b[1]}),
-					ProviderValue: mustJSON(map[string]string{"status": it.Status})}); err != nil {
+				f := port.ReconFinding{TenantID: b[0], Kind: "status_mismatch", BillingValue: mustJSON(map[string]string{"status": b[1]}),
+					ProviderValue: mustJSON(map[string]string{"status": it.Status})}
+				if want == domain.StatusCancelled || want == domain.StatusEnded {
+					repair(&f, func() error { return s.ledgerReread(ctx, run, b[0], it, domain.KindSubscriptionEnded) })
+				} else if run.AutoRepair {
+					f.RepairNote = ptr("not auto-repaired: the next callback or a replay (B-O13) applies it")
+				}
+				if err := add(f); err != nil {
 					return err
 				}
 			}
@@ -292,8 +315,14 @@ func (s *Service) reconcile(ctx context.Context, run port.ReconRun) (map[string]
 					}
 					findingKind = "invoice_missing"
 				}
-				if err := add(port.ReconFinding{TenantID: it.Metadata["tenant_id"], Kind: findingKind,
-					ProviderValue: mustJSON(map[string]string{"id": it.Ref.ID, "status": it.Status})}); err != nil {
+				f := port.ReconFinding{TenantID: it.Metadata["tenant_id"], Kind: findingKind,
+					ProviderValue: mustJSON(map[string]string{"id": it.Ref.ID, "status": it.Status})}
+				if kind == port.ReconInvoices {
+					repair(&f, func() error { return s.mirrorMissing(ctx, prov, run.Provider, f.TenantID, it.Ref) })
+				} else {
+					repair(&f, func() error { return s.ledgerMissing(ctx, it, &f) })
+				}
+				if err := add(f); err != nil {
 					return err
 				}
 			}
@@ -313,6 +342,60 @@ func (s *Service) reconcile(ctx context.Context, run port.ReconRun) (map[string]
 		}
 	}
 	return counts, nil
+}
+
+// ledgerMissing inserts a provider event found by reconciliation into the
+// ledger as received; the processor applies it as a delivery (§8.13).
+func (s *Service) ledgerMissing(ctx context.Context, it domain.ProviderObjectState, f *port.ReconFinding) error {
+	ev, ok := it.Fields["event"].(domain.PaymentEvent)
+	if !ok {
+		return errors.New("the provider listing did not include the event body")
+	}
+	var tenantID *string
+	if ev.CustomerRef != "" {
+		t, found, err := s.Customers.TenantForCustomer(ctx, ev.Provider, ev.CustomerRef)
+		if err != nil {
+			return err
+		}
+		if found {
+			tenantID, f.TenantID = &t, t
+		}
+	}
+	var objRef *string
+	if ev.Object.ID != "" {
+		objRef = &ev.Object.ID
+	}
+	_, err := s.LedgerStore.Insert(ctx, domain.LedgerEntry{Provider: ev.Provider, ProviderEventID: ev.ProviderEventID, EventType: ev.EventType,
+		NormalisedKind: string(ev.Kind), TenantID: tenantID, ProviderObjectRef: objRef, Livemode: ev.Livemode,
+		ProviderCreatedAt: ev.ProviderCreatedAt, Payload: ev.Payload})
+	return err
+}
+
+// ledgerReread queues a re-read of a provider object through the normal
+// processor (BIL-PAY-4): a ledger row with a reconciliation id whose
+// handler fetches the current state and applies it.
+func (s *Service) ledgerReread(ctx context.Context, run port.ReconRun, tenantID string, it domain.ProviderObjectState, kind domain.NormalisedKind) error {
+	id := "recon:" + run.RunID + ":" + it.Ref.ID
+	payload := mustJSON(map[string]any{"id": id, "type": "reconciliation.reread", "object": map[string]string{"id": it.Ref.ID}})
+	_, err := s.LedgerStore.Insert(ctx, domain.LedgerEntry{Provider: run.Provider, ProviderEventID: id, EventType: "reconciliation.reread",
+		NormalisedKind: string(kind), TenantID: &tenantID, ProviderObjectRef: &it.Ref.ID, ProviderCreatedAt: s.now(), Payload: payload})
+	return err
+}
+
+// mirrorMissing upserts a provider invoice missing from the mirror.
+func (s *Service) mirrorMissing(ctx context.Context, prov port.PaymentProvider, provider, tenantID string, ref domain.ProviderObjectRef) error {
+	if tenantID == "" {
+		return errors.New("invoice has no tenant_id metadata")
+	}
+	ref.Kind = domain.ObjectInvoice
+	cur, err := prov.FetchCurrent(ctx, ref)
+	if err != nil {
+		return providerErr(err)
+	}
+	return s.locked(ctx, tenantID, func(ctx context.Context) error {
+		_, _, err := s.mirrorFromState(ctx, tenantID, provider, domain.PaymentEvent{Provider: provider}, cur)
+		return err
+	})
 }
 
 // voidOpenInvoices voids the tenant's open invoices at offboarding where

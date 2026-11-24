@@ -1,6 +1,13 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app"
+)
 
 // The CronJob list is LLD §13.2: ten jobs, including pii-minimisation
 // (BIL-OPS-9) and renewal-repricing (BIL-SUB-8).
@@ -24,20 +31,48 @@ func TestJobListMatchesLLD(t *testing.T) {
 		if Jobs[name] != sched {
 			t.Errorf("%s schedule = %q, want %q", name, Jobs[name], sched)
 		}
+		if runners[name] == nil {
+			t.Errorf("%s has no runner", name)
+		}
+	}
+	if len(runners) != len(want) {
+		t.Errorf("got %d runners, want %d", len(runners), len(want))
 	}
 }
 
 func TestUnknownJobIsUsageError(t *testing.T) {
-	if got := run([]string{"--job", "nope"}); got != exitUsage {
+	never := func(string) int { t.Fatal("exec called"); return 0 }
+	if got := run([]string{"--job", "nope"}, never); got != exitUsage {
 		t.Fatalf("want %d, got %d", exitUsage, got)
 	}
-	if got := run(nil); got != exitUsage {
+	if got := run(nil, never); got != exitUsage {
 		t.Fatalf("missing --job: want %d, got %d", exitUsage, got)
 	}
 }
 
-func TestKnownJobNotImplementedYet(t *testing.T) {
-	if got := run([]string{"--job", "saga-sweeper"}); got != exitNotImplemented {
-		t.Fatalf("want %d, got %d", exitNotImplemented, got)
+func TestKnownJobIsExecuted(t *testing.T) {
+	var ran string
+	if got := run([]string{"--job", "saga-sweeper"}, func(n string) int { ran = n; return exitOK }); got != exitOK || ran != "saga-sweeper" {
+		t.Fatalf("got %d, ran %q", got, ran)
 	}
+}
+
+type nopLog struct{}
+
+func (nopLog) Debug(string, map[string]any) {}
+func (nopLog) Info(string, map[string]any)  {}
+func (nopLog) Warn(string, map[string]any)  {}
+func (nopLog) Error(string, map[string]any) {}
+
+// A job error fails the run; failed items alone do not (retried next run).
+func TestRunJobExitStatus(t *testing.T) {
+	d := deps{pruneOutbox: func(context.Context, time.Duration) (int64, error) { return 3, nil },
+		pruneProcessed: func(context.Context, time.Duration) (int64, error) { return 0, errors.New("db down") }}
+	if got := runJob(context.Background(), "outbox-prune", d, nopLog{}); got != exitOK {
+		t.Fatalf("outbox-prune: want %d, got %d", exitOK, got)
+	}
+	if got := runJob(context.Background(), "processed-events-prune", d, nopLog{}); got != exitFailed {
+		t.Fatalf("processed-events-prune: want %d, got %d", exitFailed, got)
+	}
+	_ = app.JobResult{}
 }

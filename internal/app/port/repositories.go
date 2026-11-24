@@ -40,6 +40,9 @@ type AccountRepo interface {
 	// UpdateContact sets contact fields with optimistic locking on record_version.
 	UpdateContact(ctx context.Context, tenantID string, expectedVersion int64, name, email, company, country, taxID *string) (domain.BillingAccount, error)
 	SetDefaultPM(ctx context.Context, tenantID string, set bool) error
+	// MinimiseContact nulls the billing-contact name and email and sets
+	// pii_minimised_at (§15.3); nothing else changes, no row is deleted.
+	MinimiseContact(ctx context.Context, tenantID string, at time.Time) error
 }
 
 // SubscriptionRepo stores subscriptions, their seat item and history.

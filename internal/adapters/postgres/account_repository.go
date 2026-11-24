@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -90,6 +91,16 @@ func (r *AccountRepository) UpdateContact(ctx context.Context, tenantID string, 
 		return domain.NewError(domain.ErrOptimisticLockConflict, "billing account changed since it was read").With("record_version", current)
 	})
 	return a, err
+}
+
+// MinimiseContact implements port.AccountRepo (§15.3, BIL-OPS-9).
+func (r *AccountRepository) MinimiseContact(ctx context.Context, tenantID string, at time.Time) error {
+	return inTx(ctx, r.pool, func(q querier) error {
+		_, err := q.Exec(ctx, `UPDATE billing_accounts SET billing_contact_name = NULL, billing_contact_email = NULL,
+			pii_minimised_at = $2, record_version = record_version + 1, updated_at = now()
+			WHERE tenant_id = $1::uuid AND pii_minimised_at IS NULL`, tenantID, at)
+		return err
+	})
 }
 
 // SetDefaultPM records whether the provider reports a default payment
