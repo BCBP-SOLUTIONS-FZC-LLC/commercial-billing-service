@@ -4,8 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
 )
@@ -34,7 +32,7 @@ func (r *JobRepository) OverdueSagas(ctx context.Context, before time.Time) ([]p
 		if err != nil {
 			return err
 		}
-		if out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (port.SagaRef, error) {
+		if out, err = collect(rows, func(row pgcommon.Row) (port.SagaRef, error) {
 			var s port.SagaRef
 			return s, row.Scan(&s.SagaID, &s.TenantID)
 		}); err != nil {
@@ -81,7 +79,7 @@ func (r *JobRepository) StaleWork(ctx context.Context, now, abandonBefore, scaBe
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (port.StaleWork, error) {
+		out, err = collect(rows, func(row pgcommon.Row) (port.StaleWork, error) {
 			var w port.StaleWork
 			return w, row.Scan(&w.Kind, &w.TenantID, &w.ID)
 		})
@@ -101,7 +99,7 @@ func (r *JobRepository) LiveSubscriptions(ctx context.Context, afterID string, l
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (port.LiveSubscription, error) {
+		out, err = collect(rows, func(row pgcommon.Row) (port.LiveSubscription, error) {
 			var l port.LiveSubscription
 			return l, row.Scan(&l.TenantID, &l.BillingSubscriptionID, &l.ItemUpdatedAt)
 		})
@@ -137,7 +135,7 @@ func (r *JobRepository) PIICandidates(ctx context.Context, offboardedBefore, aba
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (port.PIICandidate, error) {
+		out, err = collect(rows, func(row pgcommon.Row) (port.PIICandidate, error) {
 			var c port.PIICandidate
 			return c, row.Scan(&c.TenantID, &c.Provider, &c.ProviderCustomerID)
 		})
@@ -155,7 +153,7 @@ func (r *JobRepository) ExpiredIdempotencyTenants(ctx context.Context, now time.
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		out, err = collect(rows, scanOne[string])
 		return err
 	})
 	return out, err

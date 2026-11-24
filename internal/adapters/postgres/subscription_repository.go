@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
@@ -27,7 +25,7 @@ const subscriptionColumns = `billing_subscription_id, tenant_id, provider, provi
   payment_confirmed_at, converted_at, past_due_since, cancelled_at, cancel_reason, ended_at, record_version,
   created_at, updated_at`
 
-func scanSubscription(row pgx.Row) (domain.Subscription, error) {
+func scanSubscription(row pgcommon.Row) (domain.Subscription, error) {
 	var s domain.Subscription
 	err := row.Scan(&s.BillingSubscriptionID, &s.TenantID, &s.Provider, &s.ProviderSubscriptionID, &s.Origin, &s.Plan,
 		&s.Interval, &s.Status, &s.AutoRenew, &s.CurrentPeriodStart, &s.CurrentPeriodEnd, &s.CollectionPaused,
@@ -72,7 +70,7 @@ func (r *SubscriptionRepository) Get(ctx context.Context, id string) (domain.Sub
 		s, err = scanSubscription(q.QueryRow(ctx, `SELECT `+subscriptionColumns+` FROM subscriptions WHERE billing_subscription_id = $1::uuid`, id))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return s, subscriptionNotFound("subscription", id)
 	}
 	return s, err
@@ -86,7 +84,7 @@ func (r *SubscriptionRepository) Live(ctx context.Context, tenantID string) (dom
 		s, err = scanSubscription(q.QueryRow(ctx, `SELECT `+subscriptionColumns+` FROM subscriptions WHERE tenant_id = $1::uuid AND status <> 'ended'`, tenantID))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return s, false, nil
 	}
 	return s, err == nil, err
@@ -103,7 +101,7 @@ func (r *SubscriptionRepository) Item(ctx context.Context, id string) (domain.Su
 			Scan(&it.ItemID, &it.TenantID, &it.BillingSubscriptionID, &it.Kind, &it.PriceID, &it.Quantity, &it.ProviderItemID,
 				&it.ScheduledPriceID, &it.ScheduledPriceAt, &it.RecordVersion, &it.UpdatedAt)
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return it, subscriptionNotFound("seat item of subscription", id)
 	}
 	return it, err
@@ -118,7 +116,7 @@ func (r *SubscriptionRepository) Transition(ctx context.Context, id string, expe
 	var out domain.Subscription
 	err := inTx(ctx, r.pool, func(q querier) error {
 		cur, err := scanSubscription(q.QueryRow(ctx, `SELECT `+subscriptionColumns+` FROM subscriptions WHERE billing_subscription_id = $1::uuid FOR UPDATE`, id))
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, pgcommon.ErrNoRows) {
 			return subscriptionNotFound("subscription", id)
 		}
 		if err != nil {
@@ -161,7 +159,7 @@ func (r *SubscriptionRepository) Update(ctx context.Context, id string, expected
 	var out domain.Subscription
 	err := inTx(ctx, r.pool, func(q querier) error {
 		cur, err := scanSubscription(q.QueryRow(ctx, `SELECT `+subscriptionColumns+` FROM subscriptions WHERE billing_subscription_id = $1::uuid FOR UPDATE`, id))
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, pgcommon.ErrNoRows) {
 			return subscriptionNotFound("subscription", id)
 		}
 		if err != nil {
@@ -188,7 +186,7 @@ func (r *SubscriptionRepository) ByProvider(ctx context.Context, provider, provi
 			provider, providerSubscriptionID))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return s, false, nil
 	}
 	return s, err == nil, err
@@ -204,7 +202,7 @@ func (r *SubscriptionRepository) Latest(ctx context.Context, tenantID string) (d
 			ORDER BY (status <> 'ended') DESC, created_at DESC LIMIT 1`, tenantID))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return s, false, nil
 	}
 	return s, err == nil, err

@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
@@ -24,7 +22,7 @@ func NewPriceRepository(pool *pgcommon.Pool) *PriceRepository { return &PriceRep
 const priceColumns = `price_id, plan, interval, currency, unit_amount_minor, provider, provider_price_id,
   effective_from, effective_to, created_by, reason`
 
-func scanPrice(row pgx.Row) (domain.PlanPrice, error) {
+func scanPrice(row pgcommon.Row) (domain.PlanPrice, error) {
 	var p domain.PlanPrice
 	err := row.Scan(&p.PriceID, &p.Plan, &p.Interval, &p.Currency, &p.UnitAmountMinor, &p.Provider, &p.ProviderPriceID,
 		&p.EffectiveFrom, &p.EffectiveTo, &p.CreatedBy, &p.Reason)
@@ -44,7 +42,7 @@ func (r *PriceRepository) PriceAt(ctx context.Context, plan domain.PlanCode, int
 			plan, interval, currency, provider, at))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return p, false, nil
 	}
 	return p, err == nil, err
@@ -58,7 +56,7 @@ func (r *PriceRepository) Get(ctx context.Context, priceID string) (domain.PlanP
 		p, err = scanPrice(q.QueryRow(ctx, `SELECT `+priceColumns+` FROM plan_prices WHERE price_id = $1::uuid`, priceID))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return p, domain.NewError(domain.ErrPriceNotAvailable, "price "+priceID+" not found")
 	}
 	return p, err
@@ -88,7 +86,7 @@ func (r *CertificationRepository) Enabling(ctx context.Context, provider, adapte
 			Scan(&c.ID, &c.Provider, &c.AdapterVersion, &c.ProviderAPIVersion, &c.SuiteVersion, &c.Status, &c.ProrationMode,
 				&c.CertifiedBy, &c.CertifiedAt, &c.ReviewedBy, &c.ReviewedAt)
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return c, false, nil
 	}
 	return c, err == nil, err
@@ -113,7 +111,7 @@ func (r *SystemRepository) TenantForCustomer(ctx context.Context, provider, cust
 		return q.QueryRow(ctx, `SELECT tenant_id::text FROM billing_accounts WHERE provider = $1 AND provider_customer_id = $2`,
 			provider, customerID).Scan(&tenantID)
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return "", false, nil
 	}
 	return tenantID, err == nil, err
@@ -159,7 +157,7 @@ func (r *LedgerRepository) Get(ctx context.Context, provider, eventID string) (d
 			Scan(&e.Provider, &e.ProviderEventID, &e.EventType, &e.NormalisedKind, &e.TenantID, &e.ProviderObjectRef, &e.Livemode,
 				&e.ProviderCreatedAt, &e.ReceivedAt, &e.Payload, &e.Status, &e.Attempts, &e.NextAttemptAt, &e.Outcome)
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return e, domain.NewError(domain.ErrLedgerEventNotFound, "ledger event "+provider+"/"+eventID+" not found")
 	}
 	return e, err
@@ -340,7 +338,7 @@ func (r *LedgerRepository) Excerpt(ctx context.Context, tenantID string, limit i
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (port.LedgerExcerpt, error) {
+		out, err = collect(rows, func(row pgcommon.Row) (port.LedgerExcerpt, error) {
 			var e port.LedgerExcerpt
 			return e, row.Scan(&e.ProviderEventID, &e.EventType, &e.Status, &e.Outcome, &e.ReceivedAt)
 		})

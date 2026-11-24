@@ -5,8 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
@@ -26,7 +24,7 @@ const accountColumns = `tenant_id, provider, provider_customer_id, currency, bil
   company_name, country, tax_id, default_pm_set, iam_lifecycle, iam_suspension_source, iam_last_event_at,
   closed_at, pii_minimised_at, record_version, created_at, updated_at`
 
-func scanAccount(row pgx.Row) (domain.BillingAccount, error) {
+func scanAccount(row pgcommon.Row) (domain.BillingAccount, error) {
 	var a domain.BillingAccount
 	err := row.Scan(&a.TenantID, &a.Provider, &a.ProviderCustomerID, &a.Currency, &a.BillingContactName,
 		&a.BillingContactEmail, &a.CompanyName, &a.Country, &a.TaxID, &a.DefaultPMSet, &a.IAMLifecycle,
@@ -60,7 +58,7 @@ func (r *AccountRepository) Get(ctx context.Context, tenantID string) (domain.Bi
 		a, err = scanAccount(q.QueryRow(ctx, `SELECT `+accountColumns+` FROM billing_accounts WHERE tenant_id = $1::uuid`, tenantID))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return a, subscriptionNotFound("billing account for tenant", tenantID)
 	}
 	return a, err
@@ -78,12 +76,12 @@ func (r *AccountRepository) UpdateContact(ctx context.Context, tenantID string, 
 			  country = $6, tax_id = $7
 			WHERE tenant_id = $1::uuid AND record_version = $2
 			RETURNING `+accountColumns, tenantID, expectedVersion, name, email, company, country, taxID))
-		if !errors.Is(err, pgx.ErrNoRows) {
+		if !errors.Is(err, pgcommon.ErrNoRows) {
 			return err
 		}
 		var current int64
 		if err := q.QueryRow(ctx, `SELECT record_version FROM billing_accounts WHERE tenant_id = $1::uuid`, tenantID).Scan(&current); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, pgcommon.ErrNoRows) {
 				return subscriptionNotFound("billing account for tenant", tenantID)
 			}
 			return err

@@ -128,7 +128,7 @@ func run() int {
 	// run with RUN_MIGRATIONS=false (§12, §19.1); local runs may migrate here.
 	if cfg.RunMigrations {
 		migCtx, cancelMig := context.WithTimeout(context.Background(), cfg.MigrateTimeout)
-		err := pgadapter.MigrateSchema(migCtx, pgadapter.MigrationDSNFromEnv(), log)
+		err := pgadapter.MigrateSchema(migCtx, pgadapter.MigrationDSN(), log)
 		cancelMig()
 		if err != nil {
 			log.Error("migrate at startup", map[string]any{"error": err.Error()})
@@ -136,32 +136,15 @@ func run() int {
 		}
 	}
 
-	// App pool: billing_app, RLS-bound, app.tenant_id GUC on every checkout.
-	appCfg, cfgWarnings := pgadapter.AppPoolConfig(log)
-	for _, w := range cfgWarnings {
-		log.Warn("postgres config warning", map[string]any{"key": w.Key, "reason": w.Reason})
-	}
-	appCfg.Tracer = gincommon.NewSpanTracer(ginCfg.ServiceName)
-	appPool, err := pgcommon.NewPool(context.Background(), appCfg)
+	// Pools through pgcommon: billing_app (RLS, app.tenant_id on every
+	// checkout) and billing_system (BYPASSRLS, cross-tenant work only).
+	pools, err := bootstrap.Pools(context.Background(), cfg, ginCfg.ServiceName, log)
 	if err != nil {
-		log.Error("connect app pool", map[string]any{"error": err.Error()})
+		log.Error("connect database", map[string]any{"error": err.Error()})
 		return 1
 	}
-	defer appPool.Close()
-
-	// sysPool: billing_system, BYPASSRLS, cross-tenant work only.
-	sysDSN := pgadapter.SystemDSNFromEnv()
-	sysCfg := pgadapter.SystemPoolConfig(sysDSN, int32(cfg.PGSystemMaxConns), log)
-	sysCfg.Tracer = gincommon.NewSpanTracer(ginCfg.ServiceName)
-	sysPool, err := pgcommon.NewPool(context.Background(), sysCfg)
-	if err != nil {
-		log.Error("connect system pool", map[string]any{"error": err.Error()})
-		return 1
-	}
-	defer sysPool.Close()
-	if sysDSN == appCfg.DSN {
-		log.Warn("SYSTEM_DATABASE_URL not set; sysPool reuses the app DSN and cross-tenant queries will be RLS-filtered", nil)
-	}
+	defer pools.Close()
+	appPool, sysPool := pools.App, pools.System
 
 	poolCheck := func(p *pgcommon.Pool) httpadapter.Pinger {
 		return httpadapter.PingerFunc(func(ctx context.Context) error {
@@ -185,7 +168,7 @@ func run() int {
 	}
 
 	// AL-5 direct-write in outbox mode (§3.3, §10.6).
-	auditP, err := bootstrap.Audit(context.Background(), cfg, appCfg, appPool, cfg.AppEnv, log)
+	auditP, err := bootstrap.Audit(context.Background(), cfg, appPool, cfg.AppEnv, log)
 	if err != nil {
 		log.Error("platform-audit", map[string]any{"error": err.Error()})
 		return 1

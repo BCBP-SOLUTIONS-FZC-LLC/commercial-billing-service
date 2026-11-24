@@ -3,8 +3,6 @@ package postgres
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
@@ -42,7 +40,7 @@ func (r *MoneyRepository) SetAdjustmentRef(ctx context.Context, id, ref string) 
 const refundColumns = `refund_id::text, tenant_id::text, invoice_id::text, amount_minor, currency, category, reason, status,
   provider_refund_id, addon_purchase_id::text, addon_tokens, addon_event_id::text, actor_id::text, idempotency_key, created_at`
 
-func scanRefund(row pgx.Row) (domain.Refund, error) {
+func scanRefund(row pgcommon.Row) (domain.Refund, error) {
 	var f domain.Refund
 	err := row.Scan(&f.RefundID, &f.TenantID, &f.InvoiceID, &f.AmountMinor, &f.Currency, &f.Category, &f.Reason, &f.Status,
 		&f.ProviderRefundID, &f.AddonPurchaseID, &f.AddonTokens, &f.AddonEventID, &f.ActorID, &f.IdempotencyKey, &f.CreatedAt)
@@ -83,7 +81,7 @@ func (r *MoneyRepository) RefundsForInvoice(ctx context.Context, invoiceID strin
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.Refund, error) { return scanRefund(row) })
+		out, err = collect(rows, func(row pgcommon.Row) (domain.Refund, error) { return scanRefund(row) })
 		return err
 	})
 	return out, err
@@ -101,7 +99,7 @@ func (r *MoneyRepository) UpdateRefund(ctx context.Context, f domain.Refund) err
 const disputeColumns = `dispute_id::text, tenant_id::text, provider, provider_dispute_id, kind, payment_ref, invoice_id::text,
   is_conversion_payment, within_revert_window, reason, provider_status, revert_decision, decided_by::text, opened_at`
 
-func scanDispute(row pgx.Row) (domain.Dispute, error) {
+func scanDispute(row pgcommon.Row) (domain.Dispute, error) {
 	var d domain.Dispute
 	err := row.Scan(&d.DisputeID, &d.TenantID, &d.Provider, &d.ProviderDisputeID, &d.Kind, &d.PaymentRef, &d.InvoiceID,
 		&d.IsConversionPayment, &d.WithinRevertWindow, &d.Reason, &d.ProviderStatus, &d.RevertDecision, &d.DecidedBy, &d.OpenedAt)
@@ -158,7 +156,7 @@ func (r *MoneyRepository) Disputes(ctx context.Context, tenantID string) ([]doma
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.Dispute, error) { return scanDispute(row) })
+		out, err = collect(rows, func(row pgcommon.Row) (domain.Dispute, error) { return scanDispute(row) })
 		return err
 	})
 	return out, err

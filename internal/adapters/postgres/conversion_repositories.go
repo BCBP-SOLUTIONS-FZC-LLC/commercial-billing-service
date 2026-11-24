@@ -5,8 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
@@ -25,7 +23,7 @@ func NewCheckoutRepository(appPool *pgcommon.Pool) *CheckoutRepository {
 const checkoutColumns = `session_id::text, tenant_id::text, purpose, provider_session_id, billing_subscription_id::text,
   addon_purchase_id::text, requested_plan, requested_interval, requested_seats, status, requested_by::text, expires_at, created_at`
 
-func scanCheckout(row pgx.Row) (domain.CheckoutSession, error) {
+func scanCheckout(row pgcommon.Row) (domain.CheckoutSession, error) {
 	var c domain.CheckoutSession
 	err := row.Scan(&c.SessionID, &c.TenantID, &c.Purpose, &c.ProviderSessionID, &c.BillingSubscriptionID, &c.AddonPurchaseID,
 		&c.RequestedPlan, &c.RequestedInterval, &c.RequestedSeats, &c.Status, &c.RequestedBy, &c.ExpiresAt, &c.CreatedAt)
@@ -62,7 +60,7 @@ func (r *CheckoutRepository) one(ctx context.Context, where string, args ...any)
 		c, err = scanCheckout(q.QueryRow(ctx, `SELECT `+checkoutColumns+` FROM checkout_sessions `+where, args...))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return c, false, nil
 	}
 	return c, err == nil, err
@@ -124,7 +122,7 @@ const sagaColumns = `saga_id::text, tenant_id::text, billing_subscription_id::te
   tenant_converted_event::text, confirmed_at, alerted_at, resolution, resolution_reason, resolved_by::text,
   record_version, created_at, updated_at`
 
-func scanSaga(row pgx.Row) (domain.ConversionSaga, error) {
+func scanSaga(row pgcommon.Row) (domain.ConversionSaga, error) {
 	var s domain.ConversionSaga
 	err := row.Scan(&s.SagaID, &s.TenantID, &s.BillingSubscriptionID, &s.Kind, &s.State, &s.PaymentConfirmedAt,
 		&s.RPIdempotencyKey, &s.Attempts, &s.NextAttemptAt, &s.LastErrorCode, &s.LastErrorAt, &s.RPAcceptedAt,
@@ -162,7 +160,7 @@ func (r *SagaRepository) one(ctx context.Context, where string, args ...any) (do
 		s, err = scanSaga(q.QueryRow(ctx, `SELECT `+sagaColumns+` FROM conversion_sagas `+where, args...))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return s, false, nil
 	}
 	return s, err == nil, err
@@ -197,7 +195,7 @@ func (r *SagaRepository) Due(ctx context.Context, now time.Time, limit int) ([]p
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (port.SagaRef, error) {
+		out, err = collect(rows, func(row pgcommon.Row) (port.SagaRef, error) {
 			var s port.SagaRef
 			return s, row.Scan(&s.SagaID, &s.TenantID)
 		})

@@ -5,8 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
@@ -25,7 +23,7 @@ func NewAddonRepository(appPool *pgcommon.Pool) *AddonRepository {
 
 const packColumns = `pack_code, tokens, currency, amount_minor, provider, provider_price_id, monthly_cap_tokens, active, effective_from`
 
-func scanPack(row pgx.Row) (domain.TokenPack, error) {
+func scanPack(row pgcommon.Row) (domain.TokenPack, error) {
 	var p domain.TokenPack
 	err := row.Scan(&p.PackCode, &p.Tokens, &p.Currency, &p.AmountMinor, &p.Provider, &p.ProviderPriceID, &p.MonthlyCapTokens,
 		&p.Active, &p.EffectiveFrom)
@@ -42,7 +40,7 @@ func (r *AddonRepository) ActivePacks(ctx context.Context, currency, provider st
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.TokenPack, error) { return scanPack(row) })
+		out, err = collect(rows, func(row pgcommon.Row) (domain.TokenPack, error) { return scanPack(row) })
 		return err
 	})
 	return out, err
@@ -51,7 +49,7 @@ func (r *AddonRepository) ActivePacks(ctx context.Context, currency, provider st
 const addonColumns = `purchase_id::text, tenant_id::text, pack_code, pack_quantity, tokens_total, amount_minor, currency, status,
   provider_invoice_id, client_action::text, requested_by::text, idempotency_key, confirmed_at, event_id::text, created_at`
 
-func scanAddon(row pgx.Row) (domain.QuotaAddonPurchase, error) {
+func scanAddon(row pgcommon.Row) (domain.QuotaAddonPurchase, error) {
 	var p domain.QuotaAddonPurchase
 	var action *string
 	err := row.Scan(&p.PurchaseID, &p.TenantID, &p.PackCode, &p.PackQuantity, &p.TokensTotal, &p.AmountMinor, &p.Currency, &p.Status,
@@ -89,7 +87,7 @@ func (r *AddonRepository) one(ctx context.Context, where string, args ...any) (d
 		p, err = scanAddon(q.QueryRow(ctx, `SELECT `+addonColumns+` FROM quota_addon_purchases `+where, args...))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return p, false, nil
 	}
 	return p, err == nil, err
@@ -105,7 +103,7 @@ func (r *AddonRepository) List(ctx context.Context, tenantID, afterID string, li
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.QuotaAddonPurchase, error) { return scanAddon(row) })
+		out, err = collect(rows, func(row pgcommon.Row) (domain.QuotaAddonPurchase, error) { return scanAddon(row) })
 		return err
 	})
 	return out, err

@@ -6,8 +6,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
@@ -28,7 +26,7 @@ const changeColumns = `change_id::text, tenant_id::text, billing_subscription_id
   effective_at, amount_minor, currency, i18_checked_at, blocker_codes, provider_invoice_id, provider_schedule_id,
   client_action::text, requested_by::text, idempotency_key, created_at, updated_at`
 
-func scanChange(row pgx.Row) (domain.PlanChangeRequest, error) {
+func scanChange(row pgcommon.Row) (domain.PlanChangeRequest, error) {
 	var c domain.PlanChangeRequest
 	var action *string
 	err := row.Scan(&c.ChangeID, &c.TenantID, &c.BillingSubscriptionID, &c.FromPlan, &c.ToPlan, &c.Direction, &c.Status,
@@ -76,7 +74,7 @@ func (r *PlanChangeRepository) one(ctx context.Context, where string, args ...an
 		c, err = scanChange(q.QueryRow(ctx, `SELECT `+changeColumns+` FROM plan_change_requests `+where, args...))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return c, false, nil
 	}
 	return c, err == nil, err
@@ -105,7 +103,7 @@ func (r *PlanChangeRepository) DueDowngrades(ctx context.Context, until time.Tim
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.PlanChangeRequest, error) { return scanChange(row) })
+		out, err = collect(rows, func(row pgcommon.Row) (domain.PlanChangeRequest, error) { return scanChange(row) })
 		return err
 	})
 	return out, err
@@ -150,7 +148,7 @@ func (r *PreviewRepository) Load(ctx context.Context, tenantID, previewID string
 		return q.QueryRow(ctx, `SELECT response_body::text, expires_at FROM idempotency_records
 			WHERE tenant_id = $1::uuid AND scope = 'preview' AND key = $2`, tenantID, previewID).Scan(&body, &exp)
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return nil, exp, false, nil
 	}
 	return []byte(body), exp, err == nil, err

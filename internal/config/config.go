@@ -192,6 +192,17 @@ func LoadFrom(getenv func(string) string) (Config, []Problem) {
 	c.PGAuditDrainerUser = l.str("PG_AUDIT_DRAINER_USER", "billing_audit_drainer")
 	c.PGAuditDrainerPassword = l.secret("PG_AUDIT_DRAINER_PASSWORD")
 	c.PGAuditDrainerMaxConns = l.intIn("PG_AUDIT_DRAINER_MAX_CONNS", 2, 1, 5)
+	// The system and audit-drainer pools are pgcommon's environment config
+	// with these roles' credentials (§3.3); outside developer environments a
+	// missing password would silently run them as billing_app.
+	if l.strict {
+		if c.PGSystemPassword == "" {
+			l.fail("PG_SYSTEM_PASSWORD", "required")
+		}
+		if c.PGAuditDrainerPassword == "" {
+			l.fail("PG_AUDIT_DRAINER_PASSWORD", "required")
+		}
+	}
 	c.MigrationDatabaseURLSet = strings.TrimSpace(getenv("MIGRATION_DATABASE_URL")) != ""
 
 	c.SNSBillingEventsTopicARN = l.required("SNS_BILLING_EVENTS_TOPIC_ARN")

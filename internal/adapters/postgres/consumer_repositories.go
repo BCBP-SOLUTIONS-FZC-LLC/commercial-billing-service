@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
@@ -90,7 +89,7 @@ func (r *LifecycleRepository) AccountForUpdate(ctx context.Context, tenantID str
 		a, err = scanAccount(q.QueryRow(ctx, `SELECT `+accountColumns+` FROM billing_accounts WHERE tenant_id = $1::uuid FOR UPDATE`, tenantID))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return a, false, nil
 	}
 	return a, err == nil, err
@@ -187,7 +186,7 @@ func (r *EmissionRepository) DueTenants(ctx context.Context, now time.Time, limi
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		out, err = collect(rows, scanOne[string])
 		return err
 	})
 	return out, err
@@ -205,7 +204,7 @@ func (r *EmissionRepository) ClaimDue(ctx context.Context, tenantID string, now 
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.ScheduledEmission, error) {
+		out, err = collect(rows, func(row pgcommon.Row) (domain.ScheduledEmission, error) {
 			var e domain.ScheduledEmission
 			var typ string
 			err := row.Scan(&e.EmissionID, &e.TenantID, &typ, &e.PayloadBuilder, &e.RefID, &e.DueAt)

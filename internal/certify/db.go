@@ -6,10 +6,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
@@ -24,6 +22,10 @@ type DB struct {
 	serverDSN, superDBDSN string
 }
 
+// dbName is the only shape a run database may have: it is interpolated
+// into CREATE / DROP DATABASE (no bind parameters for identifiers).
+var dbName = regexp.MustCompile(`^certify_[a-z0-9_]{1,50}$`)
+
 var roles = []string{"billing_migrator", "billing_app", "billing_system", "billing_audit_drainer", "admin_readonly"}
 
 // OpenDB creates database certify_<run> on serverDSN (a superuser DSN of a
@@ -31,8 +33,11 @@ var roles = []string{"billing_migrator", "billing_app", "billing_system", "billi
 // a fresh password when missing, migrates, and opens the pools.
 func OpenDB(ctx context.Context, serverDSN, runID string) (*DB, error) {
 	name := "certify_" + strings.ToLower(strings.ReplaceAll(runID, "-", "_"))
+	if !dbName.MatchString(name) {
+		return nil, fmt.Errorf("run id %q gives an unsafe database name", runID)
+	}
 	pw := randomHex(16)
-	stmts := []string{fmt.Sprintf(`CREATE DATABASE %s`, pgx.Identifier{name}.Sanitize())}
+	stmts := []string{fmt.Sprintf(`CREATE DATABASE %q`, name)}
 	for _, r := range roles {
 		bypass := "NOBYPASSRLS"
 		if r == "billing_system" {
@@ -89,12 +94,12 @@ func (d *DB) Drop(ctx context.Context) error {
 			p.Close()
 		}
 	}
-	return execOn(ctx, d.serverDSN, fmt.Sprintf(`DROP DATABASE IF EXISTS %s WITH (FORCE)`, pgx.Identifier{d.Name}.Sanitize()))
+	return execOn(ctx, d.serverDSN, fmt.Sprintf(`DROP DATABASE IF EXISTS %q WITH (FORCE)`, d.Name))
 }
 
 // Exec runs setup statements as the superuser in the run's database.
 func (d *DB) Exec(ctx context.Context, sql string, args ...any) error {
-	return pgcommon.RunInTx(ctx, d.Super, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+	return pgcommon.RunInTx(ctx, d.Super, pgcommon.TxOptions{}, func(ctx context.Context, tx pgcommon.Tx) error {
 		_, err := tx.Exec(ctx, sql, args...)
 		return err
 	})
@@ -103,7 +108,7 @@ func (d *DB) Exec(ctx context.Context, sql string, args ...any) error {
 // Scalar reads one value as the superuser (assertions).
 func Scalar[T any](ctx context.Context, d *DB, sql string, args ...any) (T, error) {
 	var v T
-	err := pgcommon.RunInTx(ctx, d.Super, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+	err := pgcommon.RunInTx(ctx, d.Super, pgcommon.TxOptions{}, func(ctx context.Context, tx pgcommon.Tx) error {
 		return tx.QueryRow(ctx, sql, args...).Scan(&v)
 	})
 	return v, err
@@ -117,7 +122,7 @@ func execOn(ctx context.Context, dsn string, stmts ...string) error {
 		return err
 	}
 	defer p.Close()
-	return p.WithConn(ctx, func(ctx context.Context, c *pgxpool.Conn) error {
+	return p.WithConn(ctx, func(ctx context.Context, c *pgcommon.Conn) error {
 		for _, s := range stmts {
 			if _, err := c.Exec(ctx, s); err != nil {
 				return fmt.Errorf("%s: %w", strings.Fields(s)[0], err)
@@ -155,7 +160,7 @@ func Certified(ctx context.Context, dsn, provider, adapterVersion, suite string)
 	}
 	defer p.Close()
 	var n int
-	err = p.WithConn(ctx, func(ctx context.Context, c *pgxpool.Conn) error {
+	err = p.WithConn(ctx, func(ctx context.Context, c *pgcommon.Conn) error {
 		return c.QueryRow(ctx, `SELECT count(*) FROM provider_certifications
 			WHERE provider = $1 AND adapter_version = $2 AND suite_version = $3 AND status IN ('passed','exempt')`,
 			provider, adapterVersion, suite).Scan(&n)

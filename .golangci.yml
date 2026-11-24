@@ -42,6 +42,23 @@ linters:
               desc: "logs go through gincommon's logger (port.Logger)"
             - pkg: "go.uber.org/zap"
               desc: "logs go through gincommon's logger (port.Logger)"
+        # LLD §3.3, §4, BIL-OPS-1: every connection, setting and statement
+        # goes through platform-pgcommon (NewPool, ConfigFromEnv,
+        # RunInTx*, pgcommon.Tx / Row / Rows / ErrNoRows, SQLSTATE helpers).
+        database:
+          files:
+            - "$all"
+          deny:
+            - pkg: "github.com/jackc/pgx"
+              desc: "use platform-pgcommon (NewPool, RunInTx, pgcommon.Tx/Row/Rows/ErrNoRows)"
+            - pkg: "github.com/jackc/pgconn"
+              desc: "use platform-pgcommon's SQLSTATE helpers (SQLState, Is*)"
+            - pkg: "github.com/jackc/puddle"
+              desc: "use platform-pgcommon pools"
+            - pkg: "database/sql"
+              desc: "this service uses platform-pgcommon, not database/sql"
+            - pkg: "github.com/lib/pq"
+              desc: "this service uses platform-pgcommon"
     # A default branch is an explicit choice for the rest of an enum (as with
     # provider enums Billing does not mirror).
     exhaustive:

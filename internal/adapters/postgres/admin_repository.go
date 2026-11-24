@@ -5,8 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
@@ -78,7 +76,7 @@ func (r *AdminRepository) ReplayLedger(ctx context.Context, provider, eventID, n
 const certColumns = `id::text, provider, adapter_version, provider_api_version, suite_version, status, proration_mode, certified_by::text,
   certified_at, reviewed_by::text, reviewed_at`
 
-func scanCert(row pgx.Row) (domain.Certification, error) {
+func scanCert(row pgcommon.Row) (domain.Certification, error) {
 	var c domain.Certification
 	err := row.Scan(&c.ID, &c.Provider, &c.AdapterVersion, &c.ProviderAPIVersion, &c.SuiteVersion, &c.Status, &c.ProrationMode,
 		&c.CertifiedBy, &c.CertifiedAt, &c.ReviewedBy, &c.ReviewedAt)
@@ -112,7 +110,7 @@ func (r *AdminRepository) Certification(ctx context.Context, id string) (domain.
 		c, err = scanCert(q.QueryRow(ctx, `SELECT `+certColumns+` FROM provider_certifications WHERE id = $1::uuid`, id))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return c, false, nil
 	}
 	return c, err == nil, err
@@ -128,7 +126,7 @@ func (r *AdminRepository) ReviewCertification(ctx context.Context, id string, st
 			review_reason = $5 WHERE id = $1::uuid AND status = 'pending_review' RETURNING `+certColumns, id, status, by, at, reason))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return out, domain.NewError(domain.ErrCertificationNotPending, "the record is not pending review")
 	}
 	return out, err
@@ -143,7 +141,7 @@ func (r *AdminRepository) RevokeCertification(ctx context.Context, id, by, reaso
 			revoked_reason = $4 WHERE id = $1::uuid AND status = 'passed' RETURNING `+certColumns, id, by, at, reason))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return out, domain.NewError(domain.ErrCertificationNotActive, "only a passed certification can be revoked")
 	}
 	return out, err

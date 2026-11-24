@@ -9,8 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/eventbus"
 	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
@@ -28,7 +26,7 @@ type outboxRow struct {
 func outboxFor(t *testing.T, tenant string) []outboxRow {
 	t.Helper()
 	var rows []outboxRow
-	err := pgcommon.RunInTx(context.Background(), superPool, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+	err := pgcommon.RunInTx(context.Background(), superPool, pgcommon.TxOptions{}, func(ctx context.Context, tx pgcommon.Tx) error {
 		r, err := tx.Query(ctx, `SELECT ordering_key, ordering_seq, payload::text FROM outbox_events WHERE tenant_id = $1 ORDER BY ordering_seq`, tenant)
 		if err != nil {
 			return err

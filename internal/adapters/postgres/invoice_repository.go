@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
@@ -137,7 +136,7 @@ func (r *InvoiceRepository) List(ctx context.Context, tenantID, status, kind, af
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (port.InvoiceRow, error) {
+		out, err = collect(rows, func(row pgcommon.Row) (port.InvoiceRow, error) {
 			var v port.InvoiceRow
 			err := row.Scan(&v.InvoiceID, &v.Number, &v.Kind, &v.Status, &v.Currency, &v.AmountDueMinor, &v.AmountPaidMinor,
 				&v.AmountRefundedMinor, &v.PeriodStart, &v.PeriodEnd, &v.IssuedAt, &v.PaidAt, &v.HostedURL, &v.HeldForReview)

@@ -183,11 +183,12 @@ func runJob(ctx context.Context, name string, d deps, log port.Logger) (int, str
 // build opens the pools and builds the use cases. Jobs never start the
 // webhook processor, consumers or outbox publisher (the server pods do).
 func build(ctx context.Context, cfg config.Config, m *metrics.Metrics, log port.Logger) (deps, func(), error) {
-	appPool, sysPool, err := bootstrap.Pools(ctx, cfg, cfg.AppName+"-jobs", log)
+	pools, err := bootstrap.Pools(ctx, cfg, cfg.AppName+"-jobs", log)
 	if err != nil {
 		return deps{}, nil, err
 	}
-	closers := []func(){appPool.Close, sysPool.Close}
+	appPool, sysPool := pools.App, pools.System
+	closers := []func(){pools.Close}
 	closeAll := func() {
 		for i := len(closers) - 1; i >= 0; i-- {
 			closers[i]()
@@ -201,8 +202,7 @@ func build(ctx context.Context, cfg config.Config, m *metrics.Metrics, log port.
 	if _, err := registry.Refresh(ctx); err != nil {
 		log.Warn("provider registry: certification read failed; running work continues", map[string]any{"error": err.Error()})
 	}
-	appCfg, _ := pgadapter.AppPoolConfig(log) // the drainer pool reuses the app DSN host
-	auditP, err := bootstrap.Audit(ctx, cfg, appCfg, appPool, cfg.AppEnv, log)
+	auditP, err := bootstrap.Audit(ctx, cfg, appPool, cfg.AppEnv, log)
 	if err != nil {
 		return fail(err)
 	}

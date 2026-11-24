@@ -3,8 +3,6 @@ package postgres
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
 )
@@ -43,7 +41,7 @@ func (r *FollowUpRepository) Due(ctx context.Context, autoPause bool, limit int)
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (port.FollowUp, error) {
+		out, err = collect(rows, func(row pgcommon.Row) (port.FollowUp, error) {
 			var f port.FollowUp
 			return f, row.Scan(&f.TenantID, &f.BillingSubscriptionID, &f.Action, &f.SessionID)
 		})

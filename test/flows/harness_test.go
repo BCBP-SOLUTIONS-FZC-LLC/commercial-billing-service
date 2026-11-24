@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -89,7 +88,7 @@ func withUser(dsn, user string) string {
 }
 
 func sql(ctx context.Context, q string, args ...any) error {
-	return pgcommon.RunInTx(ctx, superPool, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+	return pgcommon.RunInTx(ctx, superPool, pgcommon.TxOptions{}, func(ctx context.Context, tx pgcommon.Tx) error {
 		_, err := tx.Exec(ctx, q, args...)
 		return err
 	})
@@ -99,7 +98,7 @@ func sql(ctx context.Context, q string, args ...any) error {
 func scalar[T any](t *testing.T, q string, args ...any) T {
 	t.Helper()
 	var v T
-	err := pgcommon.RunInTx(context.Background(), superPool, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+	err := pgcommon.RunInTx(context.Background(), superPool, pgcommon.TxOptions{}, func(ctx context.Context, tx pgcommon.Tx) error {
 		return tx.QueryRow(ctx, q, args...).Scan(&v)
 	})
 	if err != nil {

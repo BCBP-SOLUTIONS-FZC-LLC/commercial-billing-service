@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-
 	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
 )
@@ -36,7 +34,7 @@ func TestBIL_RLS_1_EveryTenantTableForcesRLS(t *testing.T) {
 	ctx := context.Background()
 	var missing []string
 	checked := 0
-	err := pgcommon.RunInTx(ctx, superPool, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+	err := pgcommon.RunInTx(ctx, superPool, pgcommon.TxOptions{}, func(ctx context.Context, tx pgcommon.Tx) error {
 		rows, err := tx.Query(ctx, `
 			SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity,
 			       EXISTS (SELECT 1 FROM pg_policies p WHERE p.tablename = c.relname AND p.policyname = 'tenant_isolation')
@@ -113,7 +111,7 @@ func TestRLSWithCheck(t *testing.T) {
 		t.Fatalf("moving a row to another tenant must fail, got %v", err)
 	}
 	var affected int64
-	err = pgcommon.RunInTx(asTenant(ctx, b.Tenant), appPool, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+	err = pgcommon.RunInTx(asTenant(ctx, b.Tenant), appPool, pgcommon.TxOptions{}, func(ctx context.Context, tx pgcommon.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE billing_accounts SET company_name = 'hijack' WHERE tenant_id = $1`, a.Tenant)
 		affected = tag.RowsAffected()
 		return err

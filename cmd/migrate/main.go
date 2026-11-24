@@ -50,7 +50,7 @@ func run() int {
 	}
 	defer func() { _ = gincommon.Shutdown(log) }()
 
-	dsn := pgadapter.MigrationDSNFromEnv()
+	dsn := pgadapter.MigrationDSN()
 	if dsn == "" {
 		log.Error("migrate: no database DSN; set MIGRATION_DATABASE_URL (direct to Postgres, not PgBouncer)", nil)
 		return 1

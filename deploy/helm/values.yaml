@@ -100,10 +100,10 @@ env:
   LOG_LEVEL: info
   RUN_MIGRATIONS: "false"             # the migrate hook Job owns migrations
   MIGRATE_TIMEOUT: 10m
-  # Postgres (§4). The DSNs are secrets: DATABASE_URL (billing_app, RLS),
-  # SYSTEM_DATABASE_URL (billing_system), MIGRATION_DATABASE_URL (direct RDS,
-  # not PgBouncer). The audit drainer pool reuses DATABASE_URL's host with
-  # its own role (§3.3).
+  # Postgres (§4), read by platform-pgcommon (ConfigFromEnv). Secrets:
+  # DATABASE_URL (billing_app, RLS) and MIGRATION_DATABASE_URL (direct RDS,
+  # not PgBouncer). The system and audit-drainer pools are the same pgcommon
+  # config with their own role (PG_SYSTEM_* / PG_AUDIT_DRAINER_*, §3.3).
   PG_SSLMODE: require
   PG_SYSTEM_USER: billing_system
   PG_AUDIT_DRAINER_USER: billing_audit_drainer
@@ -112,6 +112,8 @@ env:
   PG_SYSTEM_MAX_CONNS: "4"
   PG_AUDIT_DRAINER_MAX_CONNS: "2"
   PG_BOUNCER_MODE: "true"
+  PG_STATEMENT_TIMEOUT: 5s     # per statement (pgcommon), §12
+  PG_LOCK_TIMEOUT: 2s
   # Bus (§7).
   AWS_REGION: ap-south-1
   SNS_BILLING_EVENTS_TOPIC_ARN: ""
@@ -156,7 +158,6 @@ env:
 # Secret keys (§10.5): never in values; OpenBao via External Secrets Operator.
 secretKeys:
   - DATABASE_URL
-  - SYSTEM_DATABASE_URL
   - PG_SYSTEM_PASSWORD
   - PG_AUDIT_DRAINER_PASSWORD
   - MIGRATION_DATABASE_URL

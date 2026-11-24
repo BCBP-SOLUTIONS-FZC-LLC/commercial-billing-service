@@ -6,8 +6,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
@@ -50,7 +48,7 @@ func (r *ReconRepository) Claim(ctx context.Context, worker string) (port.ReconR
 			RETURNING run_id::text, provider, window_start, window_end, auto_repair, started_by::text`, worker).
 			Scan(&run.RunID, &run.Provider, &run.WindowStart, &run.WindowEnd, &run.AutoRepair, &run.StartedBy)
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return run, false, nil
 	}
 	return run, err == nil, err
@@ -95,7 +93,7 @@ func (r *ReconRepository) Get(ctx context.Context, runID string) (port.ReconRun,
 		if err != nil {
 			return err
 		}
-		findings, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (port.ReconFinding, error) {
+		findings, err = collect(rows, func(row pgcommon.Row) (port.ReconFinding, error) {
 			var f port.ReconFinding
 			var bv, pv string
 			err := row.Scan(&f.TenantID, &f.Kind, &bv, &pv, &f.AutoRepaired, &f.RepairNote)
@@ -104,7 +102,7 @@ func (r *ReconRepository) Get(ctx context.Context, runID string) (port.ReconRun,
 		})
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return run, nil, false, nil
 	}
 	return run, findings, err == nil, err
@@ -146,7 +144,7 @@ func (r *ReconRepository) KnownIDs(ctx context.Context, provider, kind string, i
 		if err != nil {
 			return err
 		}
-		ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		ids, err := collect(rows, scanOne[string])
 		for _, id := range ids {
 			out[id] = true
 		}
@@ -164,7 +162,7 @@ func (r *ReconRepository) UnknownCustomerEvents(ctx context.Context, provider st
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		out, err = collect(rows, scanOne[string])
 		return err
 	})
 	return out, err

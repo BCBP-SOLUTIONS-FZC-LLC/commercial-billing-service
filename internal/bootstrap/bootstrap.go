@@ -121,7 +121,7 @@ type AuditParts struct {
 // Audit reads AUDIT_* (failing fast on a malformed value), registers
 // the library metrics, checks billing_app can enqueue, and builds the
 // runner on the billing_audit_drainer pool.
-func Audit(ctx context.Context, cfg config.Config, appCfg pgcommon.Config, appPool *pgcommon.Pool, env string, log port.Logger) (*AuditParts, error) {
+func Audit(ctx context.Context, cfg config.Config, appPool *pgcommon.Pool, env string, log port.Logger) (*AuditParts, error) {
 	acfg, err := auditconfig.FromEnv("")
 	if err != nil {
 		return nil, fmt.Errorf("AUDIT_* configuration: %w", err)
@@ -142,7 +142,8 @@ func Audit(ctx context.Context, cfg config.Config, appCfg pgcommon.Config, appPo
 		log.Warn("PG_AUDIT_DRAINER_PASSWORD unset; audit entries queue in pending_audit_entries and are not delivered (dev only)", nil)
 		return out, nil
 	}
-	dcfg, err := pgadapter.AuditDrainerPoolConfig(appCfg.DSN, cfg.PGAuditDrainerUser, cfg.PGAuditDrainerPassword, int32(cfg.PGAuditDrainerMaxConns), log)
+	dcfg, err := pgadapter.AuditDrainerConfig(pgadapter.Role{User: cfg.PGAuditDrainerUser, Password: cfg.PGAuditDrainerPassword,
+		MaxConns: int32(cfg.PGAuditDrainerMaxConns)}, log)
 	if err != nil {
 		return nil, err
 	}
@@ -178,21 +179,20 @@ func Events() (port.EventEnqueuer, error) {
 }
 
 // Pools opens the app pool (billing_app, RLS) and the system pool
-// (billing_system), traced like the server's (§11.3).
-func Pools(ctx context.Context, cfg config.Config, serviceName string, log port.Logger) (appPool, sysPool *pgcommon.Pool, err error) {
-	appCfg, warnings := pgadapter.AppPoolConfig(log)
-	for _, w := range warnings {
+// (billing_system) through pgcommon (pgadapter.OpenPools), traced like the
+// server's (§11.3).
+func Pools(ctx context.Context, cfg config.Config, serviceName string, log port.Logger) (*pgadapter.Pools, error) {
+	p, err := pgadapter.OpenPools(ctx, pgadapter.PoolOptions{
+		System: pgadapter.Role{User: cfg.PGSystemUser, Password: cfg.PGSystemPassword, MaxConns: int32(cfg.PGSystemMaxConns)},
+		Tracer: gincommon.NewSpanTracer(serviceName), Log: log})
+	if err != nil {
+		return nil, err
+	}
+	for _, w := range p.Warnings {
 		log.Warn("postgres config warning", map[string]any{"key": w.Key, "reason": w.Reason})
 	}
-	appCfg.Tracer = gincommon.NewSpanTracer(serviceName)
-	if appPool, err = pgcommon.NewPool(ctx, appCfg); err != nil {
-		return nil, nil, fmt.Errorf("connect app pool: %w", err)
+	if p.SystemReusesApp {
+		log.Warn("PG_SYSTEM_PASSWORD not set; the system pool runs as billing_app and cross-tenant queries are RLS-filtered (dev only)", nil)
 	}
-	sysCfg := pgadapter.SystemPoolConfig(pgadapter.SystemDSNFromEnv(), int32(cfg.PGSystemMaxConns), log)
-	sysCfg.Tracer = gincommon.NewSpanTracer(serviceName)
-	if sysPool, err = pgcommon.NewPool(ctx, sysCfg); err != nil {
-		appPool.Close()
-		return nil, nil, fmt.Errorf("connect system pool: %w", err)
-	}
-	return appPool, sysPool, nil
+	return p, nil
 }

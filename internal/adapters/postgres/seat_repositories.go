@@ -5,8 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
@@ -27,7 +25,7 @@ const seatPurchaseColumns = `purchase_id::text, tenant_id::text, billing_subscri
   amount_unrounded_minor::text, deferred_amount_minor, deferral_reason, status, provider_invoice_id, client_action::text,
   requested_by::text, idempotency_key, confirmed_at, created_at, updated_at`
 
-func scanSeatPurchase(row pgx.Row) (domain.SeatPurchase, error) {
+func scanSeatPurchase(row pgcommon.Row) (domain.SeatPurchase, error) {
 	var p domain.SeatPurchase
 	var action *string
 	err := row.Scan(&p.PurchaseID, &p.TenantID, &p.BillingSubscriptionID, &p.Reason, &p.SeatsAdded, &p.SeatsBefore, &p.SeatsAfter,
@@ -82,7 +80,7 @@ func (r *SeatPurchaseRepository) one(ctx context.Context, where string, args ...
 		p, err = scanSeatPurchase(q.QueryRow(ctx, `SELECT `+seatPurchaseColumns+` FROM seat_purchases `+where, args...))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return p, false, nil
 	}
 	return p, err == nil, err
@@ -99,7 +97,7 @@ func (r *SeatPurchaseRepository) List(ctx context.Context, tenantID, afterID str
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.SeatPurchase, error) { return scanSeatPurchase(row) })
+		out, err = collect(rows, func(row pgcommon.Row) (domain.SeatPurchase, error) { return scanSeatPurchase(row) })
 		return err
 	})
 	return out, err
@@ -129,7 +127,7 @@ const scheduleColumns = `schedule_id::text, tenant_id::text, billing_subscriptio
   seats_in_use_at_apply, renewal_seats, final_seats, provider_schedule_id, skip_reason, requested_by::text, record_version,
   created_at, updated_at`
 
-func scanSchedule(row pgx.Row) (domain.SeatChangeSchedule, error) {
+func scanSchedule(row pgcommon.Row) (domain.SeatChangeSchedule, error) {
 	var s domain.SeatChangeSchedule
 	err := row.Scan(&s.ScheduleID, &s.TenantID, &s.BillingSubscriptionID, &s.TargetSeats, &s.EffectiveAt, &s.Status,
 		&s.SeatsInUseAtApply, &s.RenewalSeats, &s.FinalSeats, &s.ProviderScheduleID, &s.SkipReason, &s.RequestedBy,
@@ -169,7 +167,7 @@ func (r *ScheduleRepository) one(ctx context.Context, where string, args ...any)
 		s, err = scanSchedule(q.QueryRow(ctx, `SELECT `+scheduleColumns+` FROM seat_change_schedules `+where, args...))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return s, false, nil
 	}
 	return s, err == nil, err
@@ -195,7 +193,7 @@ func (r *ScheduleRepository) Due(ctx context.Context, until time.Time, limit int
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.SeatChangeSchedule, error) { return scanSchedule(row) })
+		out, err = collect(rows, func(row pgcommon.Row) (domain.SeatChangeSchedule, error) { return scanSchedule(row) })
 		return err
 	})
 	return out, err
