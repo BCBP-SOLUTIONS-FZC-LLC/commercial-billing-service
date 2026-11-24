@@ -115,20 +115,14 @@ func TestScrapePassesMetricsLint(t *testing.T) {
 }
 
 // knownFindings are open governance items, not defects to hide: the Tier 2
-// commercial_* names await registry ratification (§11.2 "proposed"), and
-// the §11.2 outcome/state label values differ from the platform label
-// vocabulary (raised with the Commercial Team). Remove an entry when it
-// is resolved; the test then guards it.
+// commercial_* names await registry ratification (§11.2 "proposed"). The
+// label-vocabulary findings were resolved in rev 0.38 (result, saga_state).
+// Remove an entry when it is resolved; the test then guards it.
 var knownFindings = []string{
 	"[namespace] commercial_cross_tenant_job_runs_total:",
 	"[namespace] commercial_events_emitted_total:",
 	"[namespace] commercial_operator_actions_total:",
 	"[namespace] commercial_purchase_confirmation_to_event_seconds:",
-	"[label-value] commercial_billing_addon_purchases_total: label outcome=",
-	"[label-value] commercial_billing_rp_convert_attempts_total: label outcome=",
-	"[label-value] commercial_billing_sagas_in_flight: label state=",
-	"[label-value] commercial_billing_seat_changes_total: label outcome=",
-	"[label-value] commercial_billing_webhooks_total: label outcome=",
 }
 
 func knownFinding(line string) bool {

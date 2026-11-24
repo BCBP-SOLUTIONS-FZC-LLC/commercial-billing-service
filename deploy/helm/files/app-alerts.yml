@@ -42,7 +42,7 @@ groups:
           runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/stuck-conversion-saga.md
 
       - alert: BillingSagaFailed
-        expr: max(commercial_billing_sagas_in_flight{service="commercial-billing",state="failed"}) > 0
+        expr: max(commercial_billing_sagas_in_flight{service="commercial-billing",saga_state="failed"}) > 0
         labels:
           severity: sev2
           team: commercial
