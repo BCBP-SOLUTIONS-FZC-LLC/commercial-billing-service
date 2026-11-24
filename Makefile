@@ -71,6 +71,7 @@ arch-lint:
 guards:
 	bash .github/scripts/check-stripe-imports.sh
 	bash .github/scripts/check-outbox-access.sh
+	bash .github/scripts/check-problem-details.sh
 
 # ── Tests (LLD §14) ─────────────────────────────────────────────────────
 .PHONY: test
