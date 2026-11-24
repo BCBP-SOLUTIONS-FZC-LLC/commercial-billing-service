@@ -72,6 +72,7 @@ func startWorkers(cfg config.Config, reg *provider.Registry, appPool, sysPool *p
 		}()
 	}
 	go pollLoop(ctx, cfg.SagaPollInterval, sagaBatch, svc.RunSagas, log, "saga worker")
+	go pollLoop(ctx, followUpInterval, sagaBatch, svc.RunLifecycleFollowUps, log, "lifecycle follow-up")
 	if b.outbox != nil {
 		go func() {
 			if err := b.outbox.Start(ctx); err != nil {
@@ -152,7 +153,10 @@ func apiRoutes(cfg config.Config, ginCfg gincommon.Config, appPool *pgcommon.Poo
 	return api.Register
 }
 
-// sagaBatch is how many due sagas one pass handles.
+// followUpInterval paces the lifecycle follow-ups (§8.8.4, §8.10).
+const followUpInterval = 10 * time.Second
+
+// sagaBatch is how many due sagas (or follow-ups) one pass handles.
 const sagaBatch = 20
 
 // idempotencyLock is §9.2's in-flight lock.

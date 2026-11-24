@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
 )
 
@@ -83,4 +84,39 @@ func (r *InvoiceRepository) OldestOpen(ctx context.Context, tenantID, _ string) 
 		return err
 	})
 	return id, err
+}
+
+// Get implements port.InvoiceRepo (locked).
+func (r *InvoiceRepository) Get(ctx context.Context, invoiceID string) (domain.Invoice, bool, error) {
+	var v domain.Invoice
+	err := inTx(ctx, r.pool, func(q querier) error {
+		return q.QueryRow(ctx, `SELECT invoice_id::text, tenant_id::text, provider, provider_invoice_id, kind, status, currency,
+			amount_due_minor, amount_paid_minor, held_for_review, disposition, disposition_reason, disposed_by::text, disposed_at
+			FROM invoices WHERE invoice_id = $1::uuid FOR UPDATE`, invoiceID).
+			Scan(&v.InvoiceID, &v.TenantID, &v.Provider, &v.ProviderInvoiceID, &v.Kind, &v.Status, &v.Currency, &v.AmountDueMinor,
+				&v.AmountPaidMinor, &v.HeldForReview, &v.Disposition, &v.DispositionReason, &v.DisposedBy, &v.DisposedAt)
+	})
+	if isNoRows(err) {
+		return v, false, nil
+	}
+	return v, err == nil, err
+}
+
+// SetHeld implements port.InvoiceRepo: a draft created while collection is
+// paused waits for B-O16 (BIL-SUB-7).
+func (r *InvoiceRepository) SetHeld(ctx context.Context, invoiceID string) error {
+	return inTx(ctx, r.pool, func(q querier) error {
+		_, err := q.Exec(ctx, `UPDATE invoices SET held_for_review = true, updated_at = now()
+			WHERE invoice_id = $1::uuid AND status = 'draft' AND disposition IS NULL`, invoiceID)
+		return err
+	})
+}
+
+// Dispose implements port.InvoiceRepo (chk_inv_disposition).
+func (r *InvoiceRepository) Dispose(ctx context.Context, invoiceID, action, reason, by string, at time.Time, status string) error {
+	return inTx(ctx, r.pool, func(q querier) error {
+		_, err := q.Exec(ctx, `UPDATE invoices SET disposition = $2, disposition_reason = $3, disposed_by = $4::uuid, disposed_at = $5,
+			status = $6::invoice_status, updated_at = now() WHERE invoice_id = $1::uuid`, invoiceID, action, reason, by, at, status)
+		return err
+	})
 }

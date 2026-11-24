@@ -85,6 +85,15 @@ func (r *CheckoutRepository) SetStatus(ctx context.Context, sessionID, status st
 	})
 }
 
+// ExpireAll implements port.CheckoutRepo: every open session of the tenant
+// (offboarding, §8.8.4).
+func (r *CheckoutRepository) ExpireAll(ctx context.Context, tenantID string) error {
+	return inTx(ctx, r.pool, func(q querier) error {
+		_, err := q.Exec(ctx, `UPDATE checkout_sessions SET status = 'expired' WHERE tenant_id = $1::uuid AND status = 'open'`, tenantID)
+		return err
+	})
+}
+
 // SagaRepository is port.SagaRepo (§4.2.8).
 type SagaRepository struct{ app, sys *pgcommon.Pool }
 

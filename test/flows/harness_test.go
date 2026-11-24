@@ -129,7 +129,7 @@ func (p *fakeProvider) Capabilities() port.ProviderCapabilities {
 	if p.fallback {
 		mode = port.ProrationFallback
 	}
-	return port.ProviderCapabilities{HostedCardEntry: true, RecurringSubscriptions: true, Schedules: true, Proration: mode, Currencies: []string{"USD"}}
+	return port.ProviderCapabilities{HostedCardEntry: true, RecurringSubscriptions: true, Schedules: true, CollectionPause: true, Proration: mode, Currencies: []string{"USD"}}
 }
 
 func (p *fakeProvider) EnsureCustomer(_ context.Context, in port.CustomerInput, key string) (port.CustomerRef, error) {
@@ -228,6 +228,18 @@ func (p *fakeProvider) PayOpenInvoiceLink(_ context.Context, ref port.InvoiceRef
 	return port.URLWithExpiry{URL: "https://invoice.example/" + ref.ProviderInvoiceID, ExpiresAt: time.Now().Add(time.Hour)}, p.record("PayOpenInvoiceLink " + ref.ProviderInvoiceID)
 }
 
+func (p *fakeProvider) PauseCollection(_ context.Context, ref port.SubscriptionRef, pause bool, key string) error {
+	return p.record(fmt.Sprintf("PauseCollection %s %v %s", ref.ProviderSubscriptionID, pause, key))
+}
+
+func (p *fakeProvider) FinalizeInvoice(_ context.Context, ref port.InvoiceRef, key string) error {
+	return p.record("FinalizeInvoice " + ref.ProviderInvoiceID + " " + key)
+}
+
+func (p *fakeProvider) VoidInvoice(_ context.Context, ref port.InvoiceRef, key string) error {
+	return p.record("VoidInvoice " + ref.ProviderInvoiceID + " " + key)
+}
+
 func (p *fakeProvider) called(prefix string) []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -314,12 +326,13 @@ func newEnv(t *testing.T) *env {
 		Prices: pgadapter.NewPriceRepository(appPool), Checkouts: pgadapter.NewCheckoutRepository(appPool), Invoices: pgadapter.NewInvoiceRepository(appPool),
 		Changes: pgadapter.NewPlanChangeRepository(appPool, systemPool), Previews: pgadapter.NewPreviewRepository(appPool),
 		SeatPurchases: pgadapter.NewSeatPurchaseRepository(appPool), Schedules: pgadapter.NewScheduleRepository(appPool, systemPool),
-		Sagas: pgadapter.NewSagaRepository(appPool, systemPool), Emissions: pgadapter.NewEmissionRepository(appPool, systemPool),
+		FollowUps: pgadapter.NewFollowUpRepository(systemPool),
+		Sagas:     pgadapter.NewSagaRepository(appPool, systemPool), Emissions: pgadapter.NewEmissionRepository(appPool, systemPool),
 		Providers: registry{"stripe": e.stripe, "manual": manual}, Core: e.core, RP: e.rp,
 		Events: pgadapter.NewEventEnqueuer(eventbus.Source, eventbus.SpecVersion, schemas.Validate), Audit: pgadapter.NewAuditWriter(enq),
 		Settings: app.Settings{DefaultCurrency: "USD", NewAccountProvider: "stripe", CheckoutTTL: time.Hour, TenantAppBaseURL: "https://app.example",
 			SagaMaxBackoff: 5 * time.Minute, SCAAbandonAfter: 30 * time.Minute, SagaClaim: 45 * time.Second, SeatsAfterConversionDelay: 120 * time.Second, MaxSeatsPerPurchase: 1000, SeatPreviewTTL: 10 * time.Minute, MinChargeMinor: 200, BelowMinimumPolicy: domain.FreeUntilRenewal,
-			FeatureSeatPurchase: true},
+			FeatureSeatPurchase: true, AutoPauseOnOperatorSuspension: true},
 		Now: func() time.Time { return e.now },
 	}
 	return e
@@ -390,3 +403,5 @@ func events(t *testing.T, tenant string) []string {
 	t.Helper()
 	return scalar[[]string](t, `SELECT coalesce(array_agg(event_type ORDER BY ordering_seq), '{}') FROM outbox_events WHERE tenant_id = $1`, tenant)
 }
+
+func errActionRequired() error { return port.ErrActionRequired{ClientSecret: "pi_s"} }

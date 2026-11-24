@@ -83,3 +83,21 @@ func SagaBackoff(attempts int, maxBackoff time.Duration) time.Duration {
 	}
 	return min(d, maxBackoff)
 }
+
+// Invoice is the mirror row (§4.2.13) the use cases read.
+type Invoice struct {
+	InvoiceID         string
+	TenantID          string
+	Provider          string
+	ProviderInvoiceID string
+	Kind              InvoiceKind
+	Status            string
+	Currency          string
+	AmountDueMinor    int64
+	AmountPaidMinor   int64
+	HeldForReview     bool
+	Disposition       *string
+	DispositionReason *string
+	DisposedBy        *string
+	DisposedAt        *time.Time
+}

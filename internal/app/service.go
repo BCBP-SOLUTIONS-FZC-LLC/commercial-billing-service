@@ -21,21 +21,22 @@ type ProviderRegistry interface {
 
 // Settings are the §12 values the use cases read.
 type Settings struct {
-	DefaultCurrency           string
-	NewAccountProvider        string // stripe in Phase 1 (manual only for B-O1)
-	CheckoutTTL               time.Duration
-	TenantAppBaseURL          string
-	SagaMaxBackoff            time.Duration
-	SagaClaim                 time.Duration // lease while RP-3 runs (RP timeout + margin)
-	SeatsAfterConversionDelay time.Duration
-	SCAAbandonAfter           time.Duration
-	MaxSeatsPerPurchase       int
-	SeatPreviewTTL            time.Duration
-	MinChargeMinor            int64
-	BelowMinimumPolicy        domain.BelowMinimumPolicy
-	FeatureDirectSignup       bool
-	FeatureTokenAddons        bool
-	FeatureSeatPurchase       bool
+	DefaultCurrency               string
+	NewAccountProvider            string // stripe in Phase 1 (manual only for B-O1)
+	CheckoutTTL                   time.Duration
+	TenantAppBaseURL              string
+	SagaMaxBackoff                time.Duration
+	SagaClaim                     time.Duration // lease while RP-3 runs (RP timeout + margin)
+	SeatsAfterConversionDelay     time.Duration
+	SCAAbandonAfter               time.Duration
+	MaxSeatsPerPurchase           int
+	SeatPreviewTTL                time.Duration
+	MinChargeMinor                int64
+	BelowMinimumPolicy            domain.BelowMinimumPolicy
+	FeatureDirectSignup           bool
+	AutoPauseOnOperatorSuspension bool
+	FeatureTokenAddons            bool
+	FeatureSeatPurchase           bool
 }
 
 // Service implements the tenant, internal and operator use cases (§5, §8).
@@ -54,6 +55,7 @@ type Service struct {
 	Previews      port.PreviewRepo
 	SeatPurchases port.SeatPurchaseRepo
 	Schedules     port.ScheduleRepo
+	FollowUps     port.FollowUpRepo
 	Sagas         port.SagaRepo
 	Emissions     port.EmissionRepo
 	Providers     ProviderRegistry

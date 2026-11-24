@@ -102,6 +102,7 @@ type CheckoutRepo interface {
 	ByProviderSession(ctx context.Context, providerSessionID string) (domain.CheckoutSession, bool, error)
 	SetProviderSession(ctx context.Context, sessionID, providerSessionID string, expiresAt time.Time) error
 	SetStatus(ctx context.Context, sessionID, status string) error
+	ExpireAll(ctx context.Context, tenantID string) error
 }
 
 // SagaRef names a due saga.
@@ -121,6 +122,20 @@ type InvoiceRepo interface {
 	Mirror(ctx context.Context, tenantID, provider string, v InvoiceView, providerUpdatedAt time.Time) (invoiceID string, err error)
 	Link(ctx context.Context, invoiceID, tenantID, refType, refID string) error
 	OldestOpen(ctx context.Context, tenantID, billingSubscriptionID string) (providerInvoiceID string, err error)
+	Get(ctx context.Context, invoiceID string) (domain.Invoice, bool, error)
+	SetHeld(ctx context.Context, invoiceID string) error
+	Dispose(ctx context.Context, invoiceID, action, reason, by string, at time.Time, status string) error
+}
+
+// FollowUp is one lifecycle follow-up a tenant needs (§8.8.4, §8.10).
+type FollowUp struct {
+	TenantID, BillingSubscriptionID, Action string // pause | resume | close
+}
+
+// FollowUpRepo finds tenants whose IAM lifecycle needs a provider action
+// (system pool, across tenants).
+type FollowUpRepo interface {
+	Due(ctx context.Context, autoPause bool, limit int) ([]FollowUp, error)
 }
 
 // PlanChangeRepo stores plan change requests (§4.2.9).
