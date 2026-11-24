@@ -416,6 +416,12 @@ func (s *Service) RevertConversion(ctx context.Context, c Caller, tenantID strin
 				return err
 			}
 		}
+		// RP-4 put the tenant back on a trial (§8.2 step 3); Billing does not
+		// consume TrialReactivated, so it records that here. Without it the
+		// account stays 'active' and B-P2 / B-O1 refuse to convert it again.
+		if err := s.Accounts.ReturnToTrial(ctx, tenantID, now); err != nil {
+			return err
+		}
 		if disp != nil {
 			if err := s.Money.DecideDispute(ctx, disp.DisputeID, "reverted", c.UserID); err != nil {
 				return err

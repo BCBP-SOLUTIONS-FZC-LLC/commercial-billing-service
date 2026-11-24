@@ -43,6 +43,12 @@ type AccountRepo interface {
 	// MinimiseContact nulls the billing-contact name and email and sets
 	// pii_minimised_at (§15.3); nothing else changes, no row is deleted.
 	MinimiseContact(ctx context.Context, tenantID string, at time.Time) error
+	// ReturnToTrial records that RP-4 returned the tenant to a trial (B-O8,
+	// §8.2 step 3): iam_lifecycle 'trial', no suspension source, and
+	// iam_last_event_at advanced to at so that IAM lifecycle events stamped
+	// before the reversal are skipped (BIL-EVT-3). An offboarded account is
+	// left unchanged.
+	ReturnToTrial(ctx context.Context, tenantID string, at time.Time) error
 }
 
 // SubscriptionRepo stores subscriptions, their seat item and history.

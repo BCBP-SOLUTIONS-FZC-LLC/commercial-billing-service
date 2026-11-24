@@ -101,6 +101,16 @@ func (r *AccountRepository) MinimiseContact(ctx context.Context, tenantID string
 	})
 }
 
+// ReturnToTrial implements port.AccountRepo.
+func (r *AccountRepository) ReturnToTrial(ctx context.Context, tenantID string, at time.Time) error {
+	return inTx(ctx, r.pool, func(q querier) error {
+		_, err := q.Exec(ctx, `UPDATE billing_accounts SET iam_lifecycle = 'trial', iam_suspension_source = NULL,
+			iam_last_event_at = GREATEST(COALESCE(iam_last_event_at, $2), $2)
+			WHERE tenant_id = $1::uuid AND iam_lifecycle <> 'offboarded'`, tenantID, at)
+		return err
+	})
+}
+
 // SetDefaultPM records whether the provider reports a default payment
 // method (no payment-method data is stored, BIL-PCI-2).
 func (r *AccountRepository) SetDefaultPM(ctx context.Context, tenantID string, set bool) error {

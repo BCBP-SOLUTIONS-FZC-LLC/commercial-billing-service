@@ -94,6 +94,8 @@ func TestConversionReversal(t *testing.T) {
 	e := newEnv(t)
 	tenant, sub := e.activeSubscription(t, "pro", 3)
 	mustNoErr(t, sql(ctx, `UPDATE subscriptions SET converted_at = now() WHERE billing_subscription_id = $1::uuid`, sub))
+	// TenantConverted applied: the account is active.
+	mustNoErr(t, sql(ctx, `UPDATE billing_accounts SET iam_lifecycle = 'active', iam_last_event_at = now() WHERE tenant_id = $1::uuid`, tenant))
 	e.mirrorPaid(t, tenant, sub, "in_conv_"+sub, "subscription_create", 20700)
 	d := invoiceState("dp_1_"+sub, "", "needs_response", "", e.now, 0)
 	d.Ref.Kind = domain.ObjectDispute
@@ -120,6 +122,14 @@ func TestConversionReversal(t *testing.T) {
 	}
 	if got := events(t, tenant); len(got) != 0 {
 		t.Fatalf("events %v", got)
+	}
+	// RP-4 returned the tenant to a trial: Billing records it, so the
+	// tenant can convert again through B-P2 (§8.2 step 3, rev 0.46).
+	if got := scalar[string](t, `SELECT iam_lifecycle::text FROM billing_accounts WHERE tenant_id = $1`, tenant); got != "trial" {
+		t.Fatalf("iam_lifecycle %s", got)
+	}
+	if _, err := e.svc.StartCheckout(ctx, owner, tenant, app.CheckoutRequest{Plan: "pro", Interval: "month", LicensedSeats: 5}); err != nil {
+		t.Fatalf("reconversion: %v", err)
 	}
 
 	// Outside the window → 409.
