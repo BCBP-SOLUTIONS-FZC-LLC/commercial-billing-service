@@ -28,6 +28,9 @@ type APIConfig struct {
 	// Disabled lists routes behind a feature flag that is off: they are not
 	// registered, so they answer 404 (§12 feature flags).
 	Disabled map[string]bool
+	// OnOperatorAction counts commercial_operator_actions_total{action,
+	// outcome}: success < 400, failure 4xx, error 5xx (§11.2). Optional.
+	OnOperatorAction func(action, outcome string)
 }
 
 // Route is one endpoint of the catalogue (§5.3).
@@ -107,7 +110,11 @@ func (a *APIConfig) registerInternal(r gin.IRouter) {
 }
 
 func (a *APIConfig) registerOperator(r gin.IRouter) {
-	op := r.Group(operatorPrefix, append(gincommon.ProtectedMiddlewares(a.GinConfig),
+	ids := map[string]string{}
+	for _, d := range operatorRoutes {
+		ids[d.Method+" "+d.Path] = d.ID
+	}
+	op := r.Group(operatorPrefix, append(append([]gin.HandlerFunc{countOperatorAction(ids, a.OnOperatorAction)}, gincommon.ProtectedMiddlewares(a.GinConfig)...),
 		rejectSystemCaller(), requireOperator(a.OperatorPathLive, a.DevLike), bodyLimit(apiBodyLimit), requireJSONContentType())...)
 	for _, d := range operatorRoutes {
 		chain := append([]gin.HandlerFunc{}, d.extra...)
@@ -203,3 +210,26 @@ func noContent(fn func(a *APIConfig, c *gin.Context, who app.Caller) error) hand
 
 // param returns a UUID path parameter or the validation error.
 func param(c *gin.Context, name string) (string, error) { return pathUUID(c, name) }
+
+// countOperatorAction reports every operator call, refused ones included,
+// by route id once the response is written.
+func countOperatorAction(ids map[string]string, on func(action, outcome string)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Next()
+		if on == nil {
+			return
+		}
+		action, ok := ids[c.Request.Method+" "+c.FullPath()]
+		if !ok {
+			action = "unknown"
+		}
+		switch st := c.Writer.Status(); {
+		case st >= 500:
+			on(action, "error")
+		case st >= 400:
+			on(action, "failure")
+		default:
+			on(action, "success")
+		}
+	}
+}

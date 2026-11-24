@@ -148,6 +148,13 @@ func (s *Service) confirmedThisMonth(ctx context.Context, tenantID, pack string)
 
 // PurchaseTokenAddon is B-P20 (§8.7).
 func (s *Service) PurchaseTokenAddon(ctx context.Context, c Caller, tenantID string, r AddonPurchaseRequest) (PurchaseView, error) {
+	ctx, end := StartSpan(ctx, "billing.addon.purchase", AttrTenant.String(tenantID))
+	out, err := s.purchaseTokenAddon(ctx, c, tenantID, r)
+	end(err)
+	return out, err
+}
+
+func (s *Service) purchaseTokenAddon(ctx context.Context, c Caller, tenantID string, r AddonPurchaseRequest) (PurchaseView, error) {
 	if !r.AcceptTerms {
 		return PurchaseView{}, domain.NewError(domain.ErrTermsNotAccepted, "accept the add-on terms (non-refundable, 12-month expiry)")
 	}
@@ -216,6 +223,8 @@ func (s *Service) PurchaseTokenAddon(ctx context.Context, c Caller, tenantID str
 			p.Status = domain.PurchaseFailed
 			return s.Addons.Update(ctx, p)
 		})
+		s.metrics().AddonPurchase(p.PackCode, "declined")
+		s.metrics().PaymentFailure(declineReason(code))
 		return PurchaseView{}, domain.NewError(domain.ErrPaymentDeclined, "payment declined").With("decline_reason", declineReason(code))
 	case errors.As(err, &action) || err == nil && res.Outcome.Status == port.PaymentRequiresAction:
 		secret := action.ClientSecret
@@ -247,6 +256,7 @@ func (s *Service) PurchaseTokenAddon(ctx context.Context, c Caller, tenantID str
 			if err := s.confirmAddon(ctx, &cur, metaFor(c)); err != nil {
 				return err
 			}
+			s.metrics().PurchaseToEvent(port.PurchaseKindTokenAddon, 0)
 		} else if err := s.Addons.Update(ctx, cur); err != nil {
 			return err
 		}
@@ -275,7 +285,11 @@ func (s *Service) confirmAddon(ctx context.Context, p *domain.QuotaAddonPurchase
 		return err
 	}
 	p.Status, p.ConfirmedAt, p.EventID, p.ClientAction = domain.PurchaseConfirmed, &now, &id, nil
-	return s.Addons.Update(ctx, *p)
+	if err := s.Addons.Update(ctx, *p); err != nil {
+		return err
+	}
+	s.metrics().AddonPurchase(p.PackCode, "confirmed")
+	return nil
 }
 
 func addonView(p domain.QuotaAddonPurchase) PurchaseView {
@@ -402,5 +416,6 @@ func (h AddonInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain
 	if err := s.confirmAddon(ctx, &p, webhookMeta()); err != nil {
 		return "", err
 	}
+	s.metrics().PurchaseToEvent(port.PurchaseKindTokenAddon, s.now().Sub(ev.ProviderCreatedAt))
 	return "applied:addon_purchase", nil
 }

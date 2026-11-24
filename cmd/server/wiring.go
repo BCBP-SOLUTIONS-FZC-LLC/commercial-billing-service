@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	httpadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/http"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/metrics"
 	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/provider"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/webhook"
@@ -34,7 +35,7 @@ type workers struct {
 // startWorkers starts the registry refresh, the webhook processor, the
 // outbox publisher, the SQS consumers and the delayed-emission worker.
 func startWorkers(cfg config.Config, reg *provider.Registry, appPool, sysPool *pgcommon.Pool, b *bus, svc *app.Service,
-	auditRunner *auditoutbox.Runner, log port.Logger) *workers {
+	auditRunner *auditoutbox.Runner, m *metrics.Metrics, log port.Logger) *workers {
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &workers{cancel: cancel, done: make(chan struct{}), outbox: b.outbox, consumers: b.consumers, audit: auditRunner, log: log}
 	if auditRunner != nil {
@@ -69,10 +70,12 @@ func startWorkers(cfg config.Config, reg *provider.Registry, appPool, sysPool *p
 		Handlers:    bootstrap.PaymentHandlers(svc),
 		MaxAttempts: cfg.WebhookMaxAttempts,
 		Log:         log,
+		Metrics:     m,
 	}
+	go exportSnapshot(ctx, pgadapter.NewSnapshotRepository(sysPool), m, cfg.SagaAlertAfter, log)
 	go func() {
 		defer close(w.done)
-		go reg.Run(ctx, cfg.ProviderRegistryRefresh, nil)
+		go reg.Run(ctx, cfg.ProviderRegistryRefresh, certifiedGauge(m))
 		proc.Run(ctx, cfg.WebhookPollInterval)
 	}()
 	return w
@@ -106,23 +109,24 @@ func (w *workers) stop(timeout time.Duration) {
 }
 
 // webhookRoute mounts B-W1 (§5.4.3) with no authentication middleware (BIL-AUTH-5).
-func webhookRoute(cfg config.Config, reg *provider.Registry, sysPool *pgcommon.Pool, log port.Logger) func(gin.IRouter) {
+func webhookRoute(cfg config.Config, reg *provider.Registry, sysPool *pgcommon.Pool, m *metrics.Metrics, log port.Logger) func(gin.IRouter) {
 	h := &webhook.Handler{
 		Providers: reg, Ledger: pgadapter.NewLedgerRepository(sysPool), Customers: pgadapter.NewSystemRepository(sysPool),
 		MaxBodyBytes: cfg.WebhookMaxBodyBytes, Log: log,
+		OnSignatureFailure: m.SignatureFailure, OnDuplicate: m.WebhookDuplicate,
 	}
 	return h.Register
 }
 
 // apiRoutes mounts the tenant, internal and operator routes (§5) on the
 // use cases; a route whose flow is not built yet answers 501.
-func apiRoutes(cfg config.Config, ginCfg gincommon.Config, appPool *pgcommon.Pool, svc *app.Service) func(gin.IRouter) {
+func apiRoutes(cfg config.Config, ginCfg gincommon.Config, appPool *pgcommon.Pool, svc *app.Service, m *metrics.Metrics) func(gin.IRouter) {
 	api := &httpadapter.APIConfig{
 		GinConfig: ginCfg, Tenant: svc, Internal: svc, Operator: svc,
 		Idem: &httpadapter.Idempotency{Repo: pgadapter.NewIdempotencyRepository(appPool), Tx: pgadapter.NewTxRunner(appPool),
 			TTL: cfg.IdempotencyTTL, Lock: idempotencyLock},
 		OperatorPathLive: cfg.OperatorPathLive, DevLike: config.IsDevLike(cfg.AppEnv), BFFCallerPrincipal: cfg.BFFCallerPrincipal,
-		Disabled: disabledRoutes(cfg),
+		Disabled: disabledRoutes(cfg), OnOperatorAction: m.OperatorAction,
 	}
 	return api.Register
 }
@@ -154,4 +158,37 @@ func disabledRoutes(cfg config.Config) map[string]bool {
 	set(cfg.FeatureTokenAddons, "B-P19", "B-P20", "B-P21", "B-P22", "B-P23")
 	set(cfg.FeatureSeatPurchase, "B-P6", "B-P7")
 	return off
+}
+
+// snapshotInterval is the §11.2 exporter period for the database gauges.
+const snapshotInterval = 30 * time.Second
+
+// exportSnapshot refreshes the database-derived gauges every 30 s
+// (webhook backlog, sagas, subscriptions, pauses, held drafts, emissions).
+func exportSnapshot(ctx context.Context, r port.SnapshotReader, m *metrics.Metrics, sagaAlertAfter time.Duration, log port.Logger) {
+	t := time.NewTicker(snapshotInterval)
+	defer t.Stop()
+	for {
+		snap, err := r.MetricsSnapshot(ctx, time.Now().Add(-sagaAlertAfter))
+		if err == nil {
+			m.SetSnapshot(snap)
+		} else if ctx.Err() == nil {
+			log.Warn("metrics snapshot failed; gauges keep their last value", map[string]any{"error": err.Error()})
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// certifiedGauge sets commercial_billing_provider_certified from a
+// registry refresh (BIL-PROV-1).
+func certifiedGauge(m *metrics.Metrics) func([]provider.Status) {
+	return func(st []provider.Status) {
+		for _, p := range st {
+			m.ProviderCertified(p.Provider, p.AdapterVersion, p.Enabled)
+		}
+	}
 }

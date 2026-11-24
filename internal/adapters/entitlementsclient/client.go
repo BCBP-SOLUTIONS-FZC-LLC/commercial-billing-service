@@ -25,7 +25,7 @@ var _ port.EntitlementsReader = (*Client)(nil)
 
 // New builds the client (ENTITLEMENTS_BASE_URL, ENTITLEMENTS_TIMEOUT_MS).
 func New(baseURL string, timeout time.Duration) *Client {
-	return &Client{base: strings.TrimRight(baseURL, "/"), http: httpx.New("commercial-entitlements", timeout)}
+	return &Client{base: strings.TrimRight(baseURL, "/"), http: httpx.New("entitlements", timeout)}
 }
 
 // effectiveSet is the part of the response Billing reads. Unknown fields

@@ -41,12 +41,6 @@ func (s *Service) metrics() port.Metrics {
 	return s.Metrics
 }
 
-func (s *Service) warn(msg string, f map[string]any) {
-	if s.Log != nil {
-		s.Log.Warn(msg, f)
-	}
-}
-
 // ── saga-sweeper (§8.2, BIL-OPS-5) ─────────────────────────────────────────
 
 // SweepSagas re-runs due sagas the in-pod worker missed and raises
@@ -71,7 +65,7 @@ func (s *Service) SweepSagas(ctx context.Context) (JobResult, error) {
 			return err
 		})
 		if err == nil && marked && s.Log != nil {
-			s.Log.Error("BillingConversionSagaOverdue: conversion not confirmed 30 minutes after payment (SEV-2)",
+			s.logger(ctx).Error("BillingConversionSagaOverdue: conversion not confirmed 30 minutes after payment (SEV-2)",
 				map[string]any{"saga_id": ref.SagaID, "tenant_id": ref.TenantID, "severity": "SEV-2"})
 		}
 		res.add(err)
@@ -98,7 +92,7 @@ func (s *Service) RunSeatRenewal(ctx context.Context) (JobResult, error) {
 			err = s.applyAhead(ctx, sch)
 		}
 		if err != nil {
-			s.warn("seat-renewal: schedule not processed; retried next run", map[string]any{"schedule_id": sch.ScheduleID, "tenant_id": sch.TenantID, "error": err.Error()})
+			s.logger(ctx).Warn("seat-renewal: schedule not processed; retried next run", map[string]any{"schedule_id": sch.ScheduleID, "tenant_id": sch.TenantID, "error": err.Error()})
 		}
 		res.add(err)
 	}
@@ -139,7 +133,7 @@ func (s *Service) applyAhead(ctx context.Context, sch domain.SeatChangeSchedule)
 		if !s.now().Before(sch.EffectiveAt.Add(-iamGraceBeforeRenew)) {
 			// Never reduce blind: the renewal bills the current count.
 			if s.Log != nil {
-				s.Log.Error("seat reduction skipped: seat usage unavailable before renewal; the renewal bills the current count",
+				s.logger(ctx).Error("seat reduction skipped: seat usage unavailable before renewal; the renewal bills the current count",
 					map[string]any{"tenant_id": sch.TenantID, "schedule_id": sch.ScheduleID, "severity": "SEV-3"})
 			}
 			return s.locked(ctx, sch.TenantID, func(ctx context.Context) error {
@@ -291,7 +285,7 @@ func (s *Service) completeRenewal(ctx context.Context, sch domain.SeatChangeSche
 			return err
 		}
 		if final > cur.TargetSeats && s.Log != nil {
-			s.Log.Info("renewal above the scheduled target (seats in use)", map[string]any{"tenant_id": sch.TenantID, "target_seats": cur.TargetSeats, "final_seats": final})
+			s.logger(ctx).Info("renewal above the scheduled target (seats in use)", map[string]any{"tenant_id": sch.TenantID, "target_seats": cur.TargetSeats, "final_seats": final})
 		}
 		if before == final && topup == nil {
 			return nil
@@ -375,7 +369,7 @@ func (s *Service) RunDowngradeApply(ctx context.Context) (JobResult, error) {
 		}
 		err := s.recheckDowngrade(ctx, req)
 		if err != nil {
-			s.warn("downgrade-apply: request not processed; retried next run", map[string]any{"change_id": req.ChangeID, "tenant_id": req.TenantID, "error": err.Error()})
+			s.logger(ctx).Warn("downgrade-apply: request not processed; retried next run", map[string]any{"change_id": req.ChangeID, "tenant_id": req.TenantID, "error": err.Error()})
 		}
 		res.add(err)
 	}
@@ -428,7 +422,7 @@ func (s *Service) recheckDowngrade(ctx context.Context, req domain.PlanChangeReq
 		}
 	}
 	if s.Log != nil {
-		s.Log.Info("scheduled downgrade blocked at the re-check; the subscription renews on the current plan",
+		s.logger(ctx).Info("scheduled downgrade blocked at the re-check; the subscription renews on the current plan",
 			map[string]any{"tenant_id": req.TenantID, "change_id": req.ChangeID, "blockers": codes})
 	}
 	return s.locked(ctx, req.TenantID, func(ctx context.Context) error {
@@ -516,7 +510,7 @@ func (s *Service) ExpireStale(ctx context.Context) (JobResult, error) {
 			err = s.expireSignup(ctx, w)
 		}
 		if err != nil {
-			s.warn("purchase-expiry: item not expired; retried next run", map[string]any{"kind": w.Kind, "id": w.ID, "tenant_id": w.TenantID, "error": err.Error()})
+			s.logger(ctx).Warn("purchase-expiry: item not expired; retried next run", map[string]any{"kind": w.Kind, "id": w.ID, "tenant_id": w.TenantID, "error": err.Error()})
 		}
 		res.add(err)
 	}
@@ -725,9 +719,9 @@ func (s *Service) checkProjection(ctx context.Context, l port.LiveSubscription) 
 		fields := map[string]any{"tenant_id": l.TenantID, "billing_seats": item.Quantity, "core_licensed_seats": usage.LicensedSeats}
 		if recent > 0 && s.Log != nil {
 			fields["severity"] = "SEV-3"
-			s.Log.Error("seat projection mismatch again within 24 h", fields)
+			s.logger(ctx).Error("seat projection mismatch again within 24 h", fields)
 		} else {
-			s.warn("seat projection mismatch; resync queued", fields)
+			s.logger(ctx).Warn("seat projection mismatch; resync queued", fields)
 		}
 		_, err = s.Emissions.Schedule(ctx, domain.ScheduledEmission{TenantID: l.TenantID, EventType: domain.EventTenantSeatsChanged,
 			PayloadBuilder: domain.BuilderSeatsResync, RefID: l.BillingSubscriptionID, DueAt: now})
@@ -752,7 +746,7 @@ func (s *Service) MinimisePII(ctx context.Context) (JobResult, error) {
 	for _, c := range cands {
 		err := s.minimise(ctx, c)
 		if err != nil {
-			s.warn("pii-minimisation: account not minimised; retried next run", map[string]any{"tenant_id": c.TenantID, "error": err.Error()})
+			s.logger(ctx).Warn("pii-minimisation: account not minimised; retried next run", map[string]any{"tenant_id": c.TenantID, "error": err.Error()})
 		}
 		res.add(err)
 	}
@@ -822,7 +816,7 @@ func (s *Service) RunRepricing(ctx context.Context) (JobResult, error) {
 		for _, l := range page {
 			err := s.reprice(ctx, l)
 			if err != nil {
-				s.warn("renewal-repricing: subscription not repriced; retried next run", map[string]any{"tenant_id": l.TenantID, "error": err.Error()})
+				s.logger(ctx).Warn("renewal-repricing: subscription not repriced; retried next run", map[string]any{"tenant_id": l.TenantID, "error": err.Error()})
 			}
 			res.add(err)
 		}

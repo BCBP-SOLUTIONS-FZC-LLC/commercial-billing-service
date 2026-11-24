@@ -201,6 +201,11 @@ func (s *Service) RunReconciliation(ctx context.Context, _ int) (int, error) {
 		status, errText = "failed", ptr(err.Error())
 	}
 	ctx = context.WithoutCancel(ctx)
+	outcome := "success"
+	if status == "failed" {
+		outcome = "failure"
+	}
+	s.metrics().CrossTenantJobRun("reconciliation", outcome)
 	return 1, s.SysTx.RunInSystemTx(ctx, func(ctx context.Context) error {
 		if err := s.Recon.Finish(ctx, run.RunID, status, counts, errText); err != nil {
 			return err
@@ -419,7 +424,7 @@ func (s *Service) voidOpenInvoices(ctx context.Context, prov port.PaymentProvide
 			continue
 		}
 		if err := prov.VoidInvoice(ctx, port.InvoiceRef{ProviderInvoiceID: inv.ProviderInvoiceID}, "void:"+inv.InvoiceID+":offboarded"); err != nil && s.Log != nil {
-			s.Log.Warn("open invoice not voided at offboarding; left for the provider", map[string]any{"tenant_id": tenantID,
+			s.logger(ctx).Warn("open invoice not voided at offboarding; left for the provider", map[string]any{"tenant_id": tenantID,
 				"invoice_id": inv.InvoiceID, "error": fmt.Sprint(providerErr(err))})
 		}
 	}

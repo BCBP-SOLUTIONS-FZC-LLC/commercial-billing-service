@@ -14,6 +14,13 @@ import (
 // IssueAdjustment is B-O2: a customer balance credit (reduces the next
 // invoice) or debit (adds to it); AL-5 billing.adjustment.issued.
 func (s *Service) IssueAdjustment(ctx context.Context, c Caller, tenantID string, r AdjustmentRequest) (AdjustmentResult, error) {
+	ctx, end := StartSpan(ctx, "billing.adjustment.issue", AttrTenant.String(tenantID))
+	out, err := s.issueAdjustment(ctx, c, tenantID, r)
+	end(err)
+	return out, err
+}
+
+func (s *Service) issueAdjustment(ctx context.Context, c Caller, tenantID string, r AdjustmentRequest) (AdjustmentResult, error) {
 	acct, err := s.account(ctx, tenantID)
 	if err != nil {
 		return AdjustmentResult{}, err
@@ -54,15 +61,15 @@ func (s *Service) IssueAdjustment(ctx context.Context, c Caller, tenantID string
 	}); err != nil {
 		return AdjustmentResult{}, err
 	}
-	s.reviewIfLarge(tenantID, "adjustment", r.Amount.AmountMinor)
+	s.reviewIfLarge(ctx, tenantID, "adjustment", r.Amount.AmountMinor)
 	return AdjustmentResult{AdjustmentID: adj.AdjustmentID, Kind: r.Kind, Amount: r.Amount, ProviderRef: ref}, nil
 }
 
 // reviewIfLarge is HLD §11.6: an adjustment or refund above
 // REVIEW_THRESHOLD_MINOR raises the review alert.
-func (s *Service) reviewIfLarge(tenantID, what string, amount int64) {
+func (s *Service) reviewIfLarge(ctx context.Context, tenantID, what string, amount int64) {
 	if s.Settings.ReviewThresholdMinor > 0 && amount > s.Settings.ReviewThresholdMinor && s.Log != nil {
-		s.Log.Warn("operator money action above REVIEW_THRESHOLD_MINOR (review trigger)", map[string]any{
+		s.logger(ctx).Warn("operator money action above REVIEW_THRESHOLD_MINOR (review trigger)", map[string]any{
 			"tenant_id": tenantID, "kind": what, "amount_minor": amount, "alert": "BillingOperatorReviewNeeded"})
 	}
 }
@@ -78,11 +85,18 @@ func keyOr(c Caller, prefix string) string {
 
 // IssueRefund is B-O3 (§8.11).
 func (s *Service) IssueRefund(ctx context.Context, c Caller, tenantID string, r RefundRequest) (RefundResult, error) {
+	ctx, end := StartSpan(ctx, "billing.refund.issue", AttrTenant.String(tenantID))
+	out, err := s.issueRefund(ctx, c, tenantID, r)
+	end(err)
+	return out, err
+}
+
+func (s *Service) issueRefund(ctx context.Context, c Caller, tenantID string, r RefundRequest) (RefundResult, error) {
 	f, err := s.refund(ctx, c, tenantID, r.InvoiceID, r.Amount.AmountMinor, r.Amount.Currency, r.Category, r.Reason)
 	if err != nil {
 		return RefundResult{}, err
 	}
-	s.reviewIfLarge(tenantID, "refund", f.AmountMinor)
+	s.reviewIfLarge(ctx, tenantID, "refund", f.AmountMinor)
 	return RefundResult{RefundID: f.RefundID, Status: f.Status, Amount: MoneyFrom(domain.Money{AmountMinor: f.AmountMinor, Currency: f.Currency})}, nil
 }
 
@@ -291,7 +305,7 @@ func (h DisputeOpened) Handle(ctx context.Context, tenantID string, ev domain.Pa
 		return "", err
 	}
 	if stored.DisputeID == d.DisputeID && d.RevertDecision == "pending" && s.Log != nil {
-		s.Log.Error("conversion reversal decision needed (SEV-2)", map[string]any{"tenant_id": tenantID, "dispute_id": stored.DisputeID,
+		s.logger(ctx).Error("conversion reversal decision needed (SEV-2)", map[string]any{"tenant_id": tenantID, "dispute_id": stored.DisputeID,
 			"kind": kind, "alert": "BillingReversalDecisionNeeded", "severity": "SEV-2"})
 	}
 	return "applied:dispute_recorded", nil

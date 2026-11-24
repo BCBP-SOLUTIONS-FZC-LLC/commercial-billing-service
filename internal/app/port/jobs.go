@@ -61,34 +61,73 @@ type JobRepo interface {
 	PruneIdempotency(ctx context.Context, now time.Time) (int64, error)
 }
 
-// Metrics records the §11.2 domain metrics the use cases own. The
-// adapter registers them on gincommon's registry; tests use NopMetrics.
+// Purchase kinds for commercial_purchase_confirmation_to_event_seconds.
+const (
+	PurchaseKindSeats           = "seats"
+	PurchaseKindTokenAddon      = "token_addon"
+	PurchaseKindPlan            = "plan"
+	PurchaseKindConversionSeats = "conversion_seats"
+)
+
+// Metrics records the §11.2 counters and histograms the use cases own.
+// Gauges derived from the database come from the exporter (MetricsSnapshot).
+// The adapter is adapters/metrics; tests use NopMetrics or a fake.
 type Metrics interface {
+	PurchaseToEvent(kind string, d time.Duration)
+	SagaConfirmed(kind string, d time.Duration)
+	RPConvertAttempt(outcome string)
+	UnmatchedConversion()
 	DowngradeBlocked(blocker string)
 	RepricingScheduled(direction string)
 	SeatChange(direction, outcome string)
 	SeatProjectionMismatch()
+	ProrationDeferred(currency, reason string, amountMinor int64)
+	AddonPurchase(packCode, outcome string)
+	PaymentFailure(reason string)
+	DunningTransition(to string)
+	InvoiceDisposition(action string)
+	WebhookProcessed(provider, kind, outcome string, receivedToProcessed time.Duration)
 	SagasOverdue(n int)
-	ReconciliationFindings(counts map[[2]string]int) // (kind, repaired) → n
+	ReconciliationFindings(counts map[[2]string]int) // (kind, repaired) → n, last run
+	CrossTenantJobRun(job, outcome string)
 }
 
 // NopMetrics discards everything.
 type NopMetrics struct{}
 
-// DowngradeBlocked implements Metrics.
-func (NopMetrics) DowngradeBlocked(string) {}
+var _ Metrics = NopMetrics{}
 
-// RepricingScheduled implements Metrics.
-func (NopMetrics) RepricingScheduled(string) {}
+func (NopMetrics) PurchaseToEvent(string, time.Duration)                  {}
+func (NopMetrics) SagaConfirmed(string, time.Duration)                    {}
+func (NopMetrics) RPConvertAttempt(string)                                {}
+func (NopMetrics) UnmatchedConversion()                                   {}
+func (NopMetrics) DowngradeBlocked(string)                                {}
+func (NopMetrics) RepricingScheduled(string)                              {}
+func (NopMetrics) SeatChange(string, string)                              {}
+func (NopMetrics) SeatProjectionMismatch()                                {}
+func (NopMetrics) ProrationDeferred(string, string, int64)                {}
+func (NopMetrics) AddonPurchase(string, string)                           {}
+func (NopMetrics) PaymentFailure(string)                                  {}
+func (NopMetrics) DunningTransition(string)                               {}
+func (NopMetrics) InvoiceDisposition(string)                              {}
+func (NopMetrics) WebhookProcessed(string, string, string, time.Duration) {}
+func (NopMetrics) SagasOverdue(int)                                       {}
+func (NopMetrics) ReconciliationFindings(map[[2]string]int)               {}
+func (NopMetrics) CrossTenantJobRun(string, string)                       {}
 
-// SeatChange implements Metrics.
-func (NopMetrics) SeatChange(string, string) {}
+// MetricsSnapshot is the state the exporter reads from the database
+// (system pool) every 30 s for the §11.2 gauges.
+type MetricsSnapshot struct {
+	WebhookBacklog   map[string]int    // ledger status → rows
+	SagasInFlight    map[string]int    // saga state → open sagas
+	SagasOverdue     int               // past SAGA_ALERT_AFTER
+	Subscriptions    map[[3]string]int // (status, plan, provider) → n
+	CollectionPaused map[string]int    // by → n
+	InvoicesHeld     map[string]int    // currency → drafts held without a decision
+	EmissionsPending map[string]int    // builder → pending
+}
 
-// SeatProjectionMismatch implements Metrics.
-func (NopMetrics) SeatProjectionMismatch() {}
-
-// SagasOverdue implements Metrics.
-func (NopMetrics) SagasOverdue(int) {}
-
-// ReconciliationFindings implements Metrics.
-func (NopMetrics) ReconciliationFindings(map[[2]string]int) {}
+// SnapshotReader reads a MetricsSnapshot.
+type SnapshotReader interface {
+	MetricsSnapshot(ctx context.Context, sagaOverdueBefore time.Time) (MetricsSnapshot, error)
+}

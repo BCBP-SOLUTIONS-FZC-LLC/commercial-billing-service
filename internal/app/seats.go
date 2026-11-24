@@ -94,6 +94,13 @@ func (s *Service) PreviewSeats(ctx context.Context, _ Caller, tenantID string, r
 
 // PurchaseSeats is B-P7 (§8.5 step 2–4).
 func (s *Service) PurchaseSeats(ctx context.Context, c Caller, tenantID string, r SeatPurchaseRequest) (PurchaseView, error) {
+	ctx, end := StartSpan(ctx, "billing.seats.purchase", AttrTenant.String(tenantID))
+	out, err := s.purchaseSeats(ctx, c, tenantID, r)
+	end(err)
+	return out, err
+}
+
+func (s *Service) purchaseSeats(ctx context.Context, c Caller, tenantID string, r SeatPurchaseRequest) (PurchaseView, error) {
 	sub, item, _, err := s.seatSubscription(ctx, tenantID)
 	if err != nil {
 		return PurchaseView{}, err
@@ -159,6 +166,8 @@ func (s *Service) PurchaseSeats(ctx context.Context, c Caller, tenantID string, 
 			p.Status = domain.PurchaseFailed
 			return s.SeatPurchases.Update(ctx, p)
 		})
+		s.metrics().SeatChange("purchase", "declined")
+		s.metrics().PaymentFailure(declineReason(code))
 		return PurchaseView{}, domain.NewError(domain.ErrPaymentDeclined, "payment declined; no seats added").With("decline_reason", declineReason(code))
 	case errors.As(err, &action) || err == nil && res.Outcome.Status == port.PaymentRequiresAction:
 		secret := action.ClientSecret
@@ -186,6 +195,10 @@ func (s *Service) PurchaseSeats(ctx context.Context, c Caller, tenantID string, 
 		if res.Outcome.Status == port.PaymentPaid && p.Status == domain.PurchasePendingPayment {
 			if err := s.confirmSeats(ctx, &cur, "api:B-P7", actorOf(c), nil, metaFor(c)); err != nil {
 				return err
+			}
+			s.metrics().PurchaseToEvent(port.PurchaseKindSeats, 0) // paid in the request: the event commits with it
+			if cur.DeferralReason != nil && cur.DeferredAmountMinor != nil {
+				s.metrics().ProrationDeferred(cur.Currency, *cur.DeferralReason, *cur.DeferredAmountMinor)
 			}
 		} else if err := s.SeatPurchases.Update(ctx, cur); err != nil {
 			return err
@@ -230,6 +243,9 @@ func (s *Service) confirmSeats(ctx context.Context, p *domain.SeatPurchase, caus
 		ev.DeferredAmountMinor, ev.DeferralReason = p.DeferredAmountMinor, *p.DeferralReason
 	}
 	_, err = s.Events.Enqueue(ctx, ev, m)
+	if err == nil {
+		s.metrics().SeatChange("purchase", "confirmed")
+	}
 	return err
 }
 
@@ -320,6 +336,7 @@ func (h SeatInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain.
 		webhookMeta()); err != nil {
 		return "", err
 	}
+	s.metrics().PurchaseToEvent(port.PurchaseKindSeats, s.now().Sub(ev.ProviderCreatedAt))
 	return "applied:seat_purchase", nil
 }
 
@@ -329,6 +346,13 @@ const reductionNote = "Renewal bills the greater of %d and the seats in use at r
 
 // ScheduleReduction is B-P10: no provider call and no event (BIL-SEAT-4).
 func (s *Service) ScheduleReduction(ctx context.Context, c Caller, tenantID string, r ReductionRequest) (ScheduleView, error) {
+	ctx, end := StartSpan(ctx, "billing.seats.schedule_reduction", AttrTenant.String(tenantID))
+	out, err := s.scheduleReduction(ctx, c, tenantID, r)
+	end(err)
+	return out, err
+}
+
+func (s *Service) scheduleReduction(ctx context.Context, c Caller, tenantID string, r ReductionRequest) (ScheduleView, error) {
 	// Seats in use for display; a failure leaves the fields null (§5.4.1).
 	var inUse *int
 	if u, err := s.Core.SeatUsage(ctx, tenantID); err == nil {

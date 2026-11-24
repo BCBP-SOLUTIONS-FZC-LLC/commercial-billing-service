@@ -26,6 +26,7 @@ import (
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/api"
 	httpadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/http"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/metrics"
 	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/bootstrap"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/config"
@@ -110,6 +111,12 @@ func run() int {
 		log.Error("init platform-pgcommon metrics", map[string]any{"error": err.Error()})
 		return 1
 	}
+	// Billing's §11.2 metrics on the same registry.
+	billingMetrics, err := metrics.New(gincommon.MetricsRegisterer())
+	if err != nil {
+		log.Error("init billing metrics", map[string]any{"error": err.Error()})
+		return 1
+	}
 
 	// Schema: in Kubernetes the migrate hook Job owns migrations and replicas
 	// run with RUN_MIGRATIONS=false (§12, §19.1); local runs may migrate here.
@@ -165,8 +172,10 @@ func run() int {
 		log.Error("payment providers", map[string]any{"error": err.Error()})
 		return 1
 	}
-	if _, err := registry.Refresh(context.Background()); err != nil {
+	if st, err := registry.Refresh(context.Background()); err != nil {
 		log.Error("provider registry: first certification read failed; no provider enabled for new accounts until the next refresh", map[string]any{"error": err.Error()})
+	} else {
+		certifiedGauge(billingMetrics)(st)
 	}
 
 	// AL-5 direct-write in outbox mode (§3.3, §10.6).
@@ -183,12 +192,14 @@ func run() int {
 	// schema versions are resolved here, so a deploy ahead of schema
 	// registration fails to start), tenant-billing-q (whose TenantConverted
 	// confirms sagas) and usage-billing-q, delayed emissions.
-	svc := bootstrap.NewService(cfg, registry, appPool, sysPool, nil, auditP.Writer, nil, log)
+	svc := bootstrap.NewService(cfg, registry, appPool, sysPool, nil, auditP.Writer, billingMetrics, log)
 	eventBus, err := buildBusWith(context.Background(), cfg, appPool, sysPool, svc, log)
 	if err != nil {
 		log.Error("event bus", map[string]any{"error": err.Error()})
 		return 1
 	}
+	eventBus.events = metrics.CountingEnqueuer{Next: eventBus.events, Metrics: billingMetrics}
+	eventBus.emissions.Events, eventBus.emissions.Metrics = eventBus.events, billingMetrics
 	svc.Events = eventBus.events
 
 	router := httpadapter.NewRouter(httpadapter.RouterConfig{
@@ -198,12 +209,12 @@ func run() int {
 			{Name: "sys_database", Pinger: poolCheck(sysPool)},
 		},
 		Routes: []func(gin.IRouter){
-			webhookRoute(cfg, registry, sysPool, log),
-			apiRoutes(cfg, ginCfg, appPool, svc),
+			webhookRoute(cfg, registry, sysPool, billingMetrics, log),
+			apiRoutes(cfg, ginCfg, appPool, svc, billingMetrics),
 			httpadapter.DocsRoutes(api.AsyncAPI),
 		},
 	})
-	bg := startWorkers(cfg, registry, appPool, sysPool, eventBus, svc, auditP.Runner, log)
+	bg := startWorkers(cfg, registry, appPool, sysPool, eventBus, svc, auditP.Runner, billingMetrics, log)
 
 	srv := &http.Server{
 		Addr:              ":" + strconv.Itoa(cfg.AppPort),

@@ -150,7 +150,19 @@ func (s *Service) history(ctx context.Context, sub domain.Subscription, from *do
 	if plans != nil {
 		h.FromPlan, h.ToPlan = plans[0], plans[1]
 	}
-	return s.Subs.AppendHistory(ctx, h)
+	if err := s.Subs.AppendHistory(ctx, h); err != nil {
+		return err
+	}
+	if from == nil || *from != sub.Status {
+		// §11.4: one INFO line per state transition, with from/to.
+		fromStatus := ""
+		if from != nil {
+			fromStatus = string(*from)
+		}
+		s.logger(ctx).Info("subscription status changed", map[string]any{"tenant_id": sub.TenantID,
+			"billing_subscription_id": sub.BillingSubscriptionID, "from": fromStatus, "to": string(sub.Status), "cause": cause, "actor_id": actor})
+	}
+	return nil
 }
 
 func ptr[T any](v T) *T { return &v }

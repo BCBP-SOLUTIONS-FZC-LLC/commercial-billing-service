@@ -376,3 +376,40 @@ func TestPruneJobs(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The exporter snapshot reads the §11.2 gauges as billing_system.
+func TestMetricsSnapshot(t *testing.T) {
+	e := newEnv(t)
+	_, _ = e.activeSubscription(t, "pro", 3)
+	snap, err := pgadapter.NewSnapshotRepository(systemPool).MetricsSnapshot(context.Background(), time.Now().Add(-30*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Subscriptions[[3]string{"active", "pro", "stripe"}] == 0 {
+		t.Fatalf("subscriptions %+v", snap.Subscriptions)
+	}
+}
+
+// Use cases record their §11.2 metrics.
+func TestUseCaseMetrics(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant, sub := e.activeSubscription(t, "pro", 10)
+	pv, err := e.svc.PreviewSeats(ctx, owner, tenant, app.SeatPreviewRequest{AddSeats: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.PurchaseSeats(ctx, withKey(owner, "k-met-seat"), tenant, app.SeatPurchaseRequest{AddSeats: 1, PreviewID: pv.PreviewID}); err != nil {
+		t.Fatal(err)
+	}
+	if e.metrics.get("purchase_to_event:seats") != 1 || e.metrics.get("seat_change:purchase:confirmed") != 1 {
+		t.Fatalf("seat metrics %v", e.metrics.counts)
+	}
+	failed := invoiceState("in_met_"+sub, sub, "open", "subscription_cycle", time.Now().Add(24*time.Hour), 11)
+	if _, err := e.handle(t, tenant, app.PaymentFailed{S: e.svc}, callback("evt_met_"+sub, "invoice.payment_failed", domain.KindInvoicePaymentFailed), failed); err != nil {
+		t.Fatal(err)
+	}
+	if e.metrics.get("dunning:past_due") != 1 || e.metrics.get("payment_failure:payment_failed") != 1 {
+		t.Fatalf("dunning metrics %v", e.metrics.counts)
+	}
+}

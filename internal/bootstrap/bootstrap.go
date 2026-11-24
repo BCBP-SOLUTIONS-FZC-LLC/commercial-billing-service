@@ -12,6 +12,7 @@ import (
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/entitlementsclient"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/eventbus"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/httpx"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/iamclient"
 	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/provider"
@@ -42,6 +43,7 @@ func Providers(cfg config.Config, sysPool *pgcommon.Pool, log port.Logger) (*pro
 			s, err := stripeadapter.New(stripeadapter.Config{
 				APIKey: cfg.StripeAPIKey, WebhookSecrets: cfg.StripeWebhookSecrets, Tolerance: cfg.WebhookTolerance,
 				Livemode: cfg.AppEnv == "prod", Timeout: cfg.StripeTimeout, MaxRetries: int64(cfg.StripeMaxRetries), MaxRPS: cfg.StripeMaxRPS,
+				HTTPClient: httpx.New("stripe", cfg.StripeTimeout), // spans and platform_dependency_request_seconds (§11.2, §11.3)
 			})
 			if err != nil {
 				return nil, fmt.Errorf("stripe adapter: %w", err)

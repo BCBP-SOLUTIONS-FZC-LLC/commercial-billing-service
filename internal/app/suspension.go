@@ -39,7 +39,7 @@ func (s *Service) RunLifecycleFollowUps(ctx context.Context, limit int) (int, er
 			err = s.applyDefaultPM(ctx, f.TenantID, f.SessionID)
 		}
 		if err != nil && s.Log != nil {
-			s.Log.Warn("lifecycle follow-up failed; retried on the next pass", map[string]any{"tenant_id": f.TenantID, "action": f.Action, "error": err.Error()})
+			s.logger(ctx).Warn("lifecycle follow-up failed; retried on the next pass", map[string]any{"tenant_id": f.TenantID, "action": f.Action, "error": err.Error()})
 		}
 	}
 	return len(due), nil
@@ -271,5 +271,6 @@ func (s *Service) DisposeHeldInvoice(ctx context.Context, c Caller, tenantID, in
 	if err != nil {
 		return DispositionResult{}, err
 	}
+	s.metrics().InvoiceDisposition(r.Action)
 	return DispositionResult{InvoiceID: invoiceID, Status: status, Disposition: r.Action, DisposedBy: c.UserID, DisposedAt: now}, nil
 }

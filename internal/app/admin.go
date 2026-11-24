@@ -71,7 +71,7 @@ func (s *Service) ReplayWebhookEvent(ctx context.Context, c Caller, provider, pr
 		return domain.NewError(domain.ErrLedgerEventNotFound, "no such provider event in the ledger")
 	}
 	if err == nil && s.Log != nil {
-		s.Log.Info("ledger row replayed by an operator", map[string]any{"provider": provider, "provider_event_id": providerEventID,
+		s.logger(ctx).Info("ledger row replayed by an operator", map[string]any{"provider": provider, "provider_event_id": providerEventID,
 			"operator": c.UserID, "reason": r.Reason})
 	}
 	return err

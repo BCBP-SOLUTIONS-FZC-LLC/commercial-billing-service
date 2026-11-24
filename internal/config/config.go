@@ -123,6 +123,9 @@ type Config struct {
 	RPBaseURL           string
 	RPTimeout           time.Duration
 	EntitlementsBaseURL string
+	// PushgatewayURL is where each CronJob pushes its run metric (§13.2);
+	// empty → the outcome is only logged (rev 0.37).
+	PushgatewayURL      string
 	EntitlementsTimeout time.Duration
 
 	// Identity.
@@ -289,6 +292,7 @@ func LoadFrom(getenv func(string) string) (Config, []Problem) {
 	c.RPBaseURL = l.requiredURL("RP_BASE_URL", false)
 	c.RPTimeout = time.Duration(l.intIn("RP_TIMEOUT_MS", 30000, 5000, 60000)) * time.Millisecond
 	c.EntitlementsBaseURL = l.requiredURL("ENTITLEMENTS_BASE_URL", false)
+	c.PushgatewayURL = l.optionalURL("PUSHGATEWAY_URL")
 	c.EntitlementsTimeout = time.Duration(l.intIn("ENTITLEMENTS_TIMEOUT_MS", 1000, 300, 5000)) * time.Millisecond
 
 	c.CommercialSystemPrincipal = l.str("COMMERCIAL_SYSTEM_PRINCIPAL", "00000000-0000-0000-0000-0000000000c1")
@@ -381,6 +385,18 @@ func (l *loader) required(key string) string {
 	v, ok := l.raw(key)
 	if !ok && l.strict {
 		l.fail(key, "required")
+	}
+	return v
+}
+
+// optionalURL is an absolute URL or empty.
+func (l *loader) optionalURL(key string) string {
+	v, ok := l.raw(key)
+	if !ok || v == "" {
+		return ""
+	}
+	if u, err := url.Parse(v); err != nil || u.Scheme == "" || u.Host == "" {
+		l.fail(key, "must be an absolute URL")
 	}
 	return v
 }

@@ -9,11 +9,16 @@ package consumer
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
@@ -37,6 +42,10 @@ type Validator func(eventType string, payload []byte) error
 
 // TenantBilling is the tenant-billing-q handler.
 func TenantBilling(uc *app.LifecycleConsumer, validate Validator, log port.Logger) events.Handler {
+	return traced(tenantBilling(uc, validate, log))
+}
+
+func tenantBilling(uc *app.LifecycleConsumer, validate Validator, log port.Logger) events.Handler {
 	return func(ctx context.Context, env events.Envelope[json.RawMessage]) error {
 		switch env.Type {
 		case app.EventTenantConverted, app.EventTenantSuspended, app.EventTenantReactivated, app.EventTenantOffboarded:
@@ -76,6 +85,10 @@ func TenantBilling(uc *app.LifecycleConsumer, validate Validator, log port.Logge
 
 // UsageBilling is the usage-billing-q handler.
 func UsageBilling(uc *app.UsageConsumer, validate Validator, log port.Logger) events.Handler {
+	return traced(usageBilling(uc, validate, log))
+}
+
+func usageBilling(uc *app.UsageConsumer, validate Validator, log port.Logger) events.Handler {
 	return func(ctx context.Context, env events.Envelope[json.RawMessage]) error {
 		if env.Type != "UsagePeriodClosed" {
 			ignored(log, "usage-billing-q", env)
@@ -159,4 +172,41 @@ func RouteRejectsToDLQ(h events.Handler, dlq events.DLQPublisher, log port.Logge
 		}
 		return nil
 	}
+}
+
+// traced runs a handler in a "billing.consume <type>" span linked to the
+// producer's trace (§11.3). The envelope carries trace_id only, so the link
+// names that trace; its span id is derived from the event id (rev 0.38).
+func traced(h events.Handler) events.Handler {
+	return func(ctx context.Context, env events.Envelope[json.RawMessage]) error {
+		var links []trace.Link
+		if l, ok := producerLink(env.TraceID, env.ID); ok {
+			links = append(links, l)
+		}
+		ctx, end := app.StartLinkedSpan(ctx, "billing.consume "+env.Type, links,
+			app.AttrTenant.String(env.TenantID), attribute.String("messaging.message.id", env.ID))
+		err := h(ctx, env)
+		end(err)
+		return err
+	}
+}
+
+// producerLink builds a link to the producer's trace from the envelope.
+func producerLink(traceID, eventID string) (trace.Link, bool) {
+	tid, err := trace.TraceIDFromHex(traceID)
+	if err != nil || !tid.IsValid() {
+		return trace.Link{}, false
+	}
+	var sid trace.SpanID
+	hexID := strings.ReplaceAll(eventID, "-", "")
+	if len(hexID) >= 16 {
+		if b, err := hex.DecodeString(hexID[len(hexID)-16:]); err == nil {
+			copy(sid[:], b)
+		}
+	}
+	if !sid.IsValid() {
+		sid[7] = 1
+	}
+	sc := trace.NewSpanContext(trace.SpanContextConfig{TraceID: tid, SpanID: sid, TraceFlags: trace.FlagsSampled, Remote: true})
+	return trace.Link{SpanContext: sc, Attributes: []attribute.KeyValue{attribute.String("messaging.producer.trace_id", traceID)}}, true
 }

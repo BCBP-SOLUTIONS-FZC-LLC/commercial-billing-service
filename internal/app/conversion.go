@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 )
@@ -77,6 +79,13 @@ func (s *Service) subscriptionView(ctx context.Context, c Caller, sub domain.Sub
 
 // StartCheckout is B-P2 (§8.1.1).
 func (s *Service) StartCheckout(ctx context.Context, c Caller, tenantID string, r CheckoutRequest) (CheckoutResult, error) {
+	ctx, end := StartSpan(ctx, "billing.checkout.start", AttrTenant.String(tenantID))
+	out, err := s.startCheckout(ctx, c, tenantID, r)
+	end(err)
+	return out, err
+}
+
+func (s *Service) startCheckout(ctx context.Context, c Caller, tenantID string, r CheckoutRequest) (CheckoutResult, error) {
 	plan, interval := domain.PlanCode(r.Plan), domain.BillingInterval(r.Interval)
 	if r.LicensedSeats > s.Settings.MaxSeatsPerPurchase {
 		return CheckoutResult{}, domain.NewError(domain.ErrValidation, "licensed_seats above MAX_SEATS_PER_PURCHASE")
@@ -457,13 +466,20 @@ func (s *Service) RunSagas(ctx context.Context, limit int) (int, error) {
 	}
 	for _, ref := range due {
 		if err := s.runSaga(ctx, ref); err != nil && s.Log != nil {
-			s.Log.Warn("saga attempt failed; retried on the next pass", map[string]any{"saga_id": ref.SagaID, "tenant_id": ref.TenantID, "error": err.Error()})
+			s.logger(ctx).Warn("saga attempt failed; retried on the next pass", map[string]any{"saga_id": ref.SagaID, "tenant_id": ref.TenantID, "error": err.Error()})
 		}
 	}
 	return len(due), nil
 }
 
 func (s *Service) runSaga(ctx context.Context, ref port.SagaRef) error {
+	ctx, end := StartSpan(ctx, "billing.saga.step", AttrTenant.String(ref.TenantID), attribute.String("billing.saga_id", ref.SagaID))
+	err := s.runSagaStep(ctx, ref)
+	end(err)
+	return err
+}
+
+func (s *Service) runSagaStep(ctx context.Context, ref port.SagaRef) error {
 	var saga domain.ConversionSaga
 	var sub domain.Subscription
 	claimed := false
@@ -493,6 +509,7 @@ func (s *Service) runSaga(ctx context.Context, ref port.SagaRef) error {
 	ans := s.RP.Convert(ctx, saga.TenantID, port.ConvertRequest{Plan: sub.Plan, BillingSubscriptionID: sub.BillingSubscriptionID},
 		deref(saga.RPIdempotencyKey))
 	action := domain.ClassifyRP3(ans)
+	s.metrics().RPConvertAttempt(rpOutcome(action, ans.Status))
 
 	return s.locked(ctx, saga.TenantID, func(ctx context.Context) error {
 		cur, found, err := s.Sagas.Get(ctx, saga.SagaID)
@@ -517,7 +534,7 @@ func (s *Service) runSaga(ctx context.Context, ref port.SagaRef) error {
 		default: // RP3Fail: SEV-2, operator decides (B-O9)
 			cur.State, cur.NextAttemptAt, cur.LastErrorCode, cur.LastErrorAt = domain.SagaFailed, nil, &code, &now
 			if s.Log != nil {
-				s.Log.Error("conversion saga failed (SEV-2, runbook §20.1)", map[string]any{"saga_id": cur.SagaID, "tenant_id": cur.TenantID,
+				s.logger(ctx).Error("conversion saga failed (SEV-2, runbook §20.1)", map[string]any{"saga_id": cur.SagaID, "tenant_id": cur.TenantID,
 					"rp_status": ans.Status, "rp_error": ans.ErrorCode, "severity": "SEV-2"})
 			}
 		}
@@ -530,8 +547,15 @@ func (s *Service) runSaga(ctx context.Context, ref port.SagaRef) error {
 // ConfirmConversion is the saga side of TenantConverted: in the event's
 // transaction under the tenant lock; exempt from the recency skip.
 func (s *Service) ConfirmConversion(ctx context.Context, ev TenantLifecycleEvent) (bool, error) {
+	ctx, end := StartSpan(ctx, "billing.saga.confirm", AttrTenant.String(ev.TenantID))
+	out, err := s.confirmConversion(ctx, ev)
+	end(err)
+	return out, err
+}
+
+func (s *Service) confirmConversion(ctx context.Context, ev TenantLifecycleEvent) (bool, error) {
 	if ev.BillingSubscriptionID == "" {
-		s.unmatchedConversion(ev, "no billing_subscription_id")
+		s.unmatchedConversion(ctx, ev, "no billing_subscription_id")
 		return false, nil
 	}
 	saga, found, err := s.Sagas.BySubscription(ctx, ev.BillingSubscriptionID)
@@ -539,7 +563,7 @@ func (s *Service) ConfirmConversion(ctx context.Context, ev TenantLifecycleEvent
 		return false, err
 	}
 	if !found || saga.TenantID != ev.TenantID {
-		s.unmatchedConversion(ev, "no saga")
+		s.unmatchedConversion(ctx, ev, "no saga")
 		return false, nil
 	}
 	if saga.State == domain.SagaConfirmed {
@@ -547,7 +571,7 @@ func (s *Service) ConfirmConversion(ctx context.Context, ev TenantLifecycleEvent
 	}
 	if !domain.CanSagaTransition(saga.State, domain.SagaConfirmed) {
 		if s.Log != nil {
-			s.Log.Warn("TenantConverted for a saga that cannot be confirmed", map[string]any{"saga_id": saga.SagaID, "state": string(saga.State)})
+			s.logger(ctx).Warn("TenantConverted for a saga that cannot be confirmed", map[string]any{"saga_id": saga.SagaID, "state": string(saga.State)})
 		}
 		return true, nil
 	}
@@ -556,6 +580,7 @@ func (s *Service) ConfirmConversion(ctx context.Context, ev TenantLifecycleEvent
 	if err := s.Sagas.Update(ctx, saga); err != nil {
 		return false, err
 	}
+	s.metrics().SagaConfirmed(string(saga.Kind), now.Sub(saga.PaymentConfirmedAt))
 	sub, err := s.Subs.Update(ctx, saga.BillingSubscriptionID, 0, func(x *domain.Subscription) {
 		if x.ConvertedAt == nil {
 			at := ev.Time
@@ -566,7 +591,7 @@ func (s *Service) ConfirmConversion(ctx context.Context, ev TenantLifecycleEvent
 		return false, err
 	}
 	if ev.Plan != "" && ev.Plan != sub.Plan && s.Log != nil {
-		s.Log.Error("plan_mismatch: TenantConverted plan differs from Billing's (Billing's plan wins; reconciliation repairs)",
+		s.logger(ctx).Error("plan_mismatch: TenantConverted plan differs from Billing's (Billing's plan wins; reconciliation repairs)",
 			map[string]any{"tenant_id": ev.TenantID, "event_plan": string(ev.Plan), "billing_plan": string(sub.Plan), "severity": "SEV-3"})
 	}
 	_, err = s.Emissions.Schedule(ctx, domain.ScheduledEmission{TenantID: sub.TenantID, EventType: domain.EventTenantSeatsChanged,
@@ -574,9 +599,24 @@ func (s *Service) ConfirmConversion(ctx context.Context, ev TenantLifecycleEvent
 	return true, err
 }
 
-func (s *Service) unmatchedConversion(ev TenantLifecycleEvent, why string) {
+func (s *Service) unmatchedConversion(ctx context.Context, ev TenantLifecycleEvent, why string) {
+	s.metrics().UnmatchedConversion()
 	if s.Log != nil {
-		s.Log.Error("TenantConverted Billing did not initiate (SEV-3)", map[string]any{"tenant_id": ev.TenantID, "event_id": ev.EventID,
+		s.logger(ctx).Error("TenantConverted Billing did not initiate (SEV-3)", map[string]any{"tenant_id": ev.TenantID, "event_id": ev.EventID,
 			"reason": why, "severity": "SEV-3", "metric": "commercial_billing_unmatched_conversions_total"})
+	}
+}
+
+// rpOutcome is the rp_convert_attempts_total outcome (§11.2).
+func rpOutcome(a domain.RP3Action, status int) string {
+	switch {
+	case a == domain.RP3Advance && status == 200:
+		return "ok"
+	case a == domain.RP3Advance:
+		return "in_progress"
+	case a == domain.RP3Retry:
+		return "retryable"
+	default:
+		return "terminal"
 	}
 }

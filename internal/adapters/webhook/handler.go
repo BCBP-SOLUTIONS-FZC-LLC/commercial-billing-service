@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 )
@@ -26,7 +27,10 @@ type Handler struct {
 	// OnSignatureFailure increments
 	// commercial_billing_webhook_signature_failures_total{provider} (BIL-PAY-2).
 	OnSignatureFailure func(provider string)
-	Log                port.Logger
+	// OnDuplicate counts a redelivery already in the ledger
+	// (commercial_billing_webhooks_total{outcome="duplicate"}).
+	OnDuplicate func(provider, kind string)
+	Log         port.Logger
 }
 
 // Route is the B-W1 path.
@@ -37,6 +41,9 @@ func (h *Handler) Register(r gin.IRouter) { r.POST(Route, h.receive) }
 
 func (h *Handler) receive(c *gin.Context) {
 	name := c.Param("provider")
+	ctx, end := app.StartSpan(c.Request.Context(), "billing.webhook.receive", app.AttrProvider.String(name))
+	defer end(nil)
+	c.Request = c.Request.WithContext(ctx)
 	provider, ok := h.Providers.Loaded(name)
 	if !ok || !provider.Capabilities().WebhookRedelivery {
 		// Unknown provider, or one that sends no callbacks (manual): 404.
@@ -56,7 +63,7 @@ func (h *Handler) receive(c *gin.Context) {
 		problem(c, http.StatusRequestEntityTooLarge, domain.ErrPayloadTooLarge, "webhook body exceeds the limit")
 		return
 	}
-	ctx := c.Request.Context()
+	ctx = c.Request.Context()
 	ev, err := provider.VerifyAndNormalise(ctx, c.Request.Header, body)
 	if err != nil {
 		// BIL-PAY-2: refused, nothing stored. The reason is logged, never returned.
@@ -69,7 +76,10 @@ func (h *Handler) receive(c *gin.Context) {
 		problem(c, http.StatusBadRequest, domain.ErrInvalidSignature, "invalid webhook signature")
 		return
 	}
-	if err := h.store(ctx, ev); err != nil {
+	insertCtx, endInsert := app.StartSpan(ctx, "billing.ledger.insert", app.AttrEventID.String(ev.ProviderEventID))
+	err = h.store(insertCtx, ev)
+	endInsert(err)
+	if err != nil {
 		if h.Log != nil {
 			h.Log.Error("webhook not stored; provider will redeliver", map[string]any{"provider": name, "provider_event_id": ev.ProviderEventID, "error": err.Error()})
 		}
@@ -98,11 +108,14 @@ func (h *Handler) store(ctx context.Context, ev domain.PaymentEvent) error {
 		id := ev.Object.ID
 		objRef = &id
 	}
-	_, err := h.Ledger.Insert(ctx, domain.LedgerEntry{
+	inserted, err := h.Ledger.Insert(ctx, domain.LedgerEntry{
 		Provider: ev.Provider, ProviderEventID: ev.ProviderEventID, EventType: ev.EventType,
 		NormalisedKind: string(ev.Kind), TenantID: tenantID, ProviderObjectRef: objRef, Livemode: ev.Livemode,
 		ProviderCreatedAt: ev.ProviderCreatedAt, Payload: ev.Payload,
 	})
+	if err == nil && !inserted && h.OnDuplicate != nil {
+		h.OnDuplicate(ev.Provider, string(ev.Kind))
+	}
 	return err
 }
 

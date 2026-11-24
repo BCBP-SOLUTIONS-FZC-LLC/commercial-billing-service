@@ -3,8 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app"
 )
@@ -68,11 +74,35 @@ func (nopLog) Error(string, map[string]any) {}
 func TestRunJobExitStatus(t *testing.T) {
 	d := deps{pruneOutbox: func(context.Context, time.Duration) (int64, error) { return 3, nil },
 		pruneProcessed: func(context.Context, time.Duration) (int64, error) { return 0, errors.New("db down") }}
-	if got := runJob(context.Background(), "outbox-prune", d, nopLog{}); got != exitOK {
+	if got, outcome := runJob(context.Background(), "outbox-prune", d, nopLog{}); got != exitOK || outcome != "success" {
 		t.Fatalf("outbox-prune: want %d, got %d", exitOK, got)
 	}
-	if got := runJob(context.Background(), "processed-events-prune", d, nopLog{}); got != exitFailed {
+	if got, outcome := runJob(context.Background(), "processed-events-prune", d, nopLog{}); got != exitFailed || outcome != "failure" {
 		t.Fatalf("processed-events-prune: want %d, got %d", exitFailed, got)
 	}
 	_ = app.JobResult{}
+}
+
+// pushRun PUTs the run's metrics to /metrics/job/<cronjob name>.
+func TestPushRun(t *testing.T) {
+	var path, body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		path, body = r.Method+" "+r.URL.Path, string(b)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	reg := prometheus.NewRegistry()
+	c := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "commercial_cross_tenant_job_runs_total", Help: "h"}, []string{"job", "outcome"})
+	reg.MustRegister(c)
+	c.WithLabelValues("seat-renewal", "success").Inc()
+	if err := pushRun(srv.URL, "seat-renewal", reg); err != nil {
+		t.Fatal(err)
+	}
+	if path != "PUT /metrics/job/seat-renewal" || !strings.Contains(body, "commercial_cross_tenant_job_runs_total") {
+		t.Fatalf("%s %q", path, body)
+	}
+	if err := pushRun("", "seat-renewal", reg); err != nil {
+		t.Fatal("empty URL must be a no-op")
+	}
 }

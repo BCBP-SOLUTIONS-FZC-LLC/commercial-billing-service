@@ -11,11 +11,17 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/push"
+	dto "github.com/prometheus/client_model/go"
+
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/metrics"
 	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
@@ -116,25 +122,72 @@ func execute(name string) int {
 		}
 		return exitFailed
 	}
+	// Metrics identity and tracing as the server's (§11.2, §11.3); the job's
+	// metrics live on their own registry and are pushed after the run.
+	ginCfg := gincommon.Config{Logger: log, ServiceName: cfg.AppName, BuildVersion: cfg.BuildVersion, Domain: "commercial", Environment: cfg.AppEnv}
+	if shutdownTracing, err := gincommon.InitTracingWithConfig(gincommon.TracingConfig{ServiceName: ginCfg.ServiceName,
+		BuildVersion: ginCfg.BuildVersion, Domain: ginCfg.Domain, Environment: ginCfg.Environment, Logger: log}); err == nil {
+		defer shutdownTracing()
+	}
+	_ = gincommon.ObservabilityMiddlewares(ginCfg)
+	reg := prometheus.NewRegistry()
+	jobMetrics, err := metrics.New(reg)
+	if err != nil {
+		log.Error("init job metrics", map[string]any{"error": err.Error()})
+		return exitFailed
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	ctx, cancel := context.WithTimeout(ctx, jobTimeout)
 	defer cancel()
 
-	d, closeAll, err := build(ctx, cfg, log)
+	d, closeAll, err := build(ctx, cfg, jobMetrics, log)
 	if err != nil {
 		log.Error("job setup failed", map[string]any{"job": name, "error": err.Error()})
 		return exitFailed
 	}
 	defer closeAll()
-	return runJob(ctx, name, d, log)
+	code, outcome := runJob(ctx, name, d, log)
+	jobMetrics.CrossTenantJobRun(name, outcome)
+	if err := pushRun(cfg.PushgatewayURL, name, reg); err != nil {
+		log.Warn("job metrics not pushed", map[string]any{"job": name, "error": err.Error()})
+	}
+	return code
+}
+
+// pushRun replaces this CronJob's group on the Pushgateway with the run's
+// metrics. The Pushgateway reserves the job label for the grouping key, so
+// the group is job=<cronjob name> and the metrics' own job label (the same
+// value) is dropped; scraped with honor_labels the series keep
+// {job, outcome} (§13.2). push_time_seconds marks the last run. Empty url →
+// logged only (rev 0.37).
+func pushRun(url, name string, g prometheus.Gatherer) error {
+	if url == "" {
+		return nil
+	}
+	return push.New(url, name).Gatherer(withoutJobLabel{g}).Push()
+}
+
+// withoutJobLabel drops the job label from gathered metrics.
+type withoutJobLabel struct{ next prometheus.Gatherer }
+
+func (w withoutJobLabel) Gather() ([]*dto.MetricFamily, error) {
+	fams, err := w.next.Gather()
+	for _, f := range fams {
+		for _, m := range f.Metric {
+			m.Label = slices.DeleteFunc(m.Label, func(l *dto.LabelPair) bool { return l.GetName() == "job" })
+		}
+	}
+	return fams, err
 }
 
 // runJob runs one job and logs its outcome with the
 // commercial_cross_tenant_job_runs_total labels (job, outcome).
-func runJob(ctx context.Context, name string, d deps, log port.Logger) int {
+func runJob(ctx context.Context, name string, d deps, log port.Logger) (int, string) {
 	started := time.Now()
+	ctx, end := app.StartSpan(ctx, "billing.job "+name)
 	res, err := runners[name](ctx, d)
+	end(err)
 	outcome := "success"
 	switch {
 	case err != nil:
@@ -147,15 +200,15 @@ func runJob(ctx context.Context, name string, d deps, log port.Logger) int {
 	if err != nil {
 		fields["error"] = err.Error()
 		log.Error("job run failed", fields)
-		return exitFailed
+		return exitFailed, outcome
 	}
 	log.Info("job run finished", fields)
-	return exitOK
+	return exitOK, outcome
 }
 
 // build opens the pools and builds the use cases. Jobs never start the
 // webhook processor, consumers or outbox publisher (the server pods do).
-func build(ctx context.Context, cfg config.Config, log port.Logger) (deps, func(), error) {
+func build(ctx context.Context, cfg config.Config, m *metrics.Metrics, log port.Logger) (deps, func(), error) {
 	appPool, sysPool, err := bootstrap.Pools(ctx, cfg, cfg.AppName+"-jobs", log)
 	if err != nil {
 		return deps{}, nil, err
@@ -190,7 +243,7 @@ func build(ctx context.Context, cfg config.Config, log port.Logger) (deps, func(
 	if err != nil {
 		return fail(err)
 	}
-	svc := bootstrap.NewService(cfg, registry, appPool, sysPool, events, auditP.Writer, nil, log)
+	svc := bootstrap.NewService(cfg, registry, appPool, sysPool, metrics.CountingEnqueuer{Next: events, Metrics: m}, auditP.Writer, m, log)
 	return deps{svc: svc, cfg: cfg,
 		pruneOutbox: func(ctx context.Context, d time.Duration) (int64, error) {
 			return pgadapter.PruneOutbox(ctx, appPool, d)

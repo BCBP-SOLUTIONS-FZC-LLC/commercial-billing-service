@@ -403,6 +403,7 @@ type env struct {
 
 // fakeMetrics counts the domain metrics the use cases record.
 type fakeMetrics struct {
+	port.NopMetrics
 	mu     sync.Mutex
 	counts map[string]int
 }
@@ -422,11 +423,19 @@ func (m *fakeMetrics) get(k string) int {
 	return m.counts[k]
 }
 
-func (m *fakeMetrics) DowngradeBlocked(b string)   { m.inc("downgrade_blocked:" + b) }
-func (m *fakeMetrics) RepricingScheduled(d string) { m.inc("repricing:" + d) }
-func (m *fakeMetrics) SeatChange(d, o string)      { m.inc("seat_change:" + d + ":" + o) }
-func (m *fakeMetrics) SeatProjectionMismatch()     { m.inc("seat_projection_mismatch") }
-func (m *fakeMetrics) SagasOverdue(int)            {}
+func (m *fakeMetrics) DowngradeBlocked(b string)                 { m.inc("downgrade_blocked:" + b) }
+func (m *fakeMetrics) RepricingScheduled(d string)               { m.inc("repricing:" + d) }
+func (m *fakeMetrics) SeatChange(d, o string)                    { m.inc("seat_change:" + d + ":" + o) }
+func (m *fakeMetrics) SeatProjectionMismatch()                   { m.inc("seat_projection_mismatch") }
+func (m *fakeMetrics) PurchaseToEvent(k string, _ time.Duration) { m.inc("purchase_to_event:" + k) }
+func (m *fakeMetrics) SagaConfirmed(k string, _ time.Duration)   { m.inc("saga_confirmed:" + k) }
+func (m *fakeMetrics) RPConvertAttempt(o string)                 { m.inc("rp_attempt:" + o) }
+func (m *fakeMetrics) DunningTransition(to string)               { m.inc("dunning:" + to) }
+func (m *fakeMetrics) AddonPurchase(p, o string)                 { m.inc("addon:" + p + ":" + o) }
+func (m *fakeMetrics) PaymentFailure(r string)                   { m.inc("payment_failure:" + r) }
+func (m *fakeMetrics) InvoiceDisposition(a string)               { m.inc("disposition:" + a) }
+func (m *fakeMetrics) CrossTenantJobRun(j, o string)             { m.inc("job:" + j + ":" + o) }
+func (m *fakeMetrics) ProrationDeferred(c, r string, _ int64)    { m.inc("deferred:" + c + ":" + r) }
 func (m *fakeMetrics) ReconciliationFindings(c map[[2]string]int) {
 	for k, n := range c {
 		for range n {

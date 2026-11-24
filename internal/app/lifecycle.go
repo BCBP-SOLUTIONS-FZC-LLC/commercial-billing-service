@@ -17,6 +17,13 @@ const webhookUA = "commercial-billing/webhook"
 // CancelSubscription is B-P12: cancel at period end. No event now:
 // TenantSubscriptionCancelled is emitted when the provider ends it (§8.8.2).
 func (s *Service) CancelSubscription(ctx context.Context, c Caller, tenantID string, r CancelRequest) (SubscriptionView, error) {
+	ctx, end := StartSpan(ctx, "billing.subscription.cancel", AttrTenant.String(tenantID))
+	out, err := s.cancelSubscription(ctx, c, tenantID, r)
+	end(err)
+	return out, err
+}
+
+func (s *Service) cancelSubscription(ctx context.Context, c Caller, tenantID string, r CancelRequest) (SubscriptionView, error) {
 	return s.setAutoRenew(ctx, c, tenantID, r.RecordVersion, false, "api:B-P12")
 }
 
@@ -190,6 +197,8 @@ func (h PaymentFailed) Handle(ctx context.Context, tenantID string, ev domain.Pa
 	if err != nil {
 		return "", err
 	}
+	s.metrics().DunningTransition(string(domain.StatusPastDue))
+	s.metrics().PaymentFailure(failureReason(cur))
 	if err := s.history(ctx, pd, &from, "webhook:"+ev.EventType, domain.CommercialSystemPrincipal, eventRef(ev), nil, nil); err != nil {
 		return "", err
 	}
@@ -242,6 +251,7 @@ func (h SubscriptionEnded) Handle(ctx context.Context, tenantID string, ev domai
 	if err != nil {
 		return "", err
 	}
+	s.metrics().DunningTransition(string(domain.StatusCancelled))
 	if err := s.cancelOpenChanges(ctx, cancelled); err != nil {
 		return "", err
 	}
@@ -335,6 +345,7 @@ func (h CycleInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain
 			ReactivatedAt: now, PreviousStatus: from}, webhookMeta()); err != nil {
 			return "", err
 		}
+		s.metrics().DunningTransition(string(domain.StatusActive))
 		return "applied:reactivated", nil
 	case domain.StatusActive:
 		if hasPeriod && (sub.CurrentPeriodEnd == nil || start.After(sub.CurrentPeriodEnd.Add(-time.Minute))) {
@@ -361,6 +372,13 @@ func (h CycleInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain
 // for a new provider subscription on the same billing_subscription_id
 // (cancelled).
 func (s *Service) Reactivate(ctx context.Context, c Caller, tenantID string, r ReactivateRequest) (ReactivationResult, error) {
+	ctx, end := StartSpan(ctx, "billing.subscription.reactivate", AttrTenant.String(tenantID))
+	out, err := s.reactivate(ctx, c, tenantID, r)
+	end(err)
+	return out, err
+}
+
+func (s *Service) reactivate(ctx context.Context, c Caller, tenantID string, r ReactivateRequest) (ReactivationResult, error) {
 	var (
 		sub  domain.Subscription
 		acct domain.BillingAccount
@@ -479,4 +497,13 @@ func (s *Service) targetPriceFor(ctx context.Context, sub domain.Subscription, i
 		return err
 	})
 	return p, err
+}
+
+// failureReason is the payment_failures_total reason: the mapped decline
+// code when the provider gave one, else "payment_failed".
+func failureReason(cur domain.ProviderObjectState) string {
+	if code, _ := cur.Fields["decline_code"].(string); code != "" {
+		return declineReason(code)
+	}
+	return "payment_failed"
 }

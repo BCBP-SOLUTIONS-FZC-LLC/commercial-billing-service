@@ -26,7 +26,7 @@ var _ port.CoreClient = (*Core)(nil)
 
 // NewCore builds the Core client (CORE_BASE_URL, CORE_TIMEOUT_MS).
 func NewCore(baseURL string, timeout time.Duration) *Core {
-	return &Core{base: strings.TrimRight(baseURL, "/"), http: httpx.New("iam-core", timeout)}
+	return &Core{base: strings.TrimRight(baseURL, "/"), http: httpx.New("core", timeout)}
 }
 
 func (c *Core) tenantURL(tenantID, suffix string) string {
@@ -97,7 +97,7 @@ var _ port.RealmProvisionerClient = (*RealmProvisioner)(nil)
 
 // NewRealmProvisioner builds the RP client (RP_BASE_URL, RP_TIMEOUT_MS).
 func NewRealmProvisioner(baseURL string, timeout time.Duration) *RealmProvisioner {
-	return &RealmProvisioner{base: strings.TrimRight(baseURL, "/"), http: httpx.New("iam-realm-provisioner", timeout)}
+	return &RealmProvisioner{base: strings.TrimRight(baseURL, "/"), http: httpx.New("realm_provisioner", timeout)}
 }
 
 func (c *RealmProvisioner) tenantURL(tenantID, suffix string) string {

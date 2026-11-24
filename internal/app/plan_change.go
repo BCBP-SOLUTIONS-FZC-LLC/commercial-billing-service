@@ -136,6 +136,13 @@ func blockerCodes(c port.PlanChangeCheck) []string {
 
 // ChangePlan is B-P4 (§8.4).
 func (s *Service) ChangePlan(ctx context.Context, c Caller, tenantID string, r PlanChangeRequest) (PlanChangeResult, error) {
+	ctx, end := StartSpan(ctx, "billing.plan.change", AttrTenant.String(tenantID))
+	out, err := s.changePlan(ctx, c, tenantID, r)
+	end(err)
+	return out, err
+}
+
+func (s *Service) changePlan(ctx context.Context, c Caller, tenantID string, r PlanChangeRequest) (PlanChangeResult, error) {
 	target := domain.PlanCode(r.TargetPlan)
 	sub, item, cur, err := s.liveForChange(ctx, tenantID)
 	if err != nil {
@@ -262,7 +269,11 @@ func (s *Service) upgrade(ctx context.Context, c Caller, sub domain.Subscription
 		return out, err
 	}
 	err = s.locked(ctx, sub.TenantID, func(ctx context.Context) error {
-		return s.applyPlanChange(ctx, &req, tp, actorOf(c), "api:B-P4", nil, metaFor(c))
+		if err := s.applyPlanChange(ctx, &req, tp, actorOf(c), "api:B-P4", nil, metaFor(c)); err != nil {
+			return err
+		}
+		s.metrics().PurchaseToEvent(port.PurchaseKindPlan, 0)
+		return nil
 	})
 	out.Status, out.EffectiveAt = string(req.Status), req.EffectiveAt
 	return out, err
@@ -318,6 +329,9 @@ func (s *Service) scheduleDowngrade(ctx context.Context, c Caller, sub domain.Su
 	req.I18CheckedAt, req.EffectiveAt = &now, sub.CurrentPeriodEnd
 	if !check.Allowed {
 		req.Status, req.BlockerCodes = domain.ChangeBlocked, blockerCodes(check)
+		for _, b := range req.BlockerCodes {
+			s.metrics().DowngradeBlocked(b)
+		}
 		if err := s.locked(ctx, sub.TenantID, func(ctx context.Context) error { return s.Changes.Insert(ctx, req) }); err != nil {
 			return PlanChangeResult{}, err
 		}
@@ -439,6 +453,7 @@ func (h UpgradeInvoicePaid) Handle(ctx context.Context, tenantID string, ev doma
 		webhookMeta()); err != nil {
 		return "", err
 	}
+	s.metrics().PurchaseToEvent(port.PurchaseKindPlan, s.now().Sub(ev.ProviderCreatedAt))
 	return "applied:plan_upgrade", nil
 }
 
