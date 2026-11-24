@@ -210,3 +210,23 @@ type AddonRepo interface {
 	Update(ctx context.Context, p domain.QuotaAddonPurchase) error
 	ConfirmedTokensSince(ctx context.Context, tenantID, packCode string, since time.Time) (int64, error)
 }
+
+// CertificationRun is a B-O14 submission as stored.
+type CertificationRun struct {
+	Provider, AdapterVersion, SuiteVersion, ProrationMode, CertifiedBy string
+	ProviderAPIVersion, ProviderAccountRef                             *string
+	Status                                                             domain.CertificationStatus
+	Capabilities, Results                                              []byte // JSON
+	RunStartedAt, RunFinishedAt                                        time.Time
+}
+
+// AdminRepo writes global operator data as billing_system (B-O11–B-O15, B-O17).
+type AdminRepo interface {
+	AddPlanPrice(ctx context.Context, p domain.PlanPrice) (domain.PlanPrice, error)
+	AddTokenPack(ctx context.Context, p domain.TokenPack, by, reason string) error
+	ReplayLedger(ctx context.Context, provider, providerEventID, note string) (found bool, err error)
+	InsertCertification(ctx context.Context, c CertificationRun) (domain.Certification, error)
+	Certification(ctx context.Context, id string) (domain.Certification, bool, error)
+	ReviewCertification(ctx context.Context, id string, status domain.CertificationStatus, by, reason string, at time.Time) (domain.Certification, error)
+	RevokeCertification(ctx context.Context, id, by, reason string, at time.Time) (domain.Certification, error)
+}

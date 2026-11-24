@@ -35,6 +35,7 @@ type Settings struct {
 	BelowMinimumPolicy            domain.BelowMinimumPolicy
 	FeatureDirectSignup           bool
 	ReviewThresholdMinor          int64
+	CertSuiteVersion              string
 	AutoPauseOnOperatorSuspension bool
 	FeatureTokenAddons            bool
 	FeatureSeatPurchase           bool
@@ -59,6 +60,7 @@ type Service struct {
 	FollowUps     port.FollowUpRepo
 	Addons        port.AddonRepo
 	Money         port.MoneyRepo
+	Admin         port.AdminRepo
 	Entitlements  port.EntitlementsReader
 	Sagas         port.SagaRepo
 	Emissions     port.EmissionRepo

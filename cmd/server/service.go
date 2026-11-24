@@ -29,6 +29,7 @@ func buildService(cfg config.Config, reg *provider.Registry, appPool, sysPool *p
 		Changes: pgadapter.NewPlanChangeRepository(appPool, sysPool), Previews: pgadapter.NewPreviewRepository(appPool),
 		SeatPurchases: pgadapter.NewSeatPurchaseRepository(appPool), Schedules: pgadapter.NewScheduleRepository(appPool, sysPool),
 		FollowUps: pgadapter.NewFollowUpRepository(sysPool), Addons: pgadapter.NewAddonRepository(appPool), Money: pgadapter.NewMoneyRepository(appPool),
+		Admin: pgadapter.NewAdminRepository(sysPool),
 		Sagas: pgadapter.NewSagaRepository(appPool, sysPool), Emissions: pgadapter.NewEmissionRepository(appPool, sysPool),
 		Providers:    reg,
 		Core:         iamclient.NewCore(cfg.CoreBaseURL, cfg.CoreTimeout),
@@ -41,7 +42,7 @@ func buildService(cfg config.Config, reg *provider.Registry, appPool, sysPool *p
 			SeatsAfterConversionDelay: cfg.SeatsAfterConversionDelay, SCAAbandonAfter: cfg.SCAAbandonAfter, MaxSeatsPerPurchase: cfg.MaxSeatsPerPurchase, SeatPreviewTTL: cfg.SeatPreviewTTL,
 			MinChargeMinor: cfg.MinChargeMinor, BelowMinimumPolicy: domain.BelowMinimumPolicy(cfg.ProrationBelowMinimum),
 			FeatureDirectSignup: cfg.FeatureDirectSignup, AutoPauseOnOperatorSuspension: cfg.AutoPauseOnOperatorSuspension,
-			ReviewThresholdMinor: cfg.ReviewThresholdMinor, FeatureTokenAddons: cfg.FeatureTokenAddons, FeatureSeatPurchase: cfg.FeatureSeatPurchase,
+			ReviewThresholdMinor: cfg.ReviewThresholdMinor, CertSuiteVersion: cfg.ProviderCertSuiteVersion, FeatureTokenAddons: cfg.FeatureTokenAddons, FeatureSeatPurchase: cfg.FeatureSeatPurchase,
 		},
 	}
 }

@@ -394,13 +394,13 @@ func newEnv(t *testing.T) *env {
 		Prices: pgadapter.NewPriceRepository(appPool), Checkouts: pgadapter.NewCheckoutRepository(appPool), Invoices: pgadapter.NewInvoiceRepository(appPool),
 		Changes: pgadapter.NewPlanChangeRepository(appPool, systemPool), Previews: pgadapter.NewPreviewRepository(appPool),
 		SeatPurchases: pgadapter.NewSeatPurchaseRepository(appPool), Schedules: pgadapter.NewScheduleRepository(appPool, systemPool),
-		FollowUps: pgadapter.NewFollowUpRepository(systemPool), Addons: pgadapter.NewAddonRepository(appPool), Money: pgadapter.NewMoneyRepository(appPool), Entitlements: e.ent,
+		FollowUps: pgadapter.NewFollowUpRepository(systemPool), Addons: pgadapter.NewAddonRepository(appPool), Money: pgadapter.NewMoneyRepository(appPool), Admin: pgadapter.NewAdminRepository(systemPool), Entitlements: e.ent,
 		Sagas: pgadapter.NewSagaRepository(appPool, systemPool), Emissions: pgadapter.NewEmissionRepository(appPool, systemPool),
 		Providers: registry{"stripe": e.stripe, "manual": manual}, Core: e.core, RP: e.rp,
 		Events: pgadapter.NewEventEnqueuer(eventbus.Source, eventbus.SpecVersion, schemas.Validate), Audit: pgadapter.NewAuditWriter(enq),
 		Settings: app.Settings{DefaultCurrency: "USD", NewAccountProvider: "stripe", CheckoutTTL: time.Hour, TenantAppBaseURL: "https://app.example",
 			SagaMaxBackoff: 5 * time.Minute, SCAAbandonAfter: 30 * time.Minute, SagaClaim: 45 * time.Second, SeatsAfterConversionDelay: 120 * time.Second, MaxSeatsPerPurchase: 1000, SeatPreviewTTL: 10 * time.Minute, MinChargeMinor: 200, BelowMinimumPolicy: domain.FreeUntilRenewal,
-			FeatureSeatPurchase: true, AutoPauseOnOperatorSuspension: true, ReviewThresholdMinor: 100000},
+			FeatureSeatPurchase: true, AutoPauseOnOperatorSuspension: true, ReviewThresholdMinor: 100000, CertSuiteVersion: "cert-1.0"},
 		Now: func() time.Time { return e.now },
 	}
 	return e
