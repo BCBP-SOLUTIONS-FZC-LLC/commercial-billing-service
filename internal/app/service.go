@@ -30,6 +30,7 @@ type Settings struct {
 	SeatsAfterConversionDelay time.Duration
 	SCAAbandonAfter           time.Duration
 	MaxSeatsPerPurchase       int
+	SeatPreviewTTL            time.Duration
 	FeatureDirectSignup       bool
 	FeatureTokenAddons        bool
 	FeatureSeatPurchase       bool
@@ -47,6 +48,8 @@ type Service struct {
 	Prices    port.PriceRepo
 	Checkouts port.CheckoutRepo
 	Invoices  port.InvoiceRepo
+	Changes   port.PlanChangeRepo
+	Previews  port.PreviewRepo
 	Sagas     port.SagaRepo
 	Emissions port.EmissionRepo
 	Providers ProviderRegistry
@@ -106,8 +109,6 @@ func actorOf(c Caller) string {
 }
 
 // history appends a §4.2.6 row.
-//
-//nolint:unparam // plans is set by the plan-change flow (§8.4)
 func (s *Service) history(ctx context.Context, sub domain.Subscription, from *domain.SubscriptionStatus, cause, actor string,
 	eventRef *string, seats *[2]*int, plans *[2]*domain.PlanCode) error {
 	h := domain.StatusHistoryEntry{TenantID: sub.TenantID, BillingSubscriptionID: sub.BillingSubscriptionID, FromStatus: from,

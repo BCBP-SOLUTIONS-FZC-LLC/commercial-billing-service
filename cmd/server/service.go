@@ -25,6 +25,7 @@ func buildService(cfg config.Config, reg *provider.Registry, appPool, sysPool *p
 		Tx: pgadapter.NewTxRunner(appPool), Lock: pgadapter.TenantLocker{},
 		Accounts: pgadapter.NewAccountRepository(appPool), Subs: pgadapter.NewSubscriptionRepository(appPool),
 		Prices: pgadapter.NewPriceRepository(appPool), Checkouts: pgadapter.NewCheckoutRepository(appPool), Invoices: pgadapter.NewInvoiceRepository(appPool),
+		Changes: pgadapter.NewPlanChangeRepository(appPool, sysPool), Previews: pgadapter.NewPreviewRepository(appPool),
 		Sagas: pgadapter.NewSagaRepository(appPool, sysPool), Emissions: pgadapter.NewEmissionRepository(appPool, sysPool),
 		Providers: reg,
 		Core:      iamclient.NewCore(cfg.CoreBaseURL, cfg.CoreTimeout),
@@ -33,7 +34,7 @@ func buildService(cfg config.Config, reg *provider.Registry, appPool, sysPool *p
 		Settings: app.Settings{
 			DefaultCurrency: cfg.DefaultCurrency, NewAccountProvider: "stripe", CheckoutTTL: cfg.CheckoutTTL,
 			TenantAppBaseURL: cfg.TenantAppBaseURL, SagaMaxBackoff: cfg.SagaMaxBackoff, SagaClaim: cfg.RPTimeout + sagaClaimMargin,
-			SeatsAfterConversionDelay: cfg.SeatsAfterConversionDelay, SCAAbandonAfter: cfg.SCAAbandonAfter, MaxSeatsPerPurchase: cfg.MaxSeatsPerPurchase,
+			SeatsAfterConversionDelay: cfg.SeatsAfterConversionDelay, SCAAbandonAfter: cfg.SCAAbandonAfter, MaxSeatsPerPurchase: cfg.MaxSeatsPerPurchase, SeatPreviewTTL: cfg.SeatPreviewTTL,
 			FeatureDirectSignup: cfg.FeatureDirectSignup, FeatureTokenAddons: cfg.FeatureTokenAddons, FeatureSeatPurchase: cfg.FeatureSeatPurchase,
 		},
 	}
@@ -44,7 +45,8 @@ func paymentHandlers(svc *app.Service) map[domain.NormalisedKind]port.PaymentEve
 	return map[domain.NormalisedKind]port.PaymentEventHandler{
 		domain.KindCheckoutCompleted: app.CheckoutCompleted{S: svc},
 		domain.KindCheckoutExpired:   app.CheckoutExpired{S: svc},
-		domain.KindInvoicePaid:       app.FirstInvoicePaid{S: svc},
+		// invoice.paid: conversion payment → upgrade proration → cycle (downgrade at renewal).
+		domain.KindInvoicePaid: app.FirstInvoicePaid{S: svc, Next: app.UpgradeInvoicePaid{S: svc, Next: app.DowngradeOnCycle{S: svc}}},
 	}
 }
 

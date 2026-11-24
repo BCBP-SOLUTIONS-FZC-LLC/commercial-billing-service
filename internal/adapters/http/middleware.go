@@ -26,7 +26,8 @@ const (
 // context (x-user-id, x-tenant-id, x-tenant-roles) and, on the internal
 // route, the mTLS principal. Nothing is read from the body (BIL-API-1).
 func caller(c *gin.Context) app.Caller {
-	out := app.Caller{ClientIP: c.ClientIP(), UserAgent: c.Request.UserAgent(), Principal: c.GetString(ctxPrincipal)}
+	out := app.Caller{ClientIP: c.ClientIP(), UserAgent: c.Request.UserAgent(), Principal: c.GetString(ctxPrincipal),
+		IdempotencyKey: c.GetHeader(headerIdempotencyKey)}
 	if rc, ok := gincommon.RequestContext(c); ok && rc != nil {
 		out.UserID, out.TenantID, out.Roles = rc.UserID, rc.TenantID, rc.Roles
 	}

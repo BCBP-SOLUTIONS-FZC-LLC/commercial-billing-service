@@ -111,6 +111,7 @@ type fakeProvider struct {
 	calls   []string
 	fail    error
 	confirm []confirmAnswer
+	change  []confirmAnswer
 }
 
 func (p *fakeProvider) record(c string) error {
@@ -123,7 +124,7 @@ func (p *fakeProvider) record(c string) error {
 func (p *fakeProvider) Name() string { return p.name }
 
 func (p *fakeProvider) Capabilities() port.ProviderCapabilities {
-	return port.ProviderCapabilities{HostedCardEntry: true, RecurringSubscriptions: true, Currencies: []string{"USD"}}
+	return port.ProviderCapabilities{HostedCardEntry: true, RecurringSubscriptions: true, Schedules: true, Currencies: []string{"USD"}}
 }
 
 func (p *fakeProvider) EnsureCustomer(_ context.Context, in port.CustomerInput, key string) (port.CustomerRef, error) {
@@ -165,6 +166,34 @@ func (p *fakeProvider) FetchCurrent(_ context.Context, obj domain.ProviderObject
 	start := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
 	return domain.ProviderObjectState{Ref: obj, Status: "active", Fields: map[string]any{
 		"current_period_start": start, "current_period_end": start.AddDate(0, 1, 0)}}, p.record("FetchCurrent " + obj.ID)
+}
+
+func (p *fakeProvider) PreviewPriceChange(_ context.Context, in port.PriceChange) (port.ProrationPreview, error) {
+	return port.ProrationPreview{Amount: domain.Money{AmountMinor: 28400, Currency: "USD"}, ProrationInstant: in.ProrationInstant,
+		RenewalAmount: domain.Money{AmountMinor: 89500, Currency: "USD"}}, p.record("PreviewPriceChange " + in.ToPriceRef)
+}
+
+// change scripts ChangePrice answers (default: paid).
+func (p *fakeProvider) ChangePrice(_ context.Context, in port.PriceChange, key string) (port.ChangeResult, error) {
+	_ = p.record("ChangePrice " + in.ToPriceRef + " " + key)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	res := port.ChangeResult{Invoice: port.InvoiceRef{ProviderInvoiceID: "in_" + key}, Outcome: port.PaymentOutcome{Status: port.PaymentPaid}}
+	if len(p.change) > 0 {
+		a := p.change[0]
+		p.change = p.change[1:]
+		res.Outcome = a.outcome
+		return res, a.err
+	}
+	return res, nil
+}
+
+func (p *fakeProvider) ScheduleAtPeriodEnd(_ context.Context, in port.PeriodEndChange, key string) (port.ScheduleRef, error) {
+	return port.ScheduleRef{ProviderScheduleID: "sched_" + key}, p.record("ScheduleAtPeriodEnd " + in.ToPriceRef + " " + key)
+}
+
+func (p *fakeProvider) ReleaseSchedule(_ context.Context, ref port.ScheduleRef, key string) error {
+	return p.record("ReleaseSchedule " + ref.ProviderScheduleID + " " + key)
 }
 
 func (p *fakeProvider) called(prefix string) []string {
@@ -251,11 +280,12 @@ func newEnv(t *testing.T) *env {
 		Tx: pgadapter.NewTxRunner(appPool), Lock: pgadapter.TenantLocker{},
 		Accounts: pgadapter.NewAccountRepository(appPool), Subs: pgadapter.NewSubscriptionRepository(appPool),
 		Prices: pgadapter.NewPriceRepository(appPool), Checkouts: pgadapter.NewCheckoutRepository(appPool), Invoices: pgadapter.NewInvoiceRepository(appPool),
+		Changes: pgadapter.NewPlanChangeRepository(appPool, systemPool), Previews: pgadapter.NewPreviewRepository(appPool),
 		Sagas: pgadapter.NewSagaRepository(appPool, systemPool), Emissions: pgadapter.NewEmissionRepository(appPool, systemPool),
 		Providers: registry{"stripe": e.stripe, "manual": manual}, Core: e.core, RP: e.rp,
 		Events: pgadapter.NewEventEnqueuer(eventbus.Source, eventbus.SpecVersion, schemas.Validate), Audit: pgadapter.NewAuditWriter(enq),
 		Settings: app.Settings{DefaultCurrency: "USD", NewAccountProvider: "stripe", CheckoutTTL: time.Hour, TenantAppBaseURL: "https://app.example",
-			SagaMaxBackoff: 5 * time.Minute, SCAAbandonAfter: 30 * time.Minute, SagaClaim: 45 * time.Second, SeatsAfterConversionDelay: 120 * time.Second, MaxSeatsPerPurchase: 1000,
+			SagaMaxBackoff: 5 * time.Minute, SCAAbandonAfter: 30 * time.Minute, SagaClaim: 45 * time.Second, SeatsAfterConversionDelay: 120 * time.Second, MaxSeatsPerPurchase: 1000, SeatPreviewTTL: 10 * time.Minute,
 			FeatureSeatPurchase: true},
 		Now: func() time.Time { return e.now },
 	}
@@ -283,3 +313,22 @@ func (e *env) handle(t *testing.T, tenant string, h port.PaymentEventHandler, ev
 func txRunner() *pgadapter.TxRunner { return pgadapter.NewTxRunner(appPool) }
 
 func asDomain(err error, out **domain.DomainError) bool { return errors.As(err, out) }
+
+// activeSubscription creates a converted, active Stripe subscription for a
+// new tenant through the real flow, and returns tenant and subscription.
+func (e *env) activeSubscription(t *testing.T, plan string, seats int) (string, string) {
+	t.Helper()
+	ctx := context.Background()
+	tenant := newTenant()
+	res, err := e.svc.AuthorizeAndCharge(ctx, app.Caller{Principal: "bff"}, app.AuthorizeChargeRequest{TenantID: tenant, PlanCode: plan,
+		LicensedSeats: seats, PaymentMethodRef: "pm_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tenant, res.BillingSubscriptionID
+}
+
+func (e *env) version(t *testing.T, sub string) int64 {
+	t.Helper()
+	return scalar[int64](t, `SELECT record_version FROM subscriptions WHERE billing_subscription_id = $1`, sub)
+}

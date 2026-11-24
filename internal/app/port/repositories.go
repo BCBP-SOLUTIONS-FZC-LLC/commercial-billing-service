@@ -121,3 +121,18 @@ type InvoiceRepo interface {
 	Mirror(ctx context.Context, tenantID, provider string, v InvoiceView, providerUpdatedAt time.Time) (invoiceID string, err error)
 	Link(ctx context.Context, invoiceID, tenantID, refType, refID string) error
 }
+
+// PlanChangeRepo stores plan change requests (§4.2.9).
+type PlanChangeRepo interface {
+	Insert(ctx context.Context, c domain.PlanChangeRequest) error
+	Open(ctx context.Context, tenantID string) (domain.PlanChangeRequest, bool, error)
+	ByProviderInvoice(ctx context.Context, tenantID, providerInvoiceID string) (domain.PlanChangeRequest, bool, error)
+	Update(ctx context.Context, c domain.PlanChangeRequest) error
+	DueDowngrades(ctx context.Context, until time.Time, limit int) ([]domain.PlanChangeRequest, error)
+}
+
+// PreviewRepo keeps short-lived previews (B-P3, B-P6) for any replica.
+type PreviewRepo interface {
+	Save(ctx context.Context, tenantID, previewID string, body []byte, expiresAt time.Time) error
+	Load(ctx context.Context, tenantID, previewID string) (body []byte, expiresAt time.Time, found bool, err error)
+}
