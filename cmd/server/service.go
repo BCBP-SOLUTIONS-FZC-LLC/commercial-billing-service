@@ -55,6 +55,7 @@ func paymentHandlers(svc *app.Service) map[domain.NormalisedKind]port.PaymentEve
 		domain.KindInvoicePaymentFailed: app.PaymentFailed{S: svc},
 		domain.KindSubscriptionEnded:    app.SubscriptionEnded{S: svc},
 		domain.KindInvoiceUpdated:       app.InvoiceUpdated{S: svc},
+		domain.KindPaymentMethodSet:     app.PaymentMethodSet{S: svc},
 	}
 }
 

@@ -126,6 +126,16 @@ type InvoiceRepo interface {
 	Get(ctx context.Context, invoiceID string) (domain.Invoice, bool, error)
 	SetHeld(ctx context.Context, invoiceID string) error
 	Dispose(ctx context.Context, invoiceID, action, reason, by string, at time.Time, status string) error
+	List(ctx context.Context, tenantID, status, kind, afterID string, withDrafts bool, limit int) ([]InvoiceRow, error)
+}
+
+// InvoiceRow is one invoice of a list (B-P17, B-O4).
+type InvoiceRow struct {
+	InvoiceID, Kind, Status, Currency                    string
+	Number, HostedURL                                    *string
+	AmountDueMinor, AmountPaidMinor, AmountRefundedMinor int64
+	PeriodStart, PeriodEnd, IssuedAt, PaidAt             *time.Time
+	HeldForReview                                        bool
 }
 
 // FollowUp is one lifecycle follow-up a tenant needs (§8.8.4, §8.10).

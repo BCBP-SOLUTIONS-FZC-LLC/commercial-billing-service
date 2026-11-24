@@ -136,7 +136,7 @@ func (p *fakeProvider) Capabilities() port.ProviderCapabilities {
 	if p.fallback {
 		mode = port.ProrationFallback
 	}
-	return port.ProviderCapabilities{HostedCardEntry: true, RecurringSubscriptions: true, Schedules: true, CollectionPause: true, Proration: mode, Currencies: []string{"USD"}}
+	return port.ProviderCapabilities{HostedCardEntry: true, RecurringSubscriptions: true, Schedules: true, CollectionPause: true, HostedPaymentMethodUpdate: true, Proration: mode, Currencies: []string{"USD"}}
 }
 
 func (p *fakeProvider) EnsureCustomer(_ context.Context, in port.CustomerInput, key string) (port.CustomerRef, error) {
@@ -259,6 +259,23 @@ func (p *fakeProvider) ChargeOneOff(_ context.Context, in port.OneOffCharge, key
 		return res, a.err
 	}
 	return res, nil
+}
+
+func (p *fakeProvider) ListPaymentMethods(context.Context, port.CustomerRef) ([]port.PaymentMethodView, error) {
+	return []port.PaymentMethodView{{ProviderRef: "pm_1QAbCdEfGh1234", Brand: "visa", Last4: "4242", ExpMonth: 12, ExpYear: 2028, IsDefault: true}},
+		p.record("ListPaymentMethods")
+}
+
+func (p *fakeProvider) CreatePaymentMethodSetup(_ context.Context, in port.SetupInput, key string) (port.HostedSession, error) {
+	return port.HostedSession{ProviderSessionID: "cs_setup_" + key, URL: "https://checkout.example/setup", ExpiresAt: in.ExpiresAt}, p.record("CreatePaymentMethodSetup " + key)
+}
+
+func (p *fakeProvider) InvoicePDFLink(_ context.Context, ref port.InvoiceRef) (port.URLWithExpiry, error) {
+	return port.URLWithExpiry{URL: "https://pdf.example/" + ref.ProviderInvoiceID}, p.record("InvoicePDFLink " + ref.ProviderInvoiceID)
+}
+
+func (p *fakeProvider) UpdateCustomer(_ context.Context, _ port.CustomerRef, in port.CustomerInput, key string) error {
+	return p.record("UpdateCustomer " + in.Email + " " + key)
 }
 
 func (p *fakeProvider) called(prefix string) []string {

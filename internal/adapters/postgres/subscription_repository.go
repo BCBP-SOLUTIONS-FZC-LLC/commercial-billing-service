@@ -240,9 +240,10 @@ func (r *SubscriptionRepository) AppendHistory(ctx context.Context, h domain.Sta
 
 // History returns the newest entries first.
 func (r *SubscriptionRepository) History(ctx context.Context, id string, limit int) ([]domain.StatusHistoryEntry, error) {
-	if limit <= 0 || limit > 100 {
+	if limit <= 0 {
 		limit = 20
 	}
+	limit = min(limit, 500)
 	var out []domain.StatusHistoryEntry
 	err := inTx(ctx, r.pool, func(q querier) error {
 		rows, err := q.Query(ctx, `

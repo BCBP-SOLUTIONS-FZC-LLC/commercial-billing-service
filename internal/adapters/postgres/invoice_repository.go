@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
@@ -119,4 +120,30 @@ func (r *InvoiceRepository) Dispose(ctx context.Context, invoiceID, action, reas
 			status = $6::invoice_status, updated_at = now() WHERE invoice_id = $1::uuid`, invoiceID, action, reason, by, at, status)
 		return err
 	})
+}
+
+// List implements port.InvoiceRepo: newest first on (issued_at, invoice_id),
+// keyset after the cursor row; drafts excluded unless withDrafts.
+func (r *InvoiceRepository) List(ctx context.Context, tenantID, status, kind, afterID string, withDrafts bool, limit int) ([]port.InvoiceRow, error) {
+	var out []port.InvoiceRow
+	err := inTx(ctx, r.pool, func(q querier) error {
+		rows, err := q.Query(ctx, `
+			SELECT invoice_id::text, number, kind::text, status::text, currency, amount_due_minor, amount_paid_minor, amount_refunded_minor,
+			  period_start, period_end, issued_at, paid_at, hosted_invoice_url, held_for_review
+			FROM invoices WHERE tenant_id = $1::uuid
+			  AND ($2 = '' OR status::text = $2) AND ($3 = '' OR kind::text = $3) AND ($4 OR status <> 'draft')
+			  AND ($5 = '' OR (coalesce(issued_at, 'epoch'), invoice_id) < (SELECT coalesce(issued_at, 'epoch'), invoice_id FROM invoices WHERE invoice_id = NULLIF($5, '')::uuid))
+			ORDER BY coalesce(issued_at, 'epoch') DESC, invoice_id DESC LIMIT $6`, tenantID, status, kind, withDrafts, afterID, limit)
+		if err != nil {
+			return err
+		}
+		out, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (port.InvoiceRow, error) {
+			var v port.InvoiceRow
+			err := row.Scan(&v.InvoiceID, &v.Number, &v.Kind, &v.Status, &v.Currency, &v.AmountDueMinor, &v.AmountPaidMinor,
+				&v.AmountRefundedMinor, &v.PeriodStart, &v.PeriodEnd, &v.IssuedAt, &v.PaidAt, &v.HostedURL, &v.HeldForReview)
+			return v, err
+		})
+		return err
+	})
+	return out, err
 }
