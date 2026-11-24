@@ -1,0 +1,99 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+# §10.2: default deny; admit only what Billing needs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "commercial-billing.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "commercial-billing.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Gateway: tenant, operator and webhook routes.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.gatewayNamespace }}
+      ports:
+        - { port: {{ .Values.service.port }}, protocol: TCP }
+    # Signup BFF: B-I1 only (the path is enforced by AuthorizationPolicy).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.bffNamespace }}
+          podSelector:
+            matchLabels:
+              {{- required "networkPolicy.bffPodLabels must select the bff-signup pods" $np.bffPodLabels | toYaml | nindent 14 }}
+      ports:
+        - { port: {{ .Values.service.port }}, protocol: TCP }
+    # Prometheus: metrics port only.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.monitoringNamespace }}
+      ports:
+        - { port: {{ .Values.service.metricsPort }}, protocol: TCP }
+  egress:
+    # DNS.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    # Postgres via PgBouncer, and the direct RDS endpoint for migrations.
+    - {{- if $np.postgresCIDRs }}
+      to:
+        {{- range $np.postgresCIDRs }}
+        - ipBlock: { cidr: {{ . }} }
+        {{- end }}
+      {{- end }}
+      ports:
+        - { port: {{ $np.postgresPort }}, protocol: TCP }
+        - { port: {{ $np.pgbouncerPort }}, protocol: TCP }
+    # Core (I-11, I-18), Realm Provisioner (RP-3, RP-4, RP-11), Audit Log (AL-5).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.iamNamespace }}
+          podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  {{- toYaml $np.iamPodNames | nindent 18 }}
+      ports:
+        - { port: 8080, protocol: TCP }
+    # Entitlements: the one GET (add-on eligibility, BL-OQ-3).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.entitlementsNamespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ $np.entitlementsPodName }}
+      ports:
+        - { port: 8080, protocol: TCP }
+    # OTel collector and Pushgateway.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.observabilityNamespace }}
+      ports:
+        - { port: 4317, protocol: TCP }
+        - { port: 9091, protocol: TCP }
+    # HTTPS out: Stripe API and AWS (SNS, SQS, Glue, STS). Restricted to the
+    # mesh egress gateway / ServiceEntry allow-list by the platform.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+      ports:
+        - { port: 443, protocol: TCP }
+{{- end }}

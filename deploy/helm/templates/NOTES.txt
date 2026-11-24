@@ -1,0 +1,5 @@
+commercial-billing {{ .Chart.AppVersion }} in namespace {{ .Release.Namespace }}.
+
+- Operator routes answer 403 until OPERATOR_PATH_LIVE is true (BIL-AUTH-6): {{ .Values.env.OPERATOR_PATH_LIVE }}
+- Token add-ons: {{ .Values.env.FEATURE_TOKEN_ADDONS }}; direct signup: {{ .Values.env.FEATURE_DIRECT_SIGNUP }}
+- CronJobs: {{ len .Values.cronjobs.jobs }} (§13.2)

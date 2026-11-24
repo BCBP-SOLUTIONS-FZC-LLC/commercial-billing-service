@@ -2,10 +2,10 @@
 #
 # One job runs the same gates as `make ci` (fmt, vet, golangci-lint,
 # go-arch-lint, the BIL-PCI-1 / BIL-OPS-2 guard scripts, race tests, build);
-# others run schema-gov (`make schema-validate`) and a Dockerfile lint. Later
-# phases add the integration suite (Postgres, floci, stripe-mock),
-# helm-check (BIL-OPS-4), the image build and Trivy, following the IAM
-# services' workflows.
+# others run schema-gov (`make schema-validate`), helm-check (chart, alert
+# rules, chart contract tests) and a Dockerfile lint. Later phases add the
+# integration suite (Postgres, floci, stripe-mock), the image build and
+# Trivy, following the IAM services' workflows.
 name: CI
 
 "on":
@@ -79,6 +79,46 @@ jobs:
 
       - name: Build
         run: make build
+
+  helm:
+    name: Helm check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            go.mod
+
+      - name: Configure private module access
+        run: |
+          git config --global credential.helper store
+          echo "https://x-access-token:${{ secrets.GO_PRIVATE_TOKEN }}@github.com" > ~/.git-credentials
+          chmod 600 ~/.git-credentials
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.16.3
+
+      - name: Install promtool and kubeconform
+        run: |
+          curl -sSL https://github.com/prometheus/prometheus/releases/download/v3.5.0/prometheus-3.5.0.linux-amd64.tar.gz \
+            | tar -xz --strip-components=1 -C /usr/local/bin prometheus-3.5.0.linux-amd64/promtool
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
+
+      # LLD §13.1, §13.3: chart lint + kubeconform, alert rules, chart
+      # contract tests (XFCC, OPERATOR_PATH_LIVE, CronJobs, operator routes).
+      - name: helm-check
+        run: make helm-check
 
   schema:
     name: Schema governance

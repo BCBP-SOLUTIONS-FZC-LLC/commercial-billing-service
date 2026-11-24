@@ -128,3 +128,11 @@ run:
 .PHONY: clean
 clean:
 	rm -rf bin coverage.out
+
+.PHONY: helm-check
+helm-check: ## Lint, render and validate the Helm chart and alert rules (LLD §13.1)
+	bash .github/scripts/helm-check.sh
+
+.PHONY: testclock
+testclock: ## Stripe Test Clock rehearsal against staging (LLD §14.4; see docs/runbooks/test-clock-rehearsal.md)
+	bash scripts/testclock/run.sh

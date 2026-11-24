@@ -1,0 +1,48 @@
+{{- /* §13.2: one CronJob per job; the jobs binary runs --job=<name> once. */ -}}
+{{- range $name, $schedule := .Values.cronjobs.jobs }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "commercial-billing.fullname" $ }}-{{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: cronjob
+    commercial.bcbp/job: {{ $name }}
+spec:
+  schedule: {{ $schedule | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: {{ $.Values.cronjobs.concurrencyPolicy }}
+  startingDeadlineSeconds: {{ $.Values.cronjobs.startingDeadlineSeconds }}
+  successfulJobsHistoryLimit: {{ $.Values.cronjobs.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ $.Values.cronjobs.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ $.Values.cronjobs.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "commercial-billing.selectorLabels" $ | nindent 12 }}
+            app.kubernetes.io/component: cronjob
+            commercial.bcbp/job: {{ $name }}
+          annotations:
+            sidecar.istio.io/inject: "false"
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "commercial-billing.serviceAccountName" $ }}
+          securityContext:
+            {{- include "commercial-billing.podSecurityContext" $ | nindent 12 }}
+          containers:
+            - name: job
+              image: {{ include "commercial-billing.image" $ }}
+              imagePullPolicy: {{ $.Values.image.pullPolicy }}
+              command: ["/jobs", "--job={{ $name }}"]
+              env:
+                {{- include "commercial-billing.env" $ | nindent 16 }}
+              resources:
+                {{- toYaml $.Values.jobResources | nindent 16 }}
+              securityContext:
+                {{- include "commercial-billing.containerSecurityContext" $ | nindent 16 }}
+{{- end }}

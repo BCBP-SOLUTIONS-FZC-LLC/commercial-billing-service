@@ -1,0 +1,42 @@
+{{- if .Values.migrate.enabled }}
+# §13.1, §19.1: schema migrations run once per release, before new replicas
+# (pre-install / pre-upgrade hook); replicas run with RUN_MIGRATIONS=false.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "commercial-billing.fullname" . }}-migrate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrate.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrate.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "commercial-billing.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+      annotations:
+        sidecar.istio.io/inject: "false"   # a Job must exit; migrations reach RDS directly
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "commercial-billing.serviceAccountName" . }}
+      securityContext:
+        {{- include "commercial-billing.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "commercial-billing.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/migrate"]
+          env:
+            {{- include "commercial-billing.env" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.jobResources | nindent 12 }}
+          securityContext:
+            {{- include "commercial-billing.containerSecurityContext" . | nindent 12 }}
+{{- end }}

@@ -1,0 +1,222 @@
+# Prometheus alerting rules for commercial-billing (LLD §11.5), routed by
+# Grafana OnCall to Billing on-call (Commercial Team).
+#
+# This file is the source of truth: the Helm chart renders it verbatim as a
+# PrometheusRule (deploy/helm/templates/prometheusrule.yaml reads the copy in
+# deploy/helm/files/, which helm-check keeps identical). Every alert carries
+# a runbook_url (Phase 7 "done when") pointing at docs/runbooks/.
+#
+# Aggregation: the exporter gauges (backlog, sagas, subscriptions, pauses,
+# held drafts, emissions, reconciliation findings, provider_certified) are
+# the same reading on every replica, so they are aggregated with max, never
+# sum. Counters and histograms are per pod and summed.
+#
+# metric_status: proposed marks alerts that read a commercial_* Tier 2
+# metric or a proposed platform_* metric (registry not yet ratified, §11.2).
+#
+# Not here, by design:
+#   IAMParkedTenantEventsStale — Core's alert; the Alertmanager / OnCall
+#     route also sends it to Billing on-call (SRE-6, §11.5). Route config, not
+#     a rule.
+#   BillingReviewTrigger — review, no page: raised from the log line
+#     alert=BillingOperatorReviewNeeded (refund / adjustment above
+#     REVIEW_THRESHOLD_MINOR) and RP-4 requests, as a Loki rule owned by the
+#     observability team (§10.6).
+#   BillingReversalDecisionNeeded — SEV-2 (§8.2): raised from the log line
+#     alert=BillingReversalDecisionNeeded (dispute or early fraud warning on a
+#     conversion payment within 7 days); no §11.2 metric carries it, so it is
+#     a Loki rule as well. Runbook: docs/runbooks/reversal-decision.md.
+groups:
+  - name: commercial_billing.conversion
+    rules:
+      - alert: BillingConversionSagaOverdue
+        expr: max(commercial_billing_sagas_overdue{service="commercial-billing"}) > 0
+        labels:
+          severity: sev2
+          team: commercial
+        annotations:
+          summary: A conversion saga is not confirmed 30 minutes after payment (BIL-OPS-5)
+          description: >-
+            {{ $value }} saga(s) paid more than 30 minutes ago are not confirmed.
+            The tenant has paid but is not converted.
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/stuck-conversion-saga.md
+
+      - alert: BillingSagaFailed
+        expr: max(commercial_billing_sagas_in_flight{service="commercial-billing",state="failed"}) > 0
+        labels:
+          severity: sev2
+          team: commercial
+        annotations:
+          summary: A conversion saga entered failed; an operator decides (B-O9)
+          description: '{{ $value }} saga(s) in state failed.'
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/stuck-conversion-saga.md
+
+      - alert: CommercialPurchaseNotActive
+        # Composed (HLD §8.6.3, §12.4): Billing's confirmation → event p99,
+        # plus bus propagation to Core / Entitlements, plus Usage & Metering's
+        # render latency, over 60 s for 10 min.
+        expr: |
+          (
+            histogram_quantile(0.99, sum by (le) (rate(commercial_purchase_confirmation_to_event_seconds_bucket{service="commercial-billing",kind=~"seats|token_addon"}[10m])))
+            + on() group_left() max(histogram_quantile(0.99, sum by (le, queue) (rate(platform_event_propagation_seconds_bucket{queue=~"billing-orgm-q|billing-entitlements-q"}[10m]))))
+            + on() group_left() histogram_quantile(0.99, sum by (le) (rate(commercial_usage_metering_limit_render_latency_seconds_bucket[10m])))
+          ) > 60
+        for: 10m
+        labels:
+          severity: sev2
+          team: commercial
+          metric_status: proposed
+        annotations:
+          summary: Paid purchases take more than 60 s to become active
+          description: 'Composed purchase → active p99 is {{ $value | humanizeDuration }}.'
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/purchase-not-active.md
+
+  - name: commercial_billing.webhooks
+    rules:
+      - alert: BillingWebhookSignatureFailures
+        expr: sum by (provider) (rate(commercial_billing_webhook_signature_failures_total{service="commercial-billing"}[5m])) * 60 > 5
+        for: 5m
+        labels:
+          severity: sev2
+          team: commercial
+        annotations:
+          summary: More than 5 webhook signature failures per minute (BIL-PAY-2)
+          description: '{{ $labels.provider }}: {{ $value | humanize }} refused callbacks per minute.'
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/webhook-signature-failures.md
+
+      - alert: BillingWebhookBacklog
+        # §11.5 "received older than 5 min": the gauge is a count, so a
+        # received backlog that stays non-zero for 5 min stands in for age.
+        expr: |
+          max(commercial_billing_webhook_backlog{service="commercial-billing",status="received"}) > 0
+        for: 5m
+        labels:
+          severity: sev3
+          team: commercial
+          branch: received
+        annotations:
+          summary: Provider callbacks waiting in the ledger for more than 5 minutes
+          description: '{{ $value }} received ledger rows not processed for 5 minutes.'
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/webhook-backlog.md
+
+      # Second branch of BillingWebhookBacklog: failed rows for 30 min.
+      - alert: BillingWebhookBacklog
+        expr: max(commercial_billing_webhook_backlog{service="commercial-billing",status="failed"}) > 0
+        for: 30m
+        labels:
+          severity: sev3
+          team: commercial
+          branch: failed
+        annotations:
+          summary: Failed ledger rows for 30 minutes
+          description: '{{ $value }} failed ledger rows (BIL-OPS-6).'
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/webhook-backlog.md
+
+  - name: commercial_billing.bus
+    rules:
+      - alert: BillingOutboxDeadLetter
+        expr: max(platform_outbox_dead_letters{service="commercial-billing"}) > 0
+        labels:
+          severity: sev2
+          team: commercial
+          metric_status: proposed
+        annotations:
+          summary: A billing.events message reached the outbox dead letters
+          description: '{{ $value }} dead-lettered outbox row(s); IAM / Entitlements did not receive them.'
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/outbox-dead-letter.md
+
+      - alert: BillingDLQNotEmpty
+        expr: max by (queue) (platform_dlq_depth{service="commercial-billing",queue=~"tenant-billing-q-dlq|usage-billing-q-dlq"}) > 0
+        labels:
+          severity: sev3
+          team: commercial
+          metric_status: proposed
+        annotations:
+          summary: 'Messages in {{ $labels.queue }}'
+          description: '{{ $value }} message(s) dead-lettered on {{ $labels.queue }}.'
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/consumer-dlq.md
+
+  - name: commercial_billing.dependencies
+    rules:
+      - alert: BillingI18Unavailable
+        # Every I-18 call (Core plan-change-check) failing for 10 minutes.
+        expr: |
+          sum(rate(platform_dependency_request_seconds_count{service="commercial-billing",dependency="core",operation=~"tenants.plan-change-check.*",outcome="error"}[5m]))
+            / sum(rate(platform_dependency_request_seconds_count{service="commercial-billing",dependency="core",operation=~"tenants.plan-change-check.*"}[5m])) >= 1
+        for: 10m
+        labels:
+          severity: sev3
+          team: commercial
+          metric_status: proposed
+        annotations:
+          summary: Core I-18 (plan-change check) unavailable for 10 minutes
+          description: Downgrades answer 503 IAM_UNAVAILABLE; scheduled downgrades near the renewal are released (§8.4.2).
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/i18-unavailable.md
+
+      - alert: BillingProviderUnavailable
+        expr: |
+          sum(rate(platform_dependency_request_seconds_count{service="commercial-billing",dependency="stripe",outcome="error"}[5m]))
+            / sum(rate(platform_dependency_request_seconds_count{service="commercial-billing",dependency="stripe"}[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: sev2
+          team: commercial
+          metric_status: proposed
+        annotations:
+          summary: More than half of Stripe calls fail
+          description: 'Stripe error ratio {{ $value | humanizePercentage }}.'
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/provider-outage.md
+
+      - alert: BillingProviderNotCertified
+        expr: min by (provider, adapter_version) (commercial_billing_provider_certified{service="commercial-billing"}) == 0
+        for: 5m
+        labels:
+          severity: sev2
+          team: commercial
+        annotations:
+          summary: '{{ $labels.provider }} {{ $labels.adapter_version }} has no valid certification (BIL-PROV-1)'
+          description: The provider takes no new billing accounts; running subscriptions are unaffected.
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/certification-lapsed.md
+
+  - name: commercial_billing.records
+    rules:
+      - alert: BillingSuspensionDraftsAwaitingDecision
+        # §8.10: a draft held during a pause with no B-O16 decision. The gauge
+        # carries no tenant, so "reactivated more than 24 h ago" is read as a
+        # held draft surviving 24 h with no subscription paused any more.
+        expr: |
+          max(sum by (currency) (commercial_billing_invoices_held_for_review{service="commercial-billing"})) > 0
+            unless on() max(sum(commercial_billing_collection_paused{service="commercial-billing"})) > 0
+        for: 24h
+        labels:
+          severity: sev3
+          team: commercial
+        annotations:
+          summary: Held drafts await a finalize / void decision (B-O16)
+          description: '{{ $value }} held draft(s) with no disposition; Finance / operator queue.'
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/suspension-drafts.md
+
+      - alert: BillingReconciliationDrift
+        expr: sum(max by (kind) (commercial_billing_reconciliation_findings{service="commercial-billing",repaired="false"})) > 0
+        for: 24h
+        labels:
+          severity: sev3
+          team: commercial
+        annotations:
+          summary: Unrepaired reconciliation findings for 24 hours
+          description: '{{ $value }} finding(s) from the last run are not repaired.'
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/reconciliation-drift.md
+
+      - alert: BillingSeatProjectionDrift
+        # §8.6.4: the same tenant twice in 24 h. The counter carries no tenant
+        # (no tenant_id labels, §11.2); two mismatches in 24 h fire this, and
+        # the SEV-3 log line "seat projection mismatch again within 24 h"
+        # names the tenant.
+        expr: sum(increase(commercial_billing_seat_projection_mismatches_total{service="commercial-billing"}[24h])) >= 2
+        labels:
+          severity: sev3
+          team: commercial
+        annotations:
+          summary: Core's licensed_seats drifted from Billing's more than once in 24 h
+          description: '{{ $value | humanize }} mismatches in 24 h; check the repeat log line for the tenant.'
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/seat-projection-drift.md

@@ -1,0 +1,42 @@
+{{- if .Values.istio.authorizationPolicy.enabled }}
+# §13.1: B-I1 from bff/bff-signup only; tenant, operator and webhook routes
+# from the gateway only; metrics from monitoring. An ALLOW policy denies
+# everything it does not match.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ include "commercial-billing.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "commercial-billing.selectorLabels" . | nindent 6 }}
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: [{{ .Values.istio.bffPrincipal | quote }}]
+      to:
+        - operation:
+            methods: [POST]
+            paths: [/api/v1/internal/subscriptions/authorize-and-charge]
+    - from:
+        - source:
+            principals: [{{ .Values.istio.gatewayPrincipal | quote }}]
+      to:
+        - operation:
+            paths: ["/api/v1/tenants/*", "/api/v1/operator/*", "/api/v1/webhooks/*"]
+    - from:
+        - source:
+            namespaces: [{{ .Values.networkPolicy.monitoringNamespace | quote }}]
+      to:
+        - operation:
+            ports: [{{ .Values.service.metricsPort | quote }}]
+    # Kubelet probes (rewritten by the sidecar) and in-pod health checks.
+    - to:
+        - operation:
+            methods: [GET]
+            paths: [/healthz, /readyz]
+{{- end }}

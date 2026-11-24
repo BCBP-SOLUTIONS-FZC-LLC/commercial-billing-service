@@ -1,0 +1,13 @@
+# Staging (Stripe test mode with Test Clocks, §13.5, §14.4).
+env:
+  APP_ENV: staging
+  TENANT_APP_BASE_URL: https://app.staging.bcbpsolutions.com
+  SNS_BILLING_EVENTS_TOPIC_ARN: arn:aws:sns:ap-south-1:000000000000:billing-events
+  SQS_TENANT_BILLING_QUEUE_URL: https://sqs.ap-south-1.amazonaws.com/000000000000/tenant-billing-q
+  SQS_USAGE_BILLING_QUEUE_URL: https://sqs.ap-south-1.amazonaws.com/000000000000/usage-billing-q
+externalSecret:
+  secretPath: commercial/staging/billing
+gateway:
+  hostnames: [api.staging.bcbpsolutions.com]
+  tenant:
+    corsOrigins: [https://app.staging.bcbpsolutions.com]

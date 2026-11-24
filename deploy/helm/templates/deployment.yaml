@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "commercial-billing.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "commercial-billing.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "commercial-billing.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # BIL-AUTH-3 (§13.1): the sidecar forwards the verified client
+        # certificate as X-Forwarded-Client-Cert; B-I1 reads its caller only
+        # from that header. helm-check asserts this annotation.
+        proxy.istio.io/config: |
+          forwardClientCertDetails: {{ .Values.istio.forwardClientCertDetails }}
+        prometheus.io/scrape: "false"   # ServiceMonitor scrapes the metrics port
+        {{- if not .Values.externalSecret.enabled }}
+        checksum/secret-name: {{ include "commercial-billing.secretName" . | sha256sum | trunc 16 }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "commercial-billing.serviceAccountName" . }}
+      automountServiceAccountToken: true   # IRSA web identity token
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "commercial-billing.podSecurityContext" . | nindent 8 }}
+      {{- if .Values.topologySpread.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: {{ .Values.topologySpread.maxSkew }}
+          topologyKey: {{ .Values.topologySpread.topologyKey }}
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "commercial-billing.selectorLabels" . | nindent 14 }}
+      {{- end }}
+      containers:
+        - name: commercial-billing
+          image: {{ include "commercial-billing.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/commercial-billing"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.service.metricsPort }}
+              protocol: TCP
+          env:
+            {{- include "commercial-billing.env" . | nindent 12 }}
+          startupProbe:
+            httpGet: { path: {{ .Values.probes.startup.path }}, port: http }
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: {{ .Values.probes.liveness.path }}, port: http }
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet: { path: {{ .Values.probes.readiness.path }}, port: http }
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- include "commercial-billing.containerSecurityContext" . | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
