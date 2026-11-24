@@ -4,9 +4,9 @@ Submitted for observability governance approval under the Enterprise Platform Ob
 (rules 10–12, "Registry ratification requirement"). **Not adopted:** until a proposal is ratified,
 Billing emits the concept as its own Tier 3 `commercial_billing_*` series
 ([metric-registry.md](metric-registry.md)). On ratification, Billing switches to the shared name
-through gincommon's `NewShared*` constructors, using the standard's compatibility process (parallel
-emission, then migrating dashboards, alerts, recording rules, SLOs and HPA references, then deprecation
-and removal).
+through gincommon's `NewShared*` constructors, together with its dashboards, alerts, recording rules,
+SLOs and HPA references. No compatibility period is needed while no environment is deployed; once one
+is, the standard's migration process applies (parallel emission, migrate consumers, deprecate, remove).
 
 ## 1. Proposed Commercial domain-shared metrics (Tier 2, domain `commercial`)
 

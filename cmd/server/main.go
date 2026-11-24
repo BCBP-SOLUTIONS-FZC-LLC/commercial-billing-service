@@ -115,7 +115,7 @@ func run() int {
 		return 1
 	}
 	// Billing's §11.2 metrics on the same registry.
-	billingMetrics, err := metrics.New(gincommon.MetricsRegisterer(), metrics.Options{Legacy: cfg.LegacyMetrics})
+	billingMetrics, err := metrics.New(gincommon.MetricsRegisterer())
 	if err != nil {
 		log.Error("init billing metrics", map[string]any{"error": err.Error()})
 		return 1

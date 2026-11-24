@@ -162,9 +162,6 @@ env:
   OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector.observability.svc.cluster.local:4317
   OTEL_TRACES_SAMPLER_ARG: "0.2"
   PUSHGATEWAY_URL: http://pushgateway.observability.svc.cluster.local:9091
-  # Compatibility period (§11.2 rev 0.43): also emit the deprecated former
-  # Tier 2 commercial_* names; set false at the approved sunset.
-  OBSERVABILITY_LEGACY_METRICS: "true"
 
 # Secret keys (§10.5): never in values; OpenBao via External Secrets Operator.
 secretKeys:

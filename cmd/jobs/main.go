@@ -129,7 +129,7 @@ func execute(name string) int {
 	_ = gincommon.ObservabilityMiddlewares(ginCfg)
 	// Billing's metrics on gincommon's registry; the run's commercial_*
 	// families are pushed from it after the run (metrics.PushRun).
-	jobMetrics, err := metrics.New(gincommon.MetricsRegisterer(), metrics.Options{Legacy: cfg.LegacyMetrics})
+	jobMetrics, err := metrics.New(gincommon.MetricsRegisterer())
 	app.SetTracer(observability.NewTracer(cfg.AppName))
 	httpx.SetObserver(jobMetrics.Dependency)
 	if err != nil {

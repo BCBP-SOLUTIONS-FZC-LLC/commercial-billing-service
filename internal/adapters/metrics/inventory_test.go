@@ -19,11 +19,11 @@ const inventoryPath = "docs/observability/metric-registry.md"
 
 var constLabels = map[string]bool{"domain": true, "service": true, "environment": true}
 
-func families(t *testing.T, legacy bool) []*dto.MetricFamily {
+func families(t *testing.T) []*dto.MetricFamily {
 	t.Helper()
 	registered(t)
 	reg := prometheus.NewRegistry()
-	m, err := metrics.New(reg, metrics.Options{Legacy: legacy})
+	m, err := metrics.New(reg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func tier(name string) string {
 	case strings.HasPrefix(name, "commercial_billing_"):
 		return "3 service"
 	}
-	return "legacy"
+	return "unratified"
 }
 
 // inventory renders the observability inventory from what the code
@@ -85,27 +85,9 @@ listed in their registries, not here.
 | Metric | Type | Tier | Labels | Meaning |
 |---|---|---|---|---|
 `)
-	for _, f := range families(t, false) {
+	for _, f := range families(t) {
 		fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s |\n", f.GetName(), strings.ToLower(f.GetType().String()), tier(f.GetName()), labelsOf(f),
 			strings.ReplaceAll(f.GetHelp(), "|", "\\|"))
-	}
-	b.WriteString(`
-## Deprecated (compatibility period)
-
-Emitted in parallel with their replacements while ` + "`OBSERVABILITY_LEGACY_METRICS=true`" + ` (default during the
-compatibility period). No alert, recording rule, SLO, dashboard, HPA or runbook reads them (CI). Removed after
-the approved sunset.
-
-| Deprecated name | Replacement |
-|---|---|
-`)
-	var old []string
-	for k := range metrics.Replacements {
-		old = append(old, k)
-	}
-	sort.Strings(old)
-	for _, k := range old {
-		fmt.Fprintf(&b, "| `%s` | `%s` |\n", k, metrics.Replacements[k])
 	}
 	return b.String()
 }

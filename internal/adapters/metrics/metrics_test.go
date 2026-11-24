@@ -36,7 +36,7 @@ func registered(t *testing.T) *metrics.Metrics {
 			return
 		}
 		_ = gincommon.ObservabilityMiddlewares(gincommon.Config{Logger: log, ServiceName: "commercial-billing", Domain: "commercial", Environment: "test", BuildVersion: "test"})
-		shared, initErr = metrics.New(gincommon.MetricsRegisterer(), metrics.Options{Legacy: true})
+		shared, initErr = metrics.New(gincommon.MetricsRegisterer())
 	})
 	if initErr != nil {
 		t.Fatal(initErr)
@@ -44,21 +44,20 @@ func registered(t *testing.T) *metrics.Metrics {
 	return shared
 }
 
-// scrape records one sample of every §11.2 metric on gincommon's registry
-// (legacy names on, as the server during the compatibility period) and
-// returns the exposition.
+// scrape records one sample of every §11.2 metric on gincommon's registry,
+// as the server does, and returns the exposition.
 func scrape(t *testing.T) string {
 	t.Helper()
 	return record(t, registered(t), gincommon.MetricsGatherer())
 }
 
-// scrapeWithoutLegacy is the post-sunset scrape: Billing's metrics alone on
-// a fresh registry, legacy names off (gincommon's identity initialised).
-func scrapeWithoutLegacy(t *testing.T) string {
+// scrapeBilling is Billing's metrics alone on a fresh registry
+// (gincommon's identity initialised), for the lint gate.
+func scrapeBilling(t *testing.T) string {
 	t.Helper()
 	registered(t)
 	reg := prometheus.NewRegistry()
-	m, err := metrics.New(reg, metrics.Options{})
+	m, err := metrics.New(reg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,47 +167,12 @@ func TestScrapePassesMetricsLint(t *testing.T) {
 		t.Skip("runs go run")
 	}
 	var bad []string
-	for _, f := range lint(t, scrapeWithoutLegacy(t)) {
+	for _, f := range lint(t, scrapeBilling(t)) {
 		if !matches(f, proposedPlatform) {
 			bad = append(bad, f)
 		}
 	}
 	if len(bad) > 0 {
 		t.Fatalf("metricslint findings:\n%s", strings.Join(bad, "\n"))
-	}
-}
-
-// During the compatibility period the only extra findings are the four
-// deprecated former Tier 2 names (removed at the sunset).
-func TestLegacyNamesAreTheOnlyCompatibilityFindings(t *testing.T) {
-	if testing.Short() {
-		t.Skip("runs go run")
-	}
-	legacy := make([]string, 0, len(metrics.Replacements))
-	for old := range metrics.Replacements {
-		legacy = append(legacy, "[namespace] "+old+":")
-	}
-	var bad []string
-	for _, f := range lint(t, scrape(t)) {
-		if !matches(f, proposedPlatform) && !matches(f, legacy) {
-			bad = append(bad, f)
-		}
-	}
-	if len(bad) > 0 {
-		t.Fatalf("findings beyond the deprecated names:\n%s", strings.Join(bad, "\n"))
-	}
-}
-
-// Legacy names are emitted in parallel only when switched on, each with
-// its Tier 3 replacement.
-func TestLegacyParallelEmission(t *testing.T) {
-	with, without := scrape(t), scrapeWithoutLegacy(t)
-	for old, repl := range metrics.Replacements {
-		if !strings.Contains(with, "# TYPE "+old+" ") || !strings.Contains(with, "# TYPE "+repl+" ") {
-			t.Errorf("compatibility period: %s and %s must both be exposed", old, repl)
-		}
-		if strings.Contains(without, old) {
-			t.Errorf("%s exposed with legacy off", old)
-		}
 	}
 }

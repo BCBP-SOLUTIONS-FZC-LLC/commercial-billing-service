@@ -7,8 +7,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/metrics"
 )
 
 const root = "../../.."
@@ -37,10 +35,10 @@ var otherServices = []string{"commercial_usage_metering_", "commercial_entitleme
 var metricName = regexp.MustCompile(`\bcommercial_[a-z0-9_]+\b`)
 
 // Every commercial_* name a rule, dashboard, HPA or runbook reads is one
-// Billing exposes (Tier 3) or another Commercial service's Tier 3 — never a
-// deprecated or unratified Tier 2 name (standard rules 10–11, rev 0.43).
-func TestNoRuleReadsLegacyNames(t *testing.T) {
-	exposed := scrapeWithoutLegacy(t)
+// Billing exposes (Tier 3) or another Commercial service's Tier 3 — never an
+// unratified Tier 2 name (standard rules 10–11).
+func TestReferencesUseCompliantNames(t *testing.T) {
+	exposed := scrapeBilling(t)
 	for _, f := range referenceFiles(t) {
 		b, err := os.ReadFile(f)
 		if err != nil {
@@ -58,10 +56,6 @@ func TestNoRuleReadsLegacyNames(t *testing.T) {
 				return 0
 			}
 			if next(0) == ':' || next(0) == '*' || (next(0) == '.' && next(1) >= 'a' && next(1) <= 'z') || strings.HasSuffix(name, "_") {
-				continue
-			}
-			if _, legacy := metrics.Replacements[name]; legacy {
-				t.Errorf("%s reads deprecated %s; use %s", f, name, metrics.Replacements[name])
 				continue
 			}
 			if foreign(name) {
@@ -88,8 +82,8 @@ func foreign(name string) bool {
 	return false
 }
 
-// platform_* references must be registry names (metricslint refs: legacy
-// names with replacements, unregistered platform_*).
+// platform_* references must be registry names (metricslint refs:
+// registry-deprecated names, unregistered platform_*).
 func TestReferencesPassMetricsLintRefs(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs go run")

@@ -15,9 +15,8 @@
 # (§11.2, rev 0.43): platform_* only from the registry, no Tier 2
 # commercial_* (none is ratified), Billing's own series as
 # commercial_billing_*. metric_status: proposed marks alerts that read a
-# platform_* registry entry not yet ratified. The deprecated former Tier 2
-# names are emitted in parallel during the compatibility period but no rule
-# reads them (TestNoRuleReadsLegacyNames).
+# platform_* registry entry not yet ratified. CI rejects any rule reading an
+# unratified commercial_* name (TestReferencesUseCompliantNames).
 #
 # Not here, by design:
 #   IAMParkedTenantEventsStale — Core's alert; the Alertmanager / OnCall

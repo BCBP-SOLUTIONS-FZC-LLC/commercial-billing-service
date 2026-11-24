@@ -42,16 +42,3 @@ listed in their registries, not here.
 | `commercial_billing_webhook_signature_failures_total` | counter | 3 service | `provider` | Callbacks refused for a bad signature or livemode (BIL-PAY-2). |
 | `commercial_billing_webhooks_total` | counter | 3 service | `provider`, `result`, `type` | Provider callbacks, by provider, normalised type and result. |
 | `platform_dependency_request_seconds` | histogram | 1 platform (registry) | `dependency`, `operation`, `outcome` | Client-observed wall time of one call to an external dependency — SNS (publish, publish_batch), SQS (receive_message, delete_message, change_message_visibility, send_message, get_queue_attributes, get_queue_url) or the configured schema-registry codec (encode, decode) — by outcome. The _count series counts calls. receive_message is a long poll: its duration includes up to WaitTimeSeconds (default 20 s) of waiting on an empty queue, so exclude it from latency views (it stays meaningful for error rates). |
-
-## Deprecated (compatibility period)
-
-Emitted in parallel with their replacements while `OBSERVABILITY_LEGACY_METRICS=true` (default during the
-compatibility period). No alert, recording rule, SLO, dashboard, HPA or runbook reads them (CI). Removed after
-the approved sunset.
-
-| Deprecated name | Replacement |
-|---|---|
-| `commercial_cross_tenant_job_runs_total` | `commercial_billing_cross_tenant_job_runs_total` |
-| `commercial_events_emitted_total` | `commercial_billing_events_emitted_total` |
-| `commercial_operator_actions_total` | `commercial_billing_operator_actions_total` |
-| `commercial_purchase_confirmation_to_event_seconds` | `commercial_billing_purchase_confirmation_to_event_seconds` |
