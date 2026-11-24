@@ -168,6 +168,28 @@ func run() int {
 		log.Error("provider registry: first certification read failed; no provider enabled for new accounts until the next refresh", map[string]any{"error": err.Error()})
 	}
 
+	// AL-5 direct-write in outbox mode (§3.3, §10.6).
+	auditP, err := buildAudit(context.Background(), cfg, appCfg, appPool, cfg.AppEnv, log)
+	if err != nil {
+		log.Error("platform-audit", map[string]any{"error": err.Error()})
+		return 1
+	}
+	if auditP.pool != nil {
+		defer auditP.pool.Close()
+	}
+
+	// Use cases (§8), then the event bus (§7): billing.events publisher (Glue
+	// schema versions are resolved here, so a deploy ahead of schema
+	// registration fails to start), tenant-billing-q (whose TenantConverted
+	// confirms sagas) and usage-billing-q, delayed emissions.
+	svc := buildService(cfg, registry, appPool, sysPool, nil, auditP.writer, log)
+	eventBus, err := buildBusWith(context.Background(), cfg, appPool, sysPool, svc, log)
+	if err != nil {
+		log.Error("event bus", map[string]any{"error": err.Error()})
+		return 1
+	}
+	svc.Events = eventBus.events
+
 	router := httpadapter.NewRouter(httpadapter.RouterConfig{
 		GinConfig: ginCfg,
 		Readiness: []httpadapter.Check{
@@ -176,19 +198,11 @@ func run() int {
 		},
 		Routes: []func(gin.IRouter){
 			webhookRoute(cfg, registry, sysPool, log),
-			apiRoutes(cfg, ginCfg, appPool),
+			apiRoutes(cfg, ginCfg, appPool, svc),
 			httpadapter.DocsRoutes(api.AsyncAPI),
 		},
 	})
-	// Event bus (§7): billing.events publisher (Glue schema versions are
-	// resolved here, so a deploy ahead of schema registration fails to
-	// start), tenant-billing-q and usage-billing-q, delayed emissions.
-	eventBus, err := buildBus(context.Background(), cfg, appPool, sysPool, log)
-	if err != nil {
-		log.Error("event bus", map[string]any{"error": err.Error()})
-		return 1
-	}
-	bg := startWorkers(cfg, registry, appPool, sysPool, eventBus, log)
+	bg := startWorkers(cfg, registry, appPool, sysPool, eventBus, svc, auditP.runner, log)
 
 	srv := &http.Server{
 		Addr:              ":" + strconv.Itoa(cfg.AppPort),

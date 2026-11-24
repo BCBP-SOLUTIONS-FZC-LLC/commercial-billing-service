@@ -129,3 +129,15 @@ func ClassifyRP3(a RP3Answer) RP3Action {
 func RP3IdempotencyKey(tenantID, billingSubscriptionID string) string {
 	return "convert:" + tenantID + ":" + billingSubscriptionID
 }
+
+// CanSagaTransitionOrStay accepts a write that keeps the state (attempt
+// bookkeeping) or any state the table of §9.3.1 allows from somewhere;
+// the use cases check the specific from → to with CanSagaTransition.
+func CanSagaTransitionOrStay(s ConversionSaga) bool {
+	switch s.State {
+	case SagaPaymentConfirmed, SagaRPConvertPending, SagaAwaitingTenantConverted, SagaConfirmed, SagaFailed,
+		SagaRefundPending, SagaRefunded, SagaReverted:
+		return true
+	}
+	return false
+}

@@ -43,7 +43,7 @@ type bus struct {
 // buildBus wires the event side of §7. Outside developer environments every
 // piece is required (config validation has already checked the settings);
 // in dev a missing topic or queue URL leaves that piece out with a warning.
-func buildBus(ctx context.Context, cfg config.Config, appPool, sysPool *pgcommon.Pool, log port.Logger) (*bus, error) {
+func buildBusWith(ctx context.Context, cfg config.Config, appPool, sysPool *pgcommon.Pool, conv app.ConversionConfirmer, log port.Logger) (*bus, error) {
 	schemas, err := eventbus.LoadSchemas()
 	if err != nil {
 		return nil, err
@@ -56,7 +56,7 @@ func buildBus(ctx context.Context, cfg config.Config, appPool, sysPool *pgcommon
 	if b.outbox, err = outboxRunner(ctx, cfg, awsCfg, appPool, log); err != nil {
 		return nil, err
 	}
-	if b.consumers, err = sqsConsumers(ctx, cfg, awsCfg, appPool, schemas, log); err != nil {
+	if b.consumers, err = sqsConsumers(ctx, cfg, awsCfg, appPool, schemas, conv, log); err != nil {
 		return nil, err
 	}
 	b.emissions = &app.EmissionWorker{
@@ -118,7 +118,8 @@ func outboxClaimLease(batchSize int) time.Duration {
 }
 
 // sqsConsumers builds tenant-billing-q and usage-billing-q (§7.1).
-func sqsConsumers(ctx context.Context, cfg config.Config, awsCfg aws.Config, appPool *pgcommon.Pool, schemas *eventbus.Schemas, log port.Logger) ([]events.Consumer, error) {
+func sqsConsumers(ctx context.Context, cfg config.Config, awsCfg aws.Config, appPool *pgcommon.Pool, schemas *eventbus.Schemas,
+	conv app.ConversionConfirmer, log port.Logger) ([]events.Consumer, error) {
 	var sqsOpts []func(*sqs.Options)
 	if ep := endpoint(); ep != "" {
 		sqsOpts = append(sqsOpts, func(o *sqs.Options) { o.BaseEndpoint = &ep })
@@ -134,7 +135,7 @@ func sqsConsumers(ctx context.Context, cfg config.Config, awsCfg aws.Config, app
 	}
 	lifecycle := &app.LifecycleConsumer{
 		Inbox: inboxRunner, Lock: pgadapter.TenantLocker{}, Accounts: pgadapter.NewLifecycleRepository(appPool),
-		Subs: pgadapter.NewSubscriptionRepository(appPool), MaxSkew: cfg.MaxLifecycleEventSkew, Log: log,
+		Subs: pgadapter.NewSubscriptionRepository(appPool), Conversions: conv, MaxSkew: cfg.MaxLifecycleEventSkew, Log: log,
 	}
 	usage := &app.UsageConsumer{Inbox: inboxRunner, Usage: pgadapter.NewUsageRecordRepository(appPool), Log: log}
 

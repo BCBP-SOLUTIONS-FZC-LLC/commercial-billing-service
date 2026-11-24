@@ -4,6 +4,8 @@
 package postgres
 
 import (
+	"fmt"
+	"net/url"
 	"os"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
@@ -64,4 +66,24 @@ func SystemDSNFromEnv() string {
 // session-scoped advisory lock), else the app DSN (§12, §13.4).
 func MigrationDSNFromEnv() string {
 	return pgcommon.MigrationDSNFromEnv()
+}
+
+// AuditDrainerPoolConfig returns the pool for platform-audit's runner:
+// billing_audit_drainer (NOBYPASSRLS, policy audit_drainer_all), the app
+// DSN's host and database with the drainer's credentials (§3.3, §12).
+func AuditDrainerPoolConfig(appDSN, user, password string, maxConns int32, log port.Logger) (pgcommon.Config, error) {
+	cfg, _ := pgcommon.ConfigFromEnv()
+	u, err := url.Parse(appDSN)
+	if err != nil || u.Scheme == "" {
+		return cfg, fmt.Errorf("audit drainer DSN: the app DSN is not a URL")
+	}
+	u.User = url.UserPassword(user, password)
+	cfg.DSN, cfg.PoolName, cfg.GUCProvider, cfg.MinConns = u.String(), "audit_drainer", nil, 0
+	if maxConns > 0 {
+		cfg.MaxConns = maxConns
+	}
+	if log != nil {
+		cfg.Logger = NewLoggerAdapter(log)
+	}
+	return cfg, nil
 }

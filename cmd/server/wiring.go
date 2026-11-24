@@ -17,7 +17,7 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/config"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-audit/pkg/auditoutbox"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events/v2/pkg/events"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events/v2/pkg/outbox"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
@@ -54,14 +54,24 @@ type workers struct {
 	done      chan struct{}
 	outbox    *outbox.Runner
 	consumers []events.Consumer
+	audit     *auditoutbox.Runner
 	log       port.Logger
 }
 
 // startWorkers starts the registry refresh, the webhook processor, the
 // outbox publisher, the SQS consumers and the delayed-emission worker.
-func startWorkers(cfg config.Config, reg *provider.Registry, appPool, sysPool *pgcommon.Pool, b *bus, log port.Logger) *workers {
+func startWorkers(cfg config.Config, reg *provider.Registry, appPool, sysPool *pgcommon.Pool, b *bus, svc *app.Service,
+	auditRunner *auditoutbox.Runner, log port.Logger) *workers {
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &workers{cancel: cancel, done: make(chan struct{}), outbox: b.outbox, consumers: b.consumers, log: log}
+	w := &workers{cancel: cancel, done: make(chan struct{}), outbox: b.outbox, consumers: b.consumers, audit: auditRunner, log: log}
+	if auditRunner != nil {
+		go func() {
+			if err := auditRunner.Start(ctx); err != nil && ctx.Err() == nil {
+				log.Error("audit runner", map[string]any{"error": err.Error()})
+			}
+		}()
+	}
+	go pollLoop(ctx, cfg.SagaPollInterval, sagaBatch, svc.RunSagas, log, "saga worker")
 	if b.outbox != nil {
 		go func() {
 			if err := b.outbox.Start(ctx); err != nil {
@@ -81,7 +91,7 @@ func startWorkers(cfg config.Config, reg *provider.Registry, appPool, sysPool *p
 		Ledger:      pgadapter.NewLedgerRepository(sysPool),
 		Providers:   reg,
 		Tx:          pgadapter.NewTxRunner(appPool),
-		Handlers:    map[domain.NormalisedKind]port.PaymentEventHandler{}, // Phase 6 registers the §7.4 handlers
+		Handlers:    paymentHandlers(svc),
 		MaxAttempts: cfg.WebhookMaxAttempts,
 		Log:         log,
 	}
@@ -100,6 +110,13 @@ func (w *workers) stop(timeout time.Duration) {
 	for _, c := range w.consumers {
 		if err := c.Stop(); err != nil {
 			w.log.Error("sqs consumer stop", map[string]any{"error": err.Error()})
+		}
+	}
+	if w.audit != nil {
+		sctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		if err := w.audit.Stop(sctx); err != nil {
+			w.log.Error("audit runner stop", map[string]any{"error": err.Error()})
 		}
 	}
 	if w.outbox != nil {
@@ -122,11 +139,9 @@ func webhookRoute(cfg config.Config, reg *provider.Registry, sysPool *pgcommon.P
 	return h.Register
 }
 
-// apiRoutes mounts the tenant, internal and operator routes (§5). The use
-// cases are Phase 6's; until then every route authorizes, validates and
-// answers 501 naming its phase.
-func apiRoutes(cfg config.Config, ginCfg gincommon.Config, appPool *pgcommon.Pool) func(gin.IRouter) {
-	svc := app.Unimplemented{}
+// apiRoutes mounts the tenant, internal and operator routes (§5) on the
+// use cases; a route whose flow is not built yet answers 501.
+func apiRoutes(cfg config.Config, ginCfg gincommon.Config, appPool *pgcommon.Pool, svc *app.Service) func(gin.IRouter) {
 	api := &httpadapter.APIConfig{
 		GinConfig: ginCfg, Tenant: svc, Internal: svc, Operator: svc,
 		Idem: &httpadapter.Idempotency{Repo: pgadapter.NewIdempotencyRepository(appPool), Tx: pgadapter.NewTxRunner(appPool),
@@ -135,6 +150,9 @@ func apiRoutes(cfg config.Config, ginCfg gincommon.Config, appPool *pgcommon.Poo
 	}
 	return api.Register
 }
+
+// sagaBatch is how many due sagas one pass handles.
+const sagaBatch = 20
 
 // idempotencyLock is §9.2's in-flight lock.
 const idempotencyLock = 30 * time.Second

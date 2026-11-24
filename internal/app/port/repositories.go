@@ -47,6 +47,10 @@ type SubscriptionRepo interface {
 	Transition(ctx context.Context, billingSubscriptionID string, expectedVersion int64, to domain.SubscriptionStatus,
 		mutate func(*domain.Subscription)) (domain.Subscription, error)
 	AppendHistory(ctx context.Context, h domain.StatusHistoryEntry) error
+	Update(ctx context.Context, billingSubscriptionID string, expectedVersion int64, mutate func(*domain.Subscription)) (domain.Subscription, error)
+	ByProvider(ctx context.Context, provider, providerSubscriptionID string) (domain.Subscription, bool, error)
+	Latest(ctx context.Context, tenantID string) (domain.Subscription, bool, error)
+	SetItem(ctx context.Context, it domain.SubscriptionItem) error
 	History(ctx context.Context, billingSubscriptionID string, limit int) ([]domain.StatusHistoryEntry, error)
 }
 
@@ -89,4 +93,25 @@ type LedgerRepo interface {
 	Claim(ctx context.Context, limit int, claimFor time.Duration) ([]domain.LedgerEntry, error)
 	// Finish records the outcome. nextAttempt is set only for a retry.
 	Finish(ctx context.Context, provider, providerEventID string, status domain.LedgerStatus, outcome string, nextAttempt *time.Time) error
+}
+
+// CheckoutRepo stores hosted checkout sessions (§4.2.7).
+type CheckoutRepo interface {
+	Insert(ctx context.Context, c domain.CheckoutSession) error
+	Open(ctx context.Context, tenantID, purpose string) (domain.CheckoutSession, bool, error)
+	ByProviderSession(ctx context.Context, providerSessionID string) (domain.CheckoutSession, bool, error)
+	SetProviderSession(ctx context.Context, sessionID, providerSessionID string, expiresAt time.Time) error
+	SetStatus(ctx context.Context, sessionID, status string) error
+}
+
+// SagaRef names a due saga.
+type SagaRef struct{ SagaID, TenantID string }
+
+// SagaRepo stores conversion sagas (§4.2.8).
+type SagaRepo interface {
+	Insert(ctx context.Context, s domain.ConversionSaga) error
+	BySubscription(ctx context.Context, billingSubscriptionID string) (domain.ConversionSaga, bool, error)
+	Get(ctx context.Context, sagaID string) (domain.ConversionSaga, bool, error)
+	Update(ctx context.Context, s domain.ConversionSaga) error
+	Due(ctx context.Context, now time.Time, limit int) ([]SagaRef, error)
 }

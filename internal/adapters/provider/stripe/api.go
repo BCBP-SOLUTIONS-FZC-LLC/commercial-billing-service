@@ -560,6 +560,22 @@ func (a *Adapter) FetchCurrent(ctx context.Context, obj domain.ProviderObjectRef
 		st.Fields["billing_reason"] = string(inv.BillingReason)
 		st.Fields["subscription"] = subscriptionOf(inv)
 		st.Fields["kind"] = string(v.Kind)
+		st.Fields["attempt_count"] = inv.AttemptCount
+		if inv.NextPaymentAttempt > 0 {
+			st.Fields["next_payment_attempt"] = time.Unix(inv.NextPaymentAttempt, 0).UTC()
+		}
+		// The subscription period this invoice covers (first line), so a
+		// handler can apply it without another provider call inside its
+		// transaction (BIL-CONC-2).
+		if inv.Lines != nil && len(inv.Lines.Data) > 0 {
+			if l := inv.Lines.Data[0]; l.Period != nil {
+				st.Fields["line_period_start"] = time.Unix(l.Period.Start, 0).UTC()
+				st.Fields["line_period_end"] = time.Unix(l.Period.End, 0).UTC()
+			}
+			if l := inv.Lines.Data[0]; l.Quantity > 0 {
+				st.Fields["line_quantity"] = l.Quantity
+			}
+		}
 	case domain.ObjectCheckoutSession:
 		s, err := a.sc.V1CheckoutSessions.Retrieve(ctx, obj.ID, nil)
 		if err != nil {
