@@ -106,12 +106,13 @@ func scalar[T any](t *testing.T, q string, args ...any) T {
 // fakeProvider is a PaymentProvider that records calls and their keys.
 type fakeProvider struct {
 	port.PaymentProvider
-	name    string
-	mu      sync.Mutex
-	calls   []string
-	fail    error
-	confirm []confirmAnswer
-	change  []confirmAnswer
+	name     string
+	mu       sync.Mutex
+	calls    []string
+	fail     error
+	confirm  []confirmAnswer
+	change   []confirmAnswer
+	fallback bool
 }
 
 func (p *fakeProvider) record(c string) error {
@@ -124,7 +125,11 @@ func (p *fakeProvider) record(c string) error {
 func (p *fakeProvider) Name() string { return p.name }
 
 func (p *fakeProvider) Capabilities() port.ProviderCapabilities {
-	return port.ProviderCapabilities{HostedCardEntry: true, RecurringSubscriptions: true, Schedules: true, Currencies: []string{"USD"}}
+	mode := port.ProrationNative
+	if p.fallback {
+		mode = port.ProrationFallback
+	}
+	return port.ProviderCapabilities{HostedCardEntry: true, RecurringSubscriptions: true, Schedules: true, Proration: mode, Currencies: []string{"USD"}}
 }
 
 func (p *fakeProvider) EnsureCustomer(_ context.Context, in port.CustomerInput, key string) (port.CustomerRef, error) {
@@ -194,6 +199,25 @@ func (p *fakeProvider) ScheduleAtPeriodEnd(_ context.Context, in port.PeriodEndC
 
 func (p *fakeProvider) ReleaseSchedule(_ context.Context, ref port.ScheduleRef, key string) error {
 	return p.record("ReleaseSchedule " + ref.ProviderScheduleID + " " + key)
+}
+
+func (p *fakeProvider) PreviewQuantityChange(_ context.Context, in port.QuantityChange) (port.ProrationPreview, error) {
+	return port.ProrationPreview{Amount: domain.Money{AmountMinor: int64(in.To-in.From) * 2300, Currency: "USD"}, ProrationInstant: in.ProrationInstant},
+		p.record("PreviewQuantityChange")
+}
+
+func (p *fakeProvider) ChangeQuantity(_ context.Context, in port.QuantityChange, key string) (port.ChangeResult, error) {
+	_ = p.record(fmt.Sprintf("ChangeQuantity %d->%d invoice_now=%v %s", in.From, in.To, in.InvoiceNow, key))
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	res := port.ChangeResult{Invoice: port.InvoiceRef{ProviderInvoiceID: "in_" + key}, Outcome: port.PaymentOutcome{Status: port.PaymentPaid}}
+	if len(p.change) > 0 {
+		a := p.change[0]
+		p.change = p.change[1:]
+		res.Outcome = a.outcome
+		return res, a.err
+	}
+	return res, nil
 }
 
 func (p *fakeProvider) called(prefix string) []string {
@@ -281,11 +305,12 @@ func newEnv(t *testing.T) *env {
 		Accounts: pgadapter.NewAccountRepository(appPool), Subs: pgadapter.NewSubscriptionRepository(appPool),
 		Prices: pgadapter.NewPriceRepository(appPool), Checkouts: pgadapter.NewCheckoutRepository(appPool), Invoices: pgadapter.NewInvoiceRepository(appPool),
 		Changes: pgadapter.NewPlanChangeRepository(appPool, systemPool), Previews: pgadapter.NewPreviewRepository(appPool),
+		SeatPurchases: pgadapter.NewSeatPurchaseRepository(appPool), Schedules: pgadapter.NewScheduleRepository(appPool, systemPool),
 		Sagas: pgadapter.NewSagaRepository(appPool, systemPool), Emissions: pgadapter.NewEmissionRepository(appPool, systemPool),
 		Providers: registry{"stripe": e.stripe, "manual": manual}, Core: e.core, RP: e.rp,
 		Events: pgadapter.NewEventEnqueuer(eventbus.Source, eventbus.SpecVersion, schemas.Validate), Audit: pgadapter.NewAuditWriter(enq),
 		Settings: app.Settings{DefaultCurrency: "USD", NewAccountProvider: "stripe", CheckoutTTL: time.Hour, TenantAppBaseURL: "https://app.example",
-			SagaMaxBackoff: 5 * time.Minute, SCAAbandonAfter: 30 * time.Minute, SagaClaim: 45 * time.Second, SeatsAfterConversionDelay: 120 * time.Second, MaxSeatsPerPurchase: 1000, SeatPreviewTTL: 10 * time.Minute,
+			SagaMaxBackoff: 5 * time.Minute, SCAAbandonAfter: 30 * time.Minute, SagaClaim: 45 * time.Second, SeatsAfterConversionDelay: 120 * time.Second, MaxSeatsPerPurchase: 1000, SeatPreviewTTL: 10 * time.Minute, MinChargeMinor: 200, BelowMinimumPolicy: domain.FreeUntilRenewal,
 			FeatureSeatPurchase: true},
 		Now: func() time.Time { return e.now },
 	}
@@ -332,3 +357,5 @@ func (e *env) version(t *testing.T, sub string) int64 {
 	t.Helper()
 	return scalar[int64](t, `SELECT record_version FROM subscriptions WHERE billing_subscription_id = $1`, sub)
 }
+
+func itoa(n int64) string { return fmt.Sprint(n) }

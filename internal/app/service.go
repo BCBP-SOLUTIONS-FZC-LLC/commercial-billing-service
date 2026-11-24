@@ -31,6 +31,8 @@ type Settings struct {
 	SCAAbandonAfter           time.Duration
 	MaxSeatsPerPurchase       int
 	SeatPreviewTTL            time.Duration
+	MinChargeMinor            int64
+	BelowMinimumPolicy        domain.BelowMinimumPolicy
 	FeatureDirectSignup       bool
 	FeatureTokenAddons        bool
 	FeatureSeatPurchase       bool
@@ -41,25 +43,27 @@ type Settings struct {
 type Service struct {
 	Unimplemented
 
-	Tx        port.TxRunner
-	Lock      port.TenantLocker
-	Accounts  port.AccountRepo
-	Subs      port.SubscriptionRepo
-	Prices    port.PriceRepo
-	Checkouts port.CheckoutRepo
-	Invoices  port.InvoiceRepo
-	Changes   port.PlanChangeRepo
-	Previews  port.PreviewRepo
-	Sagas     port.SagaRepo
-	Emissions port.EmissionRepo
-	Providers ProviderRegistry
-	Core      port.CoreClient
-	RP        port.RealmProvisionerClient
-	Events    port.EventEnqueuer
-	Audit     port.AuditWriter
-	Settings  Settings
-	Now       func() time.Time
-	Log       port.Logger
+	Tx            port.TxRunner
+	Lock          port.TenantLocker
+	Accounts      port.AccountRepo
+	Subs          port.SubscriptionRepo
+	Prices        port.PriceRepo
+	Checkouts     port.CheckoutRepo
+	Invoices      port.InvoiceRepo
+	Changes       port.PlanChangeRepo
+	Previews      port.PreviewRepo
+	SeatPurchases port.SeatPurchaseRepo
+	Schedules     port.ScheduleRepo
+	Sagas         port.SagaRepo
+	Emissions     port.EmissionRepo
+	Providers     ProviderRegistry
+	Core          port.CoreClient
+	RP            port.RealmProvisionerClient
+	Events        port.EventEnqueuer
+	Audit         port.AuditWriter
+	Settings      Settings
+	Now           func() time.Time
+	Log           port.Logger
 }
 
 var (

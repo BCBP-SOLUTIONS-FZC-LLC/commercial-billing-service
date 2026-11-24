@@ -136,3 +136,23 @@ type PreviewRepo interface {
 	Save(ctx context.Context, tenantID, previewID string, body []byte, expiresAt time.Time) error
 	Load(ctx context.Context, tenantID, previewID string) (body []byte, expiresAt time.Time, found bool, err error)
 }
+
+// SeatPurchaseRepo stores seat purchases (§4.2.10).
+type SeatPurchaseRepo interface {
+	Insert(ctx context.Context, p domain.SeatPurchase) error
+	Get(ctx context.Context, purchaseID string) (domain.SeatPurchase, bool, error)
+	Open(ctx context.Context, billingSubscriptionID string) (domain.SeatPurchase, bool, error)
+	ByProviderInvoice(ctx context.Context, tenantID, providerInvoiceID string) (domain.SeatPurchase, bool, error)
+	List(ctx context.Context, tenantID, afterID string, limit int) ([]domain.SeatPurchase, error)
+	Update(ctx context.Context, p domain.SeatPurchase) error
+}
+
+// ScheduleRepo stores scheduled seat reductions (§4.2.11).
+type ScheduleRepo interface {
+	Insert(ctx context.Context, s domain.SeatChangeSchedule) error
+	Open(ctx context.Context, billingSubscriptionID string) (domain.SeatChangeSchedule, bool, error)
+	Latest(ctx context.Context, billingSubscriptionID string) (domain.SeatChangeSchedule, bool, error)
+	Get(ctx context.Context, scheduleID string) (domain.SeatChangeSchedule, bool, error)
+	Update(ctx context.Context, s domain.SeatChangeSchedule) error
+	Due(ctx context.Context, until time.Time, limit int) ([]domain.SeatChangeSchedule, error)
+}
