@@ -7,7 +7,7 @@
 | Document type | Low-Level Design (LLD) |
 | Service | `commercial-billing` (Billing) |
 | Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service` (the repository name, as in the IAM services). Service name, ServiceAccount, pod label, envelope `source` and metric prefix stay `commercial-billing` (CD-17, CD-19) |
-| Status | **Submitted for sign-off** (rev 0.37) — design stage; no code yet. **All nine partner-team design decisions approved (S-1 to S-9, 2026-11-23)**, and the Commercial Team's additions to S-2, S-3, S-5 and S-6 acknowledged by Finance, Product and Legal; awaiting final sign-off (HLD v0.65 merge; PCI re-confirmation of §4 and §5.4.4). Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
+| Status | **Submitted for sign-off** (rev 0.38) — design stage; no code yet. **All nine partner-team design decisions approved (S-1 to S-9, 2026-11-23)**, and the Commercial Team's additions to S-2, S-3, S-5 and S-6 acknowledged by Finance, Product and Legal; awaiting final sign-off (HLD v0.65 merge; PCI re-confirmation of §4 and §5.4.4). Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
 | Base HLD | Commercial Domain HLD **v0.65** (`hld-commercial-domain-v0.65.md`), the only HLD for the domain. Rebased from v0.51 in rev 0.14 (to v0.64) and to v0.65 in rev 0.23: v0.52 to v0.65 checked for Billing impact (§1.1, "HLD v0.52 to v0.65"); v0.64 (`platform-audit`) changes Billing, already applied in rev 0.5; v0.65 is text-only and adopts this LLD's D-1, D-5, D-8 and D-9. Parent: IAM HLD **v1.59** |
 | Supersedes | `hld-billing-service.md` v0.2 (draft Billing HLD, dropped in Commercial HLD v0.28). Its open items B-1 to B-13 are dispositioned in §16.3 and are never a source of requirements |
 | Sibling LLDs | Commercial: `commercial-lld-entitlements-service.md`, `commercial-lld-usage-metering-service.md` (to be written; until it exists the consumed `UsagePeriodClosed` contract is unverified, BL-OQ-24). IAM (contracts verified against these): Core `iam-lld-org-membership-service.md` rev 2.49 (I-11, I-18, `billing-orgm-q`, EVT-14/15/18, SEAT-2), Realm Provisioner `iam-lld-realm-provisioner-service.md` rev 1.46+ (RP-3, RP-4, RP-11, `billing-realm-q`, `iam.tenant.events` payloads), Audit Log `iam-lld-audit-log-service.md` rev 0.37 (AL-5, entry taxonomy, Billing admission since rev 0.34, `billing.token_addon.refunded` since rev 0.37), `platform-audit` `docs/lld/platform-lld-audit.md` rev 1.5 (§4, §11, §18.6, §19.2), AuthZ Enrichment `iam-lld-authz-enrichment.md` v1.50 (operator path, CD-52; §8.9.1 OP-G4 lists Billing B-O1 to B-O15). Edge: `signup-bff-lld.md` (Signup BFF, `BillingClient.AuthorizeAndCharge`) |
@@ -19,6 +19,7 @@
 
 | Rev | Date | Change |
 |---|---|---|
+| 0.38 | 2026-11-24 | **Phase 7b–7d decisions (Commercial Team).** (1) **§11.2 label vocabulary:** the platform fixes `outcome` to `success`, `failure` and `error`, and reserves `state` for connection pools, so `metricslint` refused five labels. They are renamed, with the values unchanged: `result` on `commercial_billing_webhooks_total`, `_rp_convert_attempts_total`, `_seat_changes_total` and `_addon_purchases_total`, and `saga_state` on `commercial_billing_sagas_in_flight`. (2) **§11.5 approximations:** the metrics carry no tenant or age labels (§11.2). `BillingWebhookBacklog` (received branch) fires when received rows stay non-zero for 5 min. `BillingSeatProjectionDrift` fires on two mismatches in 24 h, and the SEV-3 log line names the tenant. `BillingSuspensionDraftsAwaitingDecision` fires when held drafts remain for 24 h with no subscription still paused. `BillingReviewTrigger` and `BillingReversalDecisionNeeded` come from log lines, as Loki rules. (3) **§11.3 trace links:** the envelope carries `trace_id` only, so a consumer span links to the producer's trace, not its span. The ledger stores no trace context, so a webhook's receive and processing spans are tied only by `billing.provider_event_id`. (4) **§11.2, §13.2:** CronJobs push with grouping key `job=<cronjob name>` (the Pushgateway reserves `job`). Scraped with `honor_labels`, the series keep `{job, outcome}`. Dependency names on `platform_dependency_request_seconds` are `stripe`, `core`, `realm_provisioner` and `entitlements`; operation names are bounded (method and path without ids). `commercial_events_emitted_total` counts at enqueue. The `conversion_seats` timing includes `SEATS_AFTER_CONVERSION_DELAY`. (5) **§14.4:** the Test Clock rehearsal (`scripts/testclock`) links a stub tenant to a clock-bound Stripe customer through the §19.3 stub → Stripe switch, with `trial_end` = the stub's period end; its evidence file is the go-live record. (6) **§13.3:** `helm-check` runs as its own CI job (chart lint and kubeconform on four value sets, promtool, chart contract tests). (7) **§12:** `PG_STATEMENT_TIMEOUT` and `PG_LOCK_TIMEOUT` are not read by the service or by `platform-pgcommon`. They are marked "not yet wired"; the chart does not set them. Still open: ratification of the four Tier 2 `commercial_*` metrics in the platform registry, and the `partial` value of `commercial_cross_tenant_job_runs_total{outcome}` (rev 0.37), which is outside the platform vocabulary and goes with that ratification. |
 | 0.37 | 2026-11-24 | **Phase 7a decisions (Commercial Team).** (1) **§12, §13.2:** new key `PUSHGATEWAY_URL`. Each CronJob pushes `commercial_cross_tenant_job_runs_total{job, outcome}` there; when the key is empty the job logs the outcome instead. (2) **§8.16 step 3:** the renewal price notice waits for BL-OQ-12 (NTF-3). No event is defined, so none is emitted; B-P1's `scheduled_unit_price` is the notice until then. (3) **§8.13:** auto-repair applies from Phase 7 and replaces the rev 0.36 report-only note. A `status_mismatch` where the provider has ended the subscription is repaired by a ledger row `recon:<run_id>:<provider_object_id>` (`event_type = reconciliation.reread`); the normal processor re-reads that object (`BIL-PAY-4`). Other status mismatches stay reported. A missing event is ledgered from the provider's event listing, normalised as a delivery would be. (4) **§3.4:** `QuantityChange.KeepIfUnpaid` applies the quantity even when the invoice is unpaid (Stripe `payment_behavior = allow_incomplete`); it is used only for the renewal top-up (§8.6.3, BL-OQ-6). **§2:** new package `internal/bootstrap` holds the composition shared by `cmd/server` and `cmd/jobs`. **§13.2:** `idempotency-prune` also removes stored previews (scope `preview`), and the CronJobs select across tenants as `billing_system` (read-only) and write in tenant transactions on the app pool. |
 | 0.36 | 2026-11-24 | **Commercial Team decisions on eight items raised at the end of Phase 6.** (1) **§8.13:** reconciliation is report-only (non-mutating) until Phase 7. `auto_repair` is accepted and recorded, but no repair runs before then. (2) **§8.16:** until `renewal-repricing` ships in Phase 7, a renewal uses the committed (current) price. (3) **§14.7:** the `cert-1.0` case ids are now listed. (4) **New invariant `BIL-AUD-1`:** a global change (price book, token packs, provider certification, reconciliation run) and its AL-5 entry under `platform_tenant` commit in one `billing_system` transaction. Migration `000006` grants `billing_system` `SELECT, INSERT` on `pending_audit_entries` (§4.2, §4.4). (5) **B-P16:** the `checkout.session.completed` (setup) handler only completes the session. The lifecycle follow-up worker then reads the new payment method from the provider, makes it the default (key `pmdefault:<session_id>`, outside any transaction, `BIL-CONC-2`), sets `default_pm_set` and stamps the new column `checkout_sessions.default_applied_at` (§4.2.7). (6) **B-O11/B-O12:** new port method `VerifyPrice` (§3.4). The provider price must exist, be active, and match amount, currency and interval, else `422 PROVIDER_PRICE_MISMATCH`; `manual` is exempt. (7) **B-P24:** offset paging is accepted; keyset paging is planned if history volume grows. (8) **§14.4:** Stripe Test Clock scenarios run in test mode in Phase 7 and are go-live evidence. |
 | 0.35 | 2026-11-24 | **Three ordering corrections found during implementation (Phase 6); no design change.** (1) B-P2 and B-I1: `chk_ba_customer` requires the provider customer id when a Stripe account row is inserted, so on a tenant's first checkout or signup `EnsureCustomer` (`bsub:<id>:customer`) runs **before** transaction 1, still outside any transaction (`BIL-CONC-2`); a later request reuses the account's customer. (2) B-P2 and B-P14: `checkout_sessions.provider_session_id` is `NOT NULL` and unique, so transaction 1 stores the placeholder `pending:<session_id>`, which transaction 2 replaces with the provider's session id (§4.2.7 note). (3) §8.6.3: the renewal's fresh I-11 read and any top-up are HTTP calls and cannot run inside the cycle `invoice.paid` handler's transaction (`BIL-CONC-2`); the handler rolls the period and leaves the schedule `applying`, and the next `seat-renewal` run (≤ 15 min) reads I-11, charges any top-up and commits the result. |
@@ -3282,22 +3283,22 @@ Three tiers (IAM Platform Observability Standard, HLD §12.2); const labels `dom
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `commercial_billing_webhooks_total` | Counter | `provider`, `type`, `outcome` (`processed`\|`ignored`\|`failed`\|`duplicate`) | Callbacks |
+| `commercial_billing_webhooks_total` | Counter | `provider`, `type`, `result` (`processed`\|`ignored`\|`failed`\|`duplicate`) | Callbacks |
 | `commercial_billing_webhook_signature_failures_total` | Counter | `provider` | `BIL-PAY-2` rejections |
 | `commercial_billing_webhook_processing_seconds` | Histogram | `provider`, `kind` | Received → processed |
 | `commercial_billing_webhook_backlog` | Gauge | `status` (`received`\|`failed`) | Ledger rows waiting (exporter, 30 s) |
 | `commercial_billing_conversion_saga_duration_seconds` | Histogram | `kind` | Payment confirmed → `TenantConverted` |
-| `commercial_billing_sagas_in_flight` | Gauge | `state` | Open sagas |
+| `commercial_billing_sagas_in_flight` | Gauge | `saga_state` | Open sagas |
 | `commercial_billing_sagas_overdue` | Gauge | — | Past 30 min (alert source) |
-| `commercial_billing_rp_convert_attempts_total` | Counter | `outcome` (`ok`\|`in_progress`\|`retryable`\|`terminal`) | RP-3 calls |
+| `commercial_billing_rp_convert_attempts_total` | Counter | `result` (`ok`\|`in_progress`\|`retryable`\|`terminal`) | RP-3 calls |
 | `commercial_billing_subscriptions` | Gauge | `status`, `plan`, `provider` | Exporter, 60 s |
 | `commercial_billing_downgrades_blocked_total` | Counter | `blocker` | I-18 blockers |
 | `commercial_billing_repricing_scheduled_total` | Counter | `direction` (`increase`\|`decrease`) | §8.16 |
-| `commercial_billing_seat_changes_total` | Counter | `direction` (`purchase`\|`reduction`\|`renewal_topup`), `outcome` | Seats |
+| `commercial_billing_seat_changes_total` | Counter | `direction` (`purchase`\|`reduction`\|`renewal_topup`), `result` | Seats |
 | `commercial_billing_seat_projection_mismatches_total` | Counter | — | §8.6.4 |
 | `commercial_billing_proration_deferred_total` | Counter | `currency`, `reason` (`below_provider_minimum`) | Seat purchases added free until renewal (§8.5.3, BL-OQ-6) |
 | `commercial_billing_proration_deferred_amount_minor_total` | Counter | `currency` | Sum of `deferred_amount_minor` not charged (§8.5.3) |
-| `commercial_billing_addon_purchases_total` | Counter | `pack_code`, `outcome` | Token packs |
+| `commercial_billing_addon_purchases_total` | Counter | `pack_code`, `result` | Token packs |
 | `commercial_billing_payment_failures_total` | Counter | `reason` (mapped decline) | Declines |
 | `commercial_billing_dunning_transitions_total` | Counter | `to` (`past_due`\|`cancelled`\|`active`) | Lapse flow |
 | `commercial_billing_unmatched_conversions_total` | Counter | — | `TenantConverted` with no saga |
@@ -3344,6 +3345,8 @@ billing.http B-P4 (downgrade)
 
 Attributes: `tenant.id`, `billing.subscription_id`, `billing.provider`, `billing.saga_state`; never amounts with card data, never `client_secret`.
 
+**Links across async hops (rev 0.38).** A consumed event's span (`billing.consume <type>`) links to the producer's trace by the envelope's `trace_id`; the envelope has no span id, so the link names the trace only. The ledger keeps no trace context, so `billing.webhook.process` is tied to `billing.webhook.receive` by `billing.provider_event_id`, not by a span link.
+
 ### 11.4 Structured logs
 
 `slog` JSON to Loki with `trace_id`, `span_id`, `tenant_id`, `request_id`, `route_id`, `actor_id` (operator actions), `provider_event_id` (webhook path). Redaction per §10.1. Levels: `INFO` for state transitions (one line per transition with from/to), `WARN` for retryable dependency failures, `ERROR` for terminal failures and invariant breaches.
@@ -3359,17 +3362,19 @@ Rules in `deploy/monitoring/app-alerts.yml`, routed by Grafana OnCall to **Billi
 | `CommercialPurchaseNotActive` | Composed rule: for a confirmed seat or add-on purchase, Billing confirmation-to-event p99 + `platform_event_propagation_seconds` on `billing-orgm-q` / `billing-entitlements-q` + Usage & Metering `commercial_usage_metering_limit_render_latency_seconds` > 60 s over 10 min | SEV-2 (HLD §8.6.3, §12.4) |
 | `IAMParkedTenantEventsStale` | Core's alert; **also routed to Billing on-call** (SRE-6) | SEV-2 |
 | `BillingWebhookSignatureFailures` | rate > 5/min for 5 min | SEV-2 (HLD §12.4) |
-| `BillingWebhookBacklog` | `commercial_billing_webhook_backlog{status="received"}` older than 5 min, or `failed` > 0 for 30 min | SEV-3 |
+| `BillingWebhookBacklog` | `commercial_billing_webhook_backlog{status="received"}` > 0 for 5 min (the gauge has no age), or `failed` > 0 for 30 min | SEV-3 |
 | `BillingOutboxDeadLetter` | `platform_outbox_dead_letters > 0` | SEV-2 |
 | `BillingDLQNotEmpty` | `platform_dlq_depth{queue=~"tenant-billing-q-dlq\|usage-billing-q-dlq"} > 0` | SEV-3 (HLD §12.4) |
 | `BillingI18Unavailable` | I-18 `503` for > 10 min | SEV-3 (HLD §12.4) |
 | `BillingReversalDecisionNeeded` | dispute / EFW within the revert window | SEV-2 |
-| `BillingSuspensionDraftsAwaitingDecision` | a held draft (`held_for_review`, no `disposition`) on a tenant reactivated more than 24 h ago | SEV-3 (Finance / operator queue, §8.10) |
+| `BillingSuspensionDraftsAwaitingDecision` | held drafts (`held_for_review`, no `disposition`) remain for 24 h with no subscription still paused (the gauges carry no tenant) | SEV-3 (Finance / operator queue, §8.10) |
 | `BillingReconciliationDrift` | unrepaired findings > 0 for 24 h | SEV-3 |
-| `BillingSeatProjectionDrift` | same tenant mismatched twice in 24 h | SEV-3 |
+| `BillingSeatProjectionDrift` | two mismatches in 24 h (no tenant label; the SEV-3 log line names the tenant that repeats) | SEV-3 |
 | `BillingProviderUnavailable` | `platform_dependency_request_seconds{dependency="stripe",outcome="error"}` ratio > 50% for 5 min | SEV-2 |
 | `BillingProviderNotCertified` | `commercial_billing_provider_certified == 0` for any provider in `ENABLED_PAYMENT_PROVIDERS` for 5 min (`BIL-PROV-1` / `BIL-PROV-2`); runbook §20.9 | SEV-2 |
 | `BillingReviewTrigger` | refund / adjustment above threshold, RP-4 request | Review (no page) |
+
+Rules are `deploy/monitoring/app-alerts.yml`, rendered by the chart; each carries a `runbook_url` into `docs/runbooks/`. `BillingReviewTrigger` and `BillingReversalDecisionNeeded` are raised from their log lines (`alert=…`) as Loki rules (rev 0.38).
 
 Dashboards (Grafana "Commercial / Billing"): conversion funnel (sessions → paid → RP accepted → confirmed); purchases (count, confirmation latency, failures); dunning (past-due, cancellations, reactivations); webhooks (rate, lag, backlog, signature failures); events (emitted, outbox lag, scheduled emissions); dependencies (Stripe, Core, RP, Entitlements, Audit).
 
@@ -3392,7 +3397,7 @@ Values from `deploy/helm/values.yaml` (`env:`) and OpenBao (`secretValues:` via 
 | `PG_AUDIT_DRAINER_MAX_CONNS` | `2` | 1–5 | Audit drainer pool |
 | `MIGRATION_DATABASE_URL` | secret | **direct RDS endpoint, not PgBouncer** | `cmd/migrate` (`billing_migrator`), incl. `auditoutbox.ApplySchema` (session-scoped advisory lock) |
 | `PG_MAX_CONNS` / `PG_MIN_CONNS` / `PG_SYSTEM_MAX_CONNS` | `10` / `0` / `4` | 2–50 / 0–10 / 1–10 | Pools (HLD §7.1) |
-| `PG_STATEMENT_TIMEOUT` / `PG_LOCK_TIMEOUT` | `5s` / `2s` | 1–30 s / 0.5–10 s | Per transaction |
+| `PG_STATEMENT_TIMEOUT` / `PG_LOCK_TIMEOUT` | `5s` / `2s` | 1–30 s / 0.5–10 s | Per transaction. **Not yet wired** (rev 0.38): neither the service nor `platform-pgcommon` reads them |
 | `PG_BOUNCER_MODE` | `true` | bool | PgBouncer transaction pooling |
 | `RUN_MIGRATIONS` / `MIGRATE_TIMEOUT` | `false` (Helm) / `10m` | bool / 1–30 m | Hook Job owns migrations |
 | `SNS_BILLING_EVENTS_TOPIC_ARN` | — (required) | ARN | Publish target |
@@ -3504,6 +3509,7 @@ Node class `t3.small` share (HLD §14.2).
 
 ### 13.3 CI/CD, deploy role and PCI review
 
+- `helm-check` runs as its own CI job: lint and kubeconform on base, dev, staging and prod values; promtool on the rules; chart contract tests (rev 0.38).
 - Four-workflow pipeline as IAM (HLD §15.4): validate (lint, `go-arch-lint`, unit, `schema-check`, Swagger drift, `helm-check`, metric names), integration (testcontainers), image build and scan, deploy.
 - **AWS OIDC deploy role** `github-actions-billing-deploy`, trusting only `repo:BCBP-SOLUTIONS-FZC-LLC/commercial-billing:*`; separate from `github-actions-commercial-deploy` (Entitlements, Usage & Metering).
 - **Production deploys require a second reviewer from the PCI owner group** (GitHub environment protection on `production`, HLD §15.4).
@@ -3566,7 +3572,7 @@ Postgres 17 (the version the IAM services use, `postgres:17-alpine`) with the re
 
 ### 14.4 E2E (staging)
 
-Stripe test mode with **Test Clocks**: monthly and annual renewal; failed renewal → `past_due` → retries → `cancelled`; operator suspension across a renewal (draft held, no charge, open `past_due` invoice stops retrying and never cancels) → reactivation (retries resume, held draft not finalised) → B-O16 `finalize` and `void`; reactivation from `past_due` and from `cancelled`; scheduled downgrade with I-18 re-check; reduction across a renewal; token add-on with 3-D Secure test cards. CD-19 smoke: Billing calls each admitted route as `commercial-system` and expects `403` on RP-10 and RP-14. **Go-live evidence (rev 0.36):** in Phase 7 these Test Clock scenarios run as scripts against Stripe test mode, and their run records (clock ids, event ids, final states) are kept as go-live evidence (§20). Operator paths once OP-G1 to OP-G3 are done: the joint end-to-end test OP-G4 (IAM + Commercial) covers B-O1 to B-O15.
+Stripe test mode with **Test Clocks**: monthly and annual renewal; failed renewal → `past_due` → retries → `cancelled`; operator suspension across a renewal (draft held, no charge, open `past_due` invoice stops retrying and never cancels) → reactivation (retries resume, held draft not finalised) → B-O16 `finalize` and `void`; reactivation from `past_due` and from `cancelled`; scheduled downgrade with I-18 re-check; reduction across a renewal; token add-on with 3-D Secure test cards. CD-19 smoke: Billing calls each admitted route as `commercial-system` and expects `403` on RP-10 and RP-14. **Go-live evidence (rev 0.36):** in Phase 7 these Test Clock scenarios run as scripts against Stripe test mode, and their run records (clock ids, event ids, final states) are kept as go-live evidence (§20). **Method (rev 0.38):** `scripts/testclock/run.sh` (`make testclock`). Stripe advances only customers created on a clock, so each scenario converts a trial tenant with a stub (B-O1), creates its Stripe customer on a new clock and a subscription with `trial_end` = the stub's period end, and links them with the §19.3 stub → Stripe switch. The script refuses a live key; runbook `docs/runbooks/test-clock-rehearsal.md`. Operator paths once OP-G1 to OP-G3 are done: the joint end-to-end test OP-G4 (IAM + Commercial) covers B-O1 to B-O15.
 
 ### 14.5 RLS test cases
 
