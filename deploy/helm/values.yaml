@@ -127,6 +127,14 @@ env:
   OUTBOX_BATCH_SIZE: "50"
   OUTBOX_MAX_ATTEMPTS: "5"
   OUTBOX_RETENTION_DAYS: "8"
+  # Read by platform-events' config (LoadSQS / LoadOutbox); Billing's §12
+  # values above (wait, visibility, max receive, poll, batch, attempts) are
+  # applied on top of them.
+  SQS_CONCURRENCY: "1"
+  SQS_HANDLER_TIMEOUT: 20s
+  SQS_DRAIN_TIMEOUT: 15s
+  SQS_QUEUE_DEPTH_INTERVAL: 60s    # platform_queue_depth / platform_dlq_depth (BillingDLQNotEmpty)
+  OUTBOX_PUBLISH_TIMEOUT: 10s
   PROCESSED_EVENTS_TTL_DAYS: "8"
   # Dependencies (§18).
   CORE_BASE_URL: http://iam-org-membership.iam.svc.cluster.local:8080
