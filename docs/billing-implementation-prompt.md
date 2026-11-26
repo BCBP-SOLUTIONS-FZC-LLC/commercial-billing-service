@@ -9,7 +9,7 @@ Paste everything below the line into a coding agent (for example Claude Code) st
 You are implementing the **Commercial Billing service** (`commercial-billing`) in Go, from its Low-Level Design:
 
 - **Source of truth:** `docs/lld/commercial-lld-billing-service.md` (rev 0.32 or later, base HLD v0.65). Read it in full before writing any code. It defines the package layout, data model, API, events, flows, invariants, configuration, deployment and tests. **Implement what it says. Do not invent behaviour, endpoints, fields, events, statuses or configuration that it doesn't define.**
-- **Context documents** (read, don't implement from them): `docs/lld/billing-design-signoff-blockers.md` (why decisions were made), `docs/lld/billing-open-items-handoff.md` (what other teams still owe), `docs/lld/billing-iam-actions.md`, `docs/lld/billing-decided-items-entitlements-build.md`.
+- **Context documents** (read, don't implement from them): `docs/lld/billing-open-items.md` (what other teams still owe; decision history is in LLD §16 and git).
 - **Parent HLD:** `../commercial-hld-docs/hld-commercial-domain-v0.65.md`. Consult it only when the LLD points to it.
 
 The repository today holds only `README.md`, `.gitignore` and `docs/`. You are building the service from scratch.
