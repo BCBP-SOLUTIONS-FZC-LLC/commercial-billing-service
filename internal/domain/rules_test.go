@@ -233,7 +233,7 @@ func TestEventPayloadValidation(t *testing.T) {
 		TenantSubscriptionCancelled{TenantID: "t", CancelledAt: now, Reason: CancelDunningExhausted},
 		TenantReactivated{TenantID: "t", Source: ReactivationSource, ReactivatedAt: now, PreviousStatus: StatusPastDue},
 		TenantQuotaAddOnChanged{TenantID: "t", Resource: ResourceLLMTokens, Delta: 10_000_000, Reason: AddonPurchase, BillingRef: "p1", PurchasedAt: &now, PackCode: "tokens_5m", PackQuantity: 2},
-		TenantQuotaAddOnChanged{TenantID: "t", Resource: ResourceLLMTokens, Delta: -5_000_000, Reason: AddonRefund, BillingRef: "r1", PurchaseRef: "p1"},
+		TenantQuotaAddOnChanged{TenantID: "t", Resource: ResourceLLMTokens, Delta: -5_000_000, Reason: AddonRefund, BillingRef: "r1", PurchaseRef: "0193a8f0-1c2d-7e3f-9a4b-000000000001"},
 	}
 	for i, p := range valid {
 		if err := p.Validate(); err != nil {
@@ -250,9 +250,10 @@ func TestEventPayloadValidation(t *testing.T) {
 		TenantSubscriptionCancelled{TenantID: "t", CancelledAt: now, Reason: CancelOffboarded},
 		TenantReactivated{TenantID: "t", Source: "operator", ReactivatedAt: now},
 		TenantQuotaAddOnChanged{TenantID: "t", Resource: "api_requests", Delta: 1, Reason: AddonPurchase, BillingRef: "p1", PurchasedAt: &now},
-		TenantQuotaAddOnChanged{TenantID: "t", Resource: ResourceLLMTokens, Delta: 1, Reason: AddonPurchase, BillingRef: "p1"},                  // no purchased_at
-		TenantQuotaAddOnChanged{TenantID: "t", Resource: ResourceLLMTokens, Delta: 5, Reason: AddonRefund, BillingRef: "r1", PurchaseRef: "p1"}, // positive refund
-		TenantQuotaAddOnChanged{TenantID: "t", Resource: ResourceLLMTokens, Delta: -5, Reason: AddonRefund, BillingRef: "r1"},                   // no purchase_ref
+		TenantQuotaAddOnChanged{TenantID: "t", Resource: ResourceLLMTokens, Delta: 1, Reason: AddonPurchase, BillingRef: "p1"},                   // no purchased_at
+		TenantQuotaAddOnChanged{TenantID: "t", Resource: ResourceLLMTokens, Delta: 5, Reason: AddonRefund, BillingRef: "r1", PurchaseRef: "p1"},  // positive refund
+		TenantQuotaAddOnChanged{TenantID: "t", Resource: ResourceLLMTokens, Delta: -5, Reason: AddonRefund, BillingRef: "r1", PurchaseRef: "p1"}, // non-UUID purchase_ref
+		TenantQuotaAddOnChanged{TenantID: "t", Resource: ResourceLLMTokens, Delta: -5, Reason: AddonRefund, BillingRef: "r1"},                    // no purchase_ref
 		TenantQuotaAddOnChanged{TenantID: "t", Resource: ResourceLLMTokens, Delta: 5, Reason: "operator_correction", BillingRef: "x", PurchasedAt: &now},
 	}
 	for i, p := range invalidCases {

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Payload types of billing.events (LLD §7.3). Every payload carries
@@ -234,6 +236,11 @@ func (p TenantQuotaAddOnChanged) Validate() error {
 	case AddonRefund:
 		if p.Delta >= 0 || p.PurchaseRef == "" {
 			return invalid("TenantQuotaAddOnChanged refund: delta < 0 and purchase_ref are required")
+		}
+		// Entitlements decodes purchase_ref as a UUID and its consumed schema
+		// declares format uuid (contract test, LLD §14.4): canonical form only.
+		if len(p.PurchaseRef) != 36 || uuid.Validate(p.PurchaseRef) != nil {
+			return invalid("TenantQuotaAddOnChanged refund: purchase_ref must be a UUID")
 		}
 	default:
 		return invalid("TenantQuotaAddOnChanged: reason must be purchase|refund")

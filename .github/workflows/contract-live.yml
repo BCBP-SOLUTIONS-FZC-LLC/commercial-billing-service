@@ -1,0 +1,78 @@
+# Contract tests against consumers' live schemas (LLD §14.4).
+#
+# The CI workflow runs test/contract against the vendored copies in
+# test/contract/testdata/consumers. This workflow fetches the copies that
+# consumers have on their main branch and runs the same suite against them,
+# so a backward-incompatible change on the consumer side fails here even
+# before the vendored copy is refreshed. It runs daily (consumer changes don't
+# trigger Billing's CI) and on every pull request.
+#
+# Covered today: Entitlements' consumed TenantQuotaAddOnChanged schema
+# (BL-OQ-4, BL-OQ-20). GO_PRIVATE_TOKEN needs read access to
+# commercial-entitlements-service.
+name: Contract (live consumers)
+
+"on":
+  schedule:
+    - cron: '17 3 * * *'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contract-live-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  GOPRIVATE: github.com/BCBP-SOLUTIONS-FZC-LLC/*
+  GONOSUMDB: github.com/BCBP-SOLUTIONS-FZC-LLC/*
+
+jobs:
+  entitlements:
+    name: Entitlements (main)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            go.mod
+
+      - name: Configure private module access
+        run: |
+          git config --global credential.helper store
+          echo "https://x-access-token:${{ secrets.GO_PRIVATE_TOKEN }}@github.com" > ~/.git-credentials
+          chmod 600 ~/.git-credentials
+
+      - name: Fetch Entitlements' consumed schema from main
+        env:
+          GH_TOKEN: ${{ secrets.GO_PRIVATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/consumers"
+          cp -R test/contract/testdata/consumers "$dir"
+          curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github.raw+json" \
+            "https://api.github.com/repos/BCBP-SOLUTIONS-FZC-LLC/commercial-entitlements-service/contents/internal/adapter/outbound/eventbus/schemas/inbound_tenant_quota_add_on_changed.json?ref=main" \
+            -o "$dir/commercial-entitlements/inbound_tenant_quota_add_on_changed.json"
+          if ! diff -q test/contract/testdata/consumers/commercial-entitlements/inbound_tenant_quota_add_on_changed.json \
+               "$dir/commercial-entitlements/inbound_tenant_quota_add_on_changed.json" >/dev/null; then
+            echo "::warning::Entitlements' schema on main differs from the vendored copy; refresh test/contract/testdata/consumers/commercial-entitlements and its commit in README.md"
+          fi
+          echo "CONTRACT_CONSUMERS_DIR=$dir" >> "$GITHUB_ENV"
+
+      - name: Contract tests against live schemas
+        run: go test ./test/contract/... -count=1 -timeout 300s
