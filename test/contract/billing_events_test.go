@@ -51,14 +51,16 @@ func samples() map[string]domain.EventPayload {
 // consumerFiles maps each produced type to the consumer schema files that
 // validate it.
 var consumerFiles = map[domain.EventType][]string{
-	domain.EventTenantPlanChanged:  {"iam-org-membership/tenant_plan_changed.json", "iam-audit-log/billing_audit_tenant_plan_changed.json"},
+	domain.EventTenantPlanChanged: {"iam-org-membership/tenant_plan_changed.json", "iam-audit-log/billing_audit_tenant_plan_changed.json",
+		"commercial-entitlements/inbound_billing_tenant_plan_changed.json"},
 	domain.EventTenantSeatsChanged: {"iam-org-membership/tenant_seats_changed.json", "iam-audit-log/billing_audit_tenant_seats_changed.json"},
 	domain.EventTenantPaymentPastDue: {"iam-org-membership/tenant_payment_past_due.json",
 		"iam-audit-log/billing_audit_tenant_payment_past_due.json"},
 	domain.EventTenantSubscriptionCancelled: {"iam-org-membership/tenant_subscription_cancelled.json",
-		"iam-audit-log/billing_audit_tenant_subscription_cancelled.json"},
+		"iam-audit-log/billing_audit_tenant_subscription_cancelled.json",
+		"commercial-entitlements/inbound_billing_tenant_subscription_cancelled.json"},
 	domain.EventTenantReactivated: {"iam-org-membership/tenant_reactivated.json", "iam-audit-log/billing_audit_tenant_reactivated.json",
-		"iam-realm-provisioner/billing_tenant_reactivated.json"},
+		"iam-realm-provisioner/billing_tenant_reactivated.json", "commercial-entitlements/inbound_billing_tenant_reactivated.json"},
 	domain.EventTenantQuotaAddOnChanged: {"iam-audit-log/billing_audit_tenant_quota_add_on_changed.json",
 		entitlementsAddonFile},
 }
