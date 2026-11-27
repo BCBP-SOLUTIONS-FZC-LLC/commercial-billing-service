@@ -6,6 +6,12 @@ This service has never been deployed to any environment, and there is no release
 
 ## [Unreleased]
 
+### Changed (2026-11-27 — Realm Provisioner re-check after RP #65 and #66, LLD rev 0.64)
+
+- Re-checked against `iam-realm-provisioner` `main` at `d3f4e3c`. **Compatible; no Billing code change.** R-1 to R-6 are merged (RP #65): RP-4 detached and Billing-only, queue `billing-realm-q`, namespace `iam`, RP-3 plan enum, docs.
+- RP-4's idempotency record is now written in the revert's transaction, so a revert that landed always replays `200` (kept 30 days). The open item on a revert whose RP ledger write failed is closed.
+- RP #66 aligned the shared platform libraries with Billing's (gincommon v2.7.0, events v2.3.0, pgcommon v2.0.2, audit v0.1.2). Schemas unchanged; the vendored RP schema is recorded at `d3f4e3c`.
+
 ### Fixed (2026-11-27 — Billing ↔ Realm Provisioner compatibility, LLD rev 0.63)
 
 - Checked against `iam-realm-provisioner` `fac6ea0`. **No wire break** on RP-3, RP-4, RP-11, `billing-realm-q` or the four `tenant-billing-q` events; the vendored RP consumed schema is byte-identical (now recorded as `fac6ea0`).

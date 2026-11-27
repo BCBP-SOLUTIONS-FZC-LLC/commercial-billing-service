@@ -15,7 +15,7 @@ It never holds card data (PCI SAQ A), and it is on no per-request hot path.
 
 **Design:**
 - Refines the Commercial Domain HLD **v0.65**.
-- The LLD is [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md), rev 0.63 (revision history at the top). It is the source of truth for everything here.
+- The LLD is [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md), rev 0.64 (revision history at the top). It is the source of truth for everything here.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) has the diagrams and runtime flows.
 
 **State:**
