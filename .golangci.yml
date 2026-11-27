@@ -1,0 +1,43 @@
+# https://golangci-lint.run/docs/configuration/  (golangci-lint v2, run as a go tool)
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - exhaustive
+    - forbidigo
+    - nilerr
+    - noctx
+    - revive
+    - unconvert
+    - unparam
+
+  settings:
+    revive:
+      rules:
+        - name: var-naming
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+    forbidigo:
+      analyze-types: true
+      forbid:
+        # BIL-OPS-1: every pool comes from pgcommon.NewPool (LLD §3.2).
+        - pattern: 'pgxpool\.(New|NewWithConfig|Connect)$'
+          msg: "BIL-OPS-1: construct pools only via pgcommon.NewPool"
+        - pattern: 'pgx\.Connect(Config)?$'
+          msg: "BIL-OPS-1: construct connections only via pgcommon.NewPool"
+        - pattern: 'sql\.Open$'
+          msg: "BIL-OPS-1: this service uses pgx/pgcommon, not database/sql"
+  exclusions:
+    rules:
+      - path: '_test\.go'
+        linters: [revive, unparam, noctx]
+      - path: '^cmd/'
+        linters: [revive]
+      - path: '^test/'
+        linters: [revive, unparam, noctx]

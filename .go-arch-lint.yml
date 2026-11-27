@@ -1,0 +1,48 @@
+# Component boundaries, LLD §3.2. Run with .github/scripts/arch-lint.sh.
+#
+# depOnAnyVendor stays true (as in the IAM services); the one vendor rule of
+# §3.2, that only adapters/provider/stripe imports github.com/stripe/*
+# (BIL-PCI-1), is enforced by .github/scripts/check-stripe-imports.sh.
+version: 3
+workdir: internal
+
+allow:
+  depOnAnyVendor: true
+  deepScan: false
+
+excludeFiles:
+  - '.*_test\.go$'
+
+components:
+  domain:    { in: domain/** }
+  app:       { in: app }
+  port:      { in: app/port/** }
+  config:    { in: config/** }
+  http:      { in: adapters/http/** }
+  webhook:   { in: adapters/webhook/** }
+  consumer:  { in: adapters/consumer/** }
+  postgres:  { in: adapters/postgres/** }
+  eventbus:  { in: adapters/eventbus/** }
+  registry:  { in: adapters/provider }
+  stripe:    { in: adapters/provider/stripe/** }
+  manual:    { in: adapters/provider/manual/** }
+  iamclient: { in: adapters/iamclient/** }
+  entclient: { in: adapters/entitlementsclient/** }
+  httpx:     { in: adapters/httpx/** }
+  metrics:   { in: adapters/metrics/** }
+
+# Components without an entry (domain, config, httpx, metrics) may depend on
+# no other project component.
+deps:
+  port:      { mayDependOn: [domain] }
+  app:       { mayDependOn: [domain, port] }
+  http:      { mayDependOn: [domain, port, app, metrics] }
+  webhook:   { mayDependOn: [domain, port, app, metrics] }
+  consumer:  { mayDependOn: [domain, port, app, metrics] }
+  postgres:  { mayDependOn: [domain, port] }
+  eventbus:  { mayDependOn: [domain, port] }
+  stripe:    { mayDependOn: [domain, port, httpx] }
+  manual:    { mayDependOn: [domain, port] }
+  registry:  { mayDependOn: [port, stripe, manual] }
+  iamclient: { mayDependOn: [domain, port, httpx] }
+  entclient: { mayDependOn: [domain, port, httpx] }

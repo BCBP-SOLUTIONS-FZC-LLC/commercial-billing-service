@@ -1,0 +1,92 @@
+# CI for commercial-billing-service (LLD §13.3, §14.6).
+#
+# Phase 0: one job runs the same gates as `make ci` (fmt, vet, golangci-lint,
+# go-arch-lint, the BIL-PCI-1 / BIL-OPS-2 guard scripts, race tests, build)
+# plus a Dockerfile lint. Later phases add the integration suite (Postgres,
+# floci, stripe-mock), schema-gov checks, helm-check (BIL-OPS-4), the image
+# build and Trivy, following the IAM services' workflows.
+name: CI
+
+"on":
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  pull_request:
+    branches: [main]
+    paths-ignore: ['**.md']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  GOPRIVATE: github.com/BCBP-SOLUTIONS-FZC-LLC/*
+  GONOSUMDB: github.com/BCBP-SOLUTIONS-FZC-LLC/*
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            go.mod
+
+      - name: Configure private module access
+        run: |
+          git config --global credential.helper store
+          echo "https://x-access-token:${{ secrets.GO_PRIVATE_TOKEN }}@github.com" > ~/.git-credentials
+          chmod 600 ~/.git-credentials
+
+      - name: Download and verify modules
+        run: |
+          go mod download
+          go mod verify
+
+      - name: gofmt
+        run: make fmt-check
+
+      - name: go vet
+        run: make vet
+
+      - name: golangci-lint
+        run: make lint
+
+      - name: go-arch-lint (LLD §3.2)
+        run: make arch-lint
+
+      - name: Guards (BIL-PCI-1, BIL-OPS-2)
+        run: make guards
+
+      - name: Tests (race)
+        run: make test
+
+      - name: Build
+        run: make build
+
+  dockerfile:
+    name: Dockerfile lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hadolint/hadolint-action@v3.3.0
+        with:
+          dockerfile: Dockerfile
