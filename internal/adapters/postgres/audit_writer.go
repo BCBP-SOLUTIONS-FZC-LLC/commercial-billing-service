@@ -29,8 +29,11 @@ func (w *AuditWriter) Write(ctx context.Context, e port.AuditEntry) error {
 	if err != nil {
 		return domain.NewError(domain.ErrInternal, "audit entry tenant is not a UUID")
 	}
+	// "" and commercial-system's own sentinel are the service account, not a
+	// user: e.g. a B-O8 reversal completed without an operator (Audit Log
+	// §10.3: non-IAM producers use {service_account, …00c1}).
 	actor := audit.CommercialSystemActor()
-	if e.ActorID != "" {
+	if e.ActorID != "" && e.ActorID != domain.CommercialSystemPrincipal {
 		id, err := uuid.Parse(e.ActorID)
 		if err != nil {
 			return domain.NewError(domain.ErrInternal, "audit actor is not a UUID")

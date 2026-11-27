@@ -40,6 +40,11 @@ func TestAdjustment(t *testing.T) {
 	if n := scalar[int](t, `SELECT count(*) FROM pending_audit_entries WHERE tenant_id = $1 AND entry->>'entry_type' = 'billing.adjustment.issued'`, tenant); n != 1 {
 		t.Fatalf("audit %d", n)
 	}
+	// The target is the adjustment itself (account-level), not a subscription.
+	if got := scalar[string](t, `SELECT (entry->'target'->>'type')||'/'||(entry->'target'->>'id') FROM pending_audit_entries
+		WHERE tenant_id = $1 AND entry->>'entry_type' = 'billing.adjustment.issued'`, tenant); got != "adjustment/"+res.AdjustmentID {
+		t.Fatalf("target %s", got)
+	}
 	if _, err := e.svc.IssueAdjustment(ctx, withKey(operator, "adj-0002"), tenant, app.AdjustmentRequest{Kind: "debit",
 		Amount: app.Money{AmountMinor: 1, Currency: "AED"}, Description: "x x", Reason: "a long enough reason"}); !domain.HasCode(err, domain.ErrCurrencyMismatch) {
 		t.Fatalf("currency: %v", err)

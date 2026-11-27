@@ -147,7 +147,7 @@ func TestEveryConsumerSchemaIsUsed(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join(dir, "*", "*.json"))
 	for _, f := range files {
 		rel, _ := filepath.Rel(dir, f)
-		if !used[filepath.ToSlash(rel)] {
+		if !used[filepath.ToSlash(rel)] && !nonEventContractFiles[filepath.ToSlash(rel)] {
 			t.Errorf("%s is not mapped in consumerFiles", rel)
 		}
 	}

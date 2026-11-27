@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Billing LLD | `commercial-lld-billing-service.md` rev 0.64 (base HLD v0.65). The LLD's §16.1 register is the source of truth for every BL-OQ item; this file holds the per-team detail and actions for the items that are **not closed** |
+| Billing LLD | `commercial-lld-billing-service.md` rev 0.65 (base HLD v0.65). The LLD's §16.1 register is the source of truth for every BL-OQ item; this file holds the per-team detail and actions for the items that are **not closed** |
 | Date | 2026-11-26 (IAM status updated from IAM's replies in the hand-off doc "Billing — IAM Open Items Hand-off", 2026-11-26); Entitlements findings F-5, F-6 and the RP queue-name note added 2026-11-27 (contract check, Billing LLD rev 0.59); Realm Provisioner compatibility check 2026-11-27 at `fac6ea0` (R-1 to R-6, Billing LLD rev 0.63), re-checked after RP #65/#66 at `d3f4e3c` (Billing LLD rev 0.64); Entitlements' fixes for BL-OQ-28 re-checked 2026-11-27 at `13ab5c7` (PR #4, Billing LLD rev 0.62) |
 | From | Commercial Team (Billing) |
 | Deployment state | No service is deployed to any environment. "Done" means merged **and** promoted with each environment (dev → staging → production) |
@@ -41,7 +41,7 @@
 | **Platform-edge** | Envoy Gateway (ingress) | BL-OQ-14: **OP-G2** | **Every operator route**, so paid launch too |
 | **IAM: Realm Provisioner** | `iam-realm-provisioner` | OP-G1 rollout and operator users; confirm A-10 (a) role (#62) and RP #63 live per environment (both merged); compatibility hand-off R-1 to R-6 done and merged (RP #65, `1137cd4`; re-checked at RP `main` `d3f4e3c`, 2026-11-27, no wire break) | Operator sign-in; provider certification; reversal reset |
 | **IAM: AuthZ Enrichment** | `iam-authz-enrichment` | OP-G3 payload key (issuer already set); OP-G4 runs (A-3); OP-G6 date. A-9 (a), A-10 (a, b) **done** (#45, v0.2.0) | Operator routes per environment |
-| **IAM: Audit Log** | `iam-audit-log` | Release and deploy A-9 (b), A-10 (c) (merged #25); deploy refund type (BL-OQ-23 b / W-12). `paused` field **confirmed** | Correct audit for B-O16, B-O17, add-on refunds |
+| **IAM: Audit Log** | `iam-audit-log` | Release and deploy A-9 (b), A-10 (c) (merged #25); deploy refund type (BL-OQ-23 b / W-12). `paused` field **confirmed**. Compatibility hand-off AU-1 to AU-4 done (reply `audit-log-reply-to-billing-compatibility.md`; #27 `05240a2`, released in **`v0.3.0`** = `495b742`, 2026-11-28). Remaining: **deploy `v0.3.0`** per environment (no cluster yet) | Correct audit for B-O16, B-O17, add-on refunds |
 | **IAM: Core (Org & Membership)** | `iam-org-membership` | SRE-3 ordering per environment (no code left); BL-OQ-27 (a) deploy | Direct paid signup; reversal reset |
 | **Commercial Entitlements** | `commercial-entitlements-service` | **Deploy `e18c0e6` or later** (PR #4 `52d7ac6`: BL-OQ-28 F-1, F-2, F-5, F-6, B-4 to B-8, E-4; PR #5 `e18c0e6`: BL-OQ-20 F-3, ENT-D16; all merged and re-checked by Billing); then the W-2 in-cluster check; F-3; E-6 | **Token add-ons**; plan changes reaching Entitlements |
 | **Commercial TL** | — | Nothing open for Billing: F-4 decided 2026-11-27 (ENT-D15, `addon_change` allowed, drawdowns included) | Nothing in Billing |
@@ -169,8 +169,8 @@ OP-G4 test cases for B-O17:
 |---|---|---|---|
 | A-9 (b) / BL-OQ-25 | Entry type `billing.invoice.suspension_disposition` | **Merged** in #25 (`e995889`) as specified below; not yet in a release (v0.2.0 predates it). Release and deploy per environment | Type released and deployed |
 | A-9 (b) confirm | `billing.collection.paused` accepts the extra metadata field `paused` (`true` \| `false`) written by B-O10 | **Confirmed** (2026-11-26): the type was added in #25, and AL-5 metadata is open JSON (only the `X-Max-Metadata-Bytes` cap applies), so `paused` and the reason are stored as sent | Done |
-| A-10 (c) / BL-OQ-26 | Entry type `billing.provider.certification_reviewed` | **Merged** in #25 (`e995889`) as specified below; not yet in a release. Release and deploy per environment | Type released and deployed |
-| W-12 / BL-OQ-23 (b) | `billing.token_addon.refunded` (code merged [#24](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-audit-log/pull/24) `0e12f2c`; AL-5 direct-write types for Entitlements present at `e995889`, verified 2026-11-26) | Deploy a release at or after `0e12f2c` in each environment (v0.3.0 suggested), before add-on refunds are possible there | Refund events stored as `refunded`, not `purchased` |
+| A-10 (c) / BL-OQ-26 | Entry type `billing.provider.certification_reviewed` | **Merged** in #25 (`e995889`) as specified below; **released in `v0.3.0`** (`495b742`, 2026-11-28), not deployed. Release and deploy per environment | Type released and deployed |
+| W-12 / BL-OQ-23 (b) | `billing.token_addon.refunded` (code merged [#24](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-audit-log/pull/24) `0e12f2c`; AL-5 direct-write types for Entitlements present at `e995889`, verified 2026-11-26) | **Released in `v0.3.0`** (`495b742`, 2026-11-28). Deploy it in each environment before add-on refunds are possible there (`FEATURE_TOKEN_ADDONS` stays `false` until then) | Refund events stored as `refunded`, not `purchased` |
 
 | Field | `billing.invoice.suspension_disposition` | `billing.provider.certification_reviewed` |
 |---|---|---|
@@ -179,7 +179,19 @@ OP-G4 test cases for B-O17:
 | Actor | Operator `sub` (`x-user-id`) | Reviewer `sub` (`x-user-id`) |
 | Tenant | Path tenant | `platform_tenant` (global, as `billing.provider.certified`) |
 | Written | Once per B-O16 decision, same transaction | Once per B-O17 decision, same transaction |
-| Metadata | `invoice_id`, `provider_invoice_id`, `action` (`finalize` \| `void`), `amount_minor`, `currency`, `reason` (10–1000 chars) | `certification_id`, `decision` (`approve` \| `reject`), `provider`, `adapter_version`, `suite_version`, `certified_by` (submitter `sub`), `reason` |
+| Target | `{invoice, <invoice_id>}` | `{certification, <certification_id>}` |
+| Metadata (as built, re-checked 2026-11-27) | `action` (`finalize` \| `void`), `amount_minor`, `currency`, `reason` (10–1000 chars) | `decision` (`approve` \| `reject`), `provider`, `adapter_version`, `suite_version`, `certified_by` (submitter `sub`), `reviewed_by` (reviewer `sub`), `reason` |
+
+**Compatibility check of 2026-11-27** (Audit Log `main` at `e995889`; Billing LLD rev 0.65; hand-off `billing-handoff-to-audit-log-compatibility.md`, Commercial folder). No wire break: all 12 AL-5 types Billing writes are direct-write types in Audit Log's taxonomy (now checked by Billing's contract test against a vendored `api/taxonomy.json`), all six `billing.events` types are classified, identity, network and Glue decoding match. Open for Audit Log:
+
+| # | What | Action | Done when |
+|---|---|---|---|
+| AU-1 (**done**, #27 `05240a2`, D-30: `deriveActor` rule 2a maps `…00c1` and `commercial-system` to `{service_account, …00c1}` before the cron rule; in `v0.3.0`) | Billing's automated `billing.events` (webhook, job, consumer work: renewals, past-due, cancellations, add-on purchases and refunds) are recorded as `{iam_system, …00a1}`: `deriveActor` (`internal/core/domain/bus.go:103-139`) maps any envelope with `ip_address: "system"` to the IAM sentinel, against Audit Log LLD §10.3 (non-IAM producers use `{service_account, …00c1}`) | Map actor `…00c1` (and the literal `commercial-system`) to `{service_account, …00c1}` before the cron rule; `ip = system` only blanks the IP | A `bus_test.go` case: a `TenantPaymentPastDue` with actor `…00c1`, ip `system` is stored as `{service_account, …00c1}`, IP NULL |
+| AU-2 (**released** as `v0.3.0` = `495b742`; **not deployed**) | Release and deploy `≥ e995889` | Tag and deploy per environment **before `FEATURE_TOKEN_ADDONS=true`**: until then add-on refunds are stored as `purchased`, and audit rows are immutable | Deployed taxonomy lists `billing.token_addon.refunded`, `billing.invoice.suspension_disposition`, `billing.provider.certification_reviewed` |
+| AU-3 (**done**, #27; the taxonomy rule now also trims `reason`) | Hygiene: the refund rule is coded twice (`bus.go:65-70` and `taxonomy.go:352-357`) | Keep one | `TestBuildBusEntry_TokenAddOnRefund_BLOQ23` still passes |
+| AU-4 (**done**, Audit Log LLD rev 0.38) | Docs: no LLD revision row for `e995889`; "seven BL-OQ-10 types" (nine now); §7.1 `source_event_type` names differ from what Billing sends | See the hand-off | LLD matches |
+
+Billing's side (rev 0.65): automated events now always carry `actor = …00c1` (the literal `commercial-system` is no longer sent), `…00c1` on an AL-5 entry is the service account (not a user), and `billing.adjustment.issued` targets `{adjustment, <adjustment_id>}`.
 
 **Billing meanwhile:** AL-5 entries wait in `pending_audit_entries` and drain once the type exists; nothing is lost. Add-on refunds are stored as `purchased` until W-12 is deployed, with `reason` and the negative `delta` kept in metadata.
 
@@ -381,11 +393,13 @@ A-10 role + PCI names holders ────────────────�
 | BL-OQ-14 | OP-G1 rollout, operator users | IAM Realm Provisioner | Merged; rollout open |
 | BL-OQ-14 | OP-G3 (payload key; issuer set), OP-G4, OP-G6 | IAM AuthZ Enrichment | Blocked on OP-G2 |
 | BL-OQ-25 | A-9 (a) B-O16 tests | IAM AuthZ | **Done** (#45, v0.2.0) |
-| BL-OQ-25 | A-9 (b) Audit type | IAM Audit Log | Merged (#25); release + deploy open |
+| BL-OQ-25 | A-9 (b) Audit type | IAM Audit Log | Released in `v0.3.0` (`495b742`); deploy open |
 | BL-OQ-26 | A-10 (a, b) role, forwarding, B-O17 tests | IAM RP, AuthZ | **Done** (#62, #45 v0.2.0); confirm role per environment |
-| BL-OQ-26 | A-10 (c) Audit type | IAM Audit Log | Merged (#25); release + deploy open |
+| BL-OQ-26 | A-10 (c) Audit type | IAM Audit Log | Released in `v0.3.0` (`495b742`); deploy open |
 | BL-OQ-26 | Name `pci_owner_reviewer` holders | PCI owner group | Open |
-| BL-OQ-23 (b) / W-12 | Refund type deployed | IAM Audit Log | Merged; deploy open |
+| BL-OQ-23 (b) / W-12 | Refund type deployed | IAM Audit Log | Released in `v0.3.0` (`495b742`); deploy open |
+| — | AU-1 Billing's automated events as `{service_account, …00c1}`; AU-3, AU-4 | IAM Audit Log | **Done** (#27 `05240a2`, in `v0.3.0`) |
+| — | AU-2 Deploy `v0.3.0` per environment before `FEATURE_TOKEN_ADDONS=true` | IAM Audit Log | Released; deploy open (no cluster yet) |
 | BL-OQ-27 (a) | Plan/seat reset on reversal | IAM Org & Membership; RP | O&M merged (`8150ea1`), not deployed; RP #63 merged (`47539e2`), reported deployed |
 | BL-OQ-27 (b) | Trial limits after reversal | Entitlements | **Done** in code: E-1 to E-3 (`108939f`), E-4 decided keep the balance (PR #4, `52d7ac6` on main, not deployed) |
 | SRE-3 | Core `000004` before direct signup | IAM Core + SRE | Code ready |
