@@ -8,7 +8,7 @@ Paste everything below the line into a coding agent (for example Claude Code) st
 
 You are implementing the **Commercial Billing service** (`commercial-billing`) in Go, from its Low-Level Design:
 
-- **Source of truth:** `docs/lld/commercial-lld-billing-service.md` (rev 0.31 or later, base HLD v0.65). Read it in full before writing any code. It defines the package layout, data model, API, events, flows, invariants, configuration, deployment and tests. **Implement what it says. Do not invent behaviour, endpoints, fields, events, statuses or configuration that it doesn't define.**
+- **Source of truth:** `docs/lld/commercial-lld-billing-service.md` (rev 0.32 or later, base HLD v0.65). Read it in full before writing any code. It defines the package layout, data model, API, events, flows, invariants, configuration, deployment and tests. **Implement what it says. Do not invent behaviour, endpoints, fields, events, statuses or configuration that it doesn't define.**
 - **Context documents** (read, don't implement from them): `docs/lld/billing-design-signoff-blockers.md` (why decisions were made), `docs/lld/billing-open-items-handoff.md` (what other teams still owe), `docs/lld/billing-iam-actions.md`, `docs/lld/billing-decided-items-entitlements-build.md`.
 - **Parent HLD:** `../commercial-hld-docs/hld-commercial-domain-v0.65.md`. Consult it only when the LLD points to it.
 
@@ -45,7 +45,7 @@ The repository today holds only `README.md`, `.gitignore` and `docs/`. You are b
    - every provider call passes an idempotency key;
    - every state change and its event go in one transaction through `outbox.EnqueueOrdered` keyed by `tenant_id` (`BIL-EVT-5`);
    - audit entries are written in the same transaction through the `AuditWriter` port (§3.3, §10.6).
-9. **Tests come with the code**, not after. Unit tests for domain logic; integration tests with testcontainers-go Postgres 16, real migrations and RLS; stripe-mock; floci for SNS/SQS/Glue; `httptest` fakes for Core, Realm Provisioner and Entitlements (§14.1, §14.2). Coverage gates per §14.6.
+9. **Tests come with the code**, not after. Unit tests for domain logic; integration tests with testcontainers-go Postgres 17 (as the IAM services), real migrations and RLS; stripe-mock; floci for SNS/SQS/Glue; `httptest` fakes for Core, Realm Provisioner and Entitlements (§14.1, §14.2). Coverage gates per §14.6.
 10. **Git workflow:**
     - one branch and one PR per phase, named `feat/billing-phase-<n>-<slug>`;
     - never commit to `main`; never force-push; never commit secrets or `.env` files;
@@ -82,7 +82,7 @@ Build:
 - `.golangci.yml` with the `forbidigo` bans in §3.2;
 - `.go-arch-lint.yml` exactly as in §3.2;
 - `.github/scripts/check-outbox-access.sh` (`BIL-OPS-2`);
-- `docker-compose.yml` with Postgres 16, PgBouncer, floci and stripe-mock;
+- `docker-compose.yml` with Postgres 17, PgBouncer, floci and stripe-mock;
 - `Dockerfile`, distroless and non-root;
 - GitHub Actions for lint, arch-lint, unit, integration, `schema-gov validate | extract --check | diff`, and `helm-check` (`BIL-OPS-4`);
 - `cmd/server` that loads config (§12), builds pools and serves `/healthz`, `/readyz` and metrics on 9090, with graceful shutdown;

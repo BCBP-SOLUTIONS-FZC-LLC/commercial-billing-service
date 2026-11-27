@@ -8,9 +8,8 @@
 // lock. Exit status 0 on success (including "already up to date"), 1 on any
 // failure.
 //
-// Phase 0: the DSN and timeout handling are in place; the migration order of
-// §4.4 (outbox schema, platform-audit ApplySchema, then 000001 to 000005)
-// is added in Phase 2.
+// Order (§4.4): platform-events outbox and inbox schemas, platform-audit
+// pending_audit_entries, then Billing's 000001 to 000005.
 package main
 
 import (
@@ -69,15 +68,16 @@ func run() int {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	if err := migrate(ctx); err != nil {
+	start := time.Now()
+	if err := pgadapter.MigrateSchema(ctx, dsn, log); err != nil {
 		log.Error("migrate failed", map[string]any{"error": err.Error()})
 		return 1
 	}
+	version, dirty, err := pgadapter.DomainVersion(ctx, dsn)
+	if err != nil {
+		log.Error("migrate: read version", map[string]any{"error": err.Error()})
+		return 1
+	}
+	log.Info("migrate complete", map[string]any{"domain_version": version, "dirty": dirty, "duration_ms": time.Since(start).Milliseconds()})
 	return 0
-}
-
-// migrate applies the schema. Phase 2 replaces this with the §4.4 order:
-// 000000 outbox schema, platform-audit ApplySchema, then 000001 to 000005.
-func migrate(ctx context.Context) error {
-	return ctx.Err()
 }
