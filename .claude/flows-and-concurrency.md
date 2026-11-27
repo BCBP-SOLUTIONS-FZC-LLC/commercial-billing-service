@@ -29,7 +29,10 @@ rp_convert_pending → failed                      409 tenant_offboarded, other 
 * → confirmed                                    TenantConverted (or B-O9 resolved_manually)
 failed → rp_convert_pending                      B-O9 retry
 rp_convert_pending|awaiting|failed → refund_pending → refunded   B-O9 refund
-confirmed → reverted                             B-O8 RP-4
+confirmed → reverting                            B-O8 records the request first (rev 0.63)
+reverting → reverting                            RP-4 409 operation_in_progress / optimistic_lock_conflict, 5xx, timeout (saga worker, backoff)
+reverting → reverted                             RP-4 200: reversal completed (B-O8 or saga worker)
+reverting → confirmed                            terminal RP-4 answer: request dropped (worker: SEV-2 BillingReversalDecisionNeeded)
 ```
 
 - **`BIL-SAGA-1`:** RP-3 only after server-side payment confirmation.
@@ -64,6 +67,7 @@ confirmed → reverted                             B-O8 RP-4
 | Provider callback | `(provider, provider_event_id)` ledger PK | Duplicate → `200`, no work |
 | Consumed event | envelope `id` × consumer in `processed_events` | Claimed as the first statement of the handler's transaction |
 | RP-3 / RP-4 | `convert:` / `revert:<tenant_id>:<billing_subscription_id>` | RP replays its stored result |
+| B-O8 completion | `cancel:<billing_subscription_id>:reversal`, `refund:reversal:<billing_subscription_id>` | B-O8 and the saga worker never cancel or refund twice; a recorded refund resumes with its own body |
 
 ## Webhook pipeline (§8.15)
 

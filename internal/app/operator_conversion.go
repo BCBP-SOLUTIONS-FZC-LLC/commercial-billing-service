@@ -108,6 +108,9 @@ func (s *Service) SagaAction(ctx context.Context, c Caller, tenantID, sagaID str
 			}
 			saga.State, saga.NextAttemptAt = domain.SagaRPConvertPending, &now
 		case "resolved_manually":
+			if saga.State == domain.SagaReverting {
+				return domain.NewError(domain.ErrSagaAlreadyConfirmed, "a conversion reversal is in progress (B-O8)").With("state", string(saga.State))
+			}
 			if saga.State == domain.SagaConfirmed {
 				return domain.NewError(domain.ErrSagaAlreadyConfirmed, "the saga is already confirmed")
 			}

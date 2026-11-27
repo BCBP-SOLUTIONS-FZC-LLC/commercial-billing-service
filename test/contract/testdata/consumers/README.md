@@ -10,7 +10,7 @@ and record the source commit below.
 |---|---|---|
 | `iam-org-membership/` (Core, `billing-orgm-q`) | `internal/adapter/outbound/eventbus/schemas/tenant_*.json` | `5a643fb` (main) |
 | `iam-audit-log/` (`billing-audit-q`) | `internal/eventschema/billing_audit_*.json` | `0e12f2c` (main) |
-| `iam-realm-provisioner/` (`billing-realm-q`) | `internal/eventschema/billing_tenant_reactivated.json` | `9e8fcab` (main) |
+| `iam-realm-provisioner/` (`billing-realm-q`) | `internal/eventschema/billing_tenant_reactivated.json` | `fac6ea0` (main; content unchanged since `0e26906`) |
 | `commercial-entitlements/` (`billing-entitlements-q`) | `commercial-entitlements-service` `internal/adapter/outbound/eventbus/schemas/inbound_tenant_quota_add_on_changed.json` and `inbound_billing_tenant_{plan_changed,subscription_cancelled,reactivated}.json`; consumer structs mirrored in `entitlements_addon_test.go` from `internal/core/domain/event.go` and `entitlement.go` | `e18c0e6` (main, PR #5; the four files are unchanged since `52d7ac6`, PR #4, and the add-on schema since `dc9b654`) |
 
 Entitlements validates Billing's events per queue (`ValidateConsumed`, B-4):

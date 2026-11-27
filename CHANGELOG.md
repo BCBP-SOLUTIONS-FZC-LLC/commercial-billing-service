@@ -6,6 +6,20 @@ This service has never been deployed to any environment, and there is no release
 
 ## [Unreleased]
 
+### Fixed (2026-11-27 — Billing ↔ Realm Provisioner compatibility, LLD rev 0.63)
+
+- Checked against `iam-realm-provisioner` `fac6ea0`. **No wire break** on RP-3, RP-4, RP-11, `billing-realm-q` or the four `tenant-billing-q` events; the vendored RP consumed schema is byte-identical (now recorded as `fac6ea0`).
+- **B-O8:** RP-4 `409 optimistic_lock_conflict` now answers `503 IAM_UNAVAILABLE` (retry with the same key) instead of `500 INTERNAL`; RP fails its key on that conflict, so a retry re-runs.
+- **RP-11:** bounded by its 2 s budget (LLD §18.10) instead of the 30 s `RP_TIMEOUT_MS` sized for RP-3 and RP-4.
+- **RP-3 body:** the unused `payment_method_id` field is removed from `port.ConvertRequest` (never set; RP ignores it).
+- **Tests:** the adapter now runs RP's real UPPER_SNAKE problem bodies through `ClassifyRP3` and RP-4; the RP-4 success fixture is `200`, as RP answers; B-O8's scenario covers `optimistic_lock_conflict`.
+- **LLD text aligned with the code:** `x-user-id: commercial-system` on IAM calls (§8.1.2, §10.2); RP-3 body `{plan, billing_subscription_id}` (§8.1.2, §18.1).
+- **Hand-off to Realm Provisioner:** `billing-handoff-to-realm-provisioner-compatibility.md` in the Commercial folder (R-1 RP-4 not detached; R-2 queue names; R-3 namespace; R-4 RP-4 callers; R-5, R-6 hygiene and docs), tracked in `billing-open-items.md` §4.2.
+- **Realm Provisioner's reply** (`realm-provisioner-reply-to-billing-compatibility.md`): R-1 to R-6 done on RP branch `fix/billing-rp-compat`, not merged (RP-4 detached, RP-D30; RP-4 for Billing only, RP-D31; queue names; namespace `iam`; plan enum; docs). Billing checked the diff and RP's tests (1661 pass).
+- **B-O8:** a terminal RP-4 answer (`400`, `403` including an Istio denial without a problem body, `404`) now says which status and code and tells the operator to check the realm in B-O7 before repeating. Tests cover those answers and the plain-text `403`.
+- **Reversal runbook and LLD §18.10:** RP-4 may answer `503` for up to 10 minutes while RP reverts in the background; the operator repeats B-O8 with the same key until `200`. `RP_TIMEOUT_MS` stays 30 s (B-O8 is bounded by `REQUEST_TIMEOUT`; a timeout and RP's `409` are retried alike).
+- **B-O8 completes after a `503`** (LLD §8.2 step 4, §9.3.1; migrations `000008`, `000009`): B-O8 records the request on the saga first (new state `reverting`: reason, refund flag, dispute, operator), then calls RP-4. When RP-4 answers `503`, `409 operation_in_progress` / `optimistic_lock_conflict` or times out, the saga worker keeps calling RP-4 with the same key and completes the reversal (provider cancel, one refund under `refund:reversal:<billing_subscription_id>`, subscription ended, account back on trial, AL-5 with the requesting operator), even past the 7-day window. A terminal RP-4 answer drops the request (worker: SEV-2 `BillingReversalDecisionNeeded`). A different request while one is recorded answers `409 REQUEST_IN_PROGRESS`. B-O8 now requires a `confirmed` saga. RP-4's `200` is recorded (`reversal_rp_done_at`), so RP-4 is not called again and the request is never dropped; failed completions back off and page SEV-2 at the 8th attempt; a refund the provider never issued pages for a manual B-O3 refund instead of blocking; a repeat inside the lease answers `503`; B-O9 `refund` / `resolved_manually` and a late `TenantConverted` leave a `reverting` saga alone; `refund()` re-reads its row before its final commit; `reverting` is a `saga_state` of `commercial_billing_sagas_in_flight` (findings of an invariant review).
+
 ### Changed (2026-11-27 — Billing ↔ Entitlements compatibility re-check, LLD rev 0.62)
 
 - Re-checked against `commercial-entitlements-service` `108939f`. **No wire change on Billing's side**: the contract test passes against Entitlements' live consumed schema, which is byte-identical to the vendored copy (now recorded as `108939f`).

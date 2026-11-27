@@ -120,13 +120,15 @@ func NewSagaRepository(appPool, sysPool *pgcommon.Pool) *SagaRepository {
 const sagaColumns = `saga_id::text, tenant_id::text, billing_subscription_id::text, kind, state, payment_confirmed_at,
   rp_idempotency_key, attempts, next_attempt_at, last_error_code, last_error_at, rp_accepted_at,
   tenant_converted_event::text, confirmed_at, alerted_at, resolution, resolution_reason, resolved_by::text,
-  record_version, created_at, updated_at`
+  reversal_requested_at, reversal_requested_by::text, reversal_reason, reversal_refund, reversal_dispute_id::text,
+  reversal_rp_done_at, record_version, created_at, updated_at`
 
 func scanSaga(row pgcommon.Row) (domain.ConversionSaga, error) {
 	var s domain.ConversionSaga
 	err := row.Scan(&s.SagaID, &s.TenantID, &s.BillingSubscriptionID, &s.Kind, &s.State, &s.PaymentConfirmedAt,
 		&s.RPIdempotencyKey, &s.Attempts, &s.NextAttemptAt, &s.LastErrorCode, &s.LastErrorAt, &s.RPAcceptedAt,
 		&s.TenantConvertedEvent, &s.ConfirmedAt, &s.AlertedAt, &s.Resolution, &s.ResolutionReason, &s.ResolvedBy,
+		&s.ReversalRequestedAt, &s.ReversalRequestedBy, &s.ReversalReason, &s.ReversalRefund, &s.ReversalDisputeID, &s.ReversalRPDoneAt,
 		&s.RecordVersion, &s.CreatedAt, &s.UpdatedAt)
 	return s, err
 }
@@ -175,22 +177,24 @@ func (r *SagaRepository) Update(ctx context.Context, s domain.ConversionSaga) er
 		_, err := q.Exec(ctx, `
 			UPDATE conversion_sagas SET state = $2, attempts = $3, next_attempt_at = $4, last_error_code = $5, last_error_at = $6,
 			  rp_accepted_at = $7, tenant_converted_event = $8::uuid, confirmed_at = $9, alerted_at = $10, resolution = $11,
-			  resolution_reason = $12, resolved_by = $13::uuid
+			  resolution_reason = $12, resolved_by = $13::uuid, reversal_requested_at = $14, reversal_requested_by = $15::uuid,
+			  reversal_reason = $16, reversal_refund = $17, reversal_dispute_id = $18::uuid, reversal_rp_done_at = $19
 			WHERE saga_id = $1::uuid`,
 			s.SagaID, s.State, s.Attempts, s.NextAttemptAt, s.LastErrorCode, s.LastErrorAt, s.RPAcceptedAt, s.TenantConvertedEvent,
-			s.ConfirmedAt, s.AlertedAt, s.Resolution, s.ResolutionReason, s.ResolvedBy)
+			s.ConfirmedAt, s.AlertedAt, s.Resolution, s.ResolutionReason, s.ResolvedBy, s.ReversalRequestedAt, s.ReversalRequestedBy,
+			s.ReversalReason, s.ReversalRefund, s.ReversalDisputeID, s.ReversalRPDoneAt)
 		return err
 	})
 }
 
-// Due implements port.SagaRepo: sagas whose RP-3 call is due, across
+// Due implements port.SagaRepo: sagas whose RP-3 (or, reverting, RP-4) call is due, across
 // tenants (system pool, no lock: each is claimed under its tenant lock).
 func (r *SagaRepository) Due(ctx context.Context, now time.Time, limit int) ([]port.SagaRef, error) {
 	var out []port.SagaRef
 	err := inTx(ctx, r.sys, func(q querier) error {
 		rows, err := q.Query(ctx, `
 			SELECT saga_id::text, tenant_id::text FROM conversion_sagas
-			WHERE state = 'rp_convert_pending' AND next_attempt_at <= $1
+			WHERE state IN ('rp_convert_pending', 'reverting') AND next_attempt_at <= $1
 			ORDER BY next_attempt_at LIMIT $2`, now, limit)
 		if err != nil {
 			return err

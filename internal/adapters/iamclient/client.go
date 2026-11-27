@@ -130,8 +130,14 @@ func answer(r httpx.Response, err error) domain.RP3Answer {
 	return domain.RP3Answer{Status: r.Status, ErrorCode: strings.ToLower(r.ErrorCode)}
 }
 
-// Realm is RP-11.
+// rp11Budget is RP-11's p99 budget (LLD §18.10): the operator view (B-O7)
+// shows "unavailable" rather than wait the RP_TIMEOUT_MS sized for RP-3/RP-4.
+const rp11Budget = 2 * time.Second
+
+// Realm is RP-11, bounded by rp11Budget.
 func (c *RealmProvisioner) Realm(ctx context.Context, tenantID string) (port.RealmView, error) {
+	ctx, cancel := context.WithTimeout(ctx, rp11Budget)
+	defer cancel()
 	var out port.RealmView
 	r, err := httpx.Call(ctx, c.http, http.MethodGet, c.tenantURL(tenantID, "/realm"), tenantID, "", nil)
 	if err := coreError("RP-11", r, err); err != nil {

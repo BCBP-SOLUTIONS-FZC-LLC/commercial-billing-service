@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
@@ -215,6 +216,16 @@ func (s *Service) refund(ctx context.Context, c Caller, tenantID, invoiceID stri
 		return f, providerErr(err) // stays pending without a provider id; reconciliation flags it
 	}
 	err = s.locked(ctx, tenantID, func(ctx context.Context) error {
+		// Re-read (BIL-CONC-2): a concurrent caller with the same key, or the
+		// refund.updated webhook, may already have recorded or settled it.
+		cur, ok, err := s.Money.RefundByKey(ctx, tenantID, f.IdempotencyKey)
+		if err != nil {
+			return err
+		}
+		if ok && (cur.ProviderRefundID != nil || cur.Status != domain.RefundPending) {
+			f = cur
+			return nil
+		}
 		f.ProviderRefundID = &res.ProviderRefundID
 		if err := s.Money.UpdateRefund(ctx, f); err != nil {
 			return err
@@ -364,17 +375,22 @@ func (h DisputeOpened) Handle(ctx context.Context, tenantID string, ev domain.Pa
 
 // ── B-O8 (§8.2) ────────────────────────────────────────────────────────────
 
-// RevertConversion is B-O8: RP-4 first; on success cancel the provider
-// subscription now, refund unless the dispute already returned the funds,
-// subscription ended (operator_reversal), saga and dispute reverted, AL-5.
+// RevertConversion is B-O8. It first records the request on the saga
+// (confirmed → reverting, rev 0.63), then calls RP-4. On 200 it completes the
+// reversal: cancel the provider subscription now, refund unless the dispute
+// already returned the funds, subscription ended (operator_reversal), saga
+// and dispute reverted, AL-5. Realm Provisioner finishes a revert in the
+// background (RP-D30), so when RP-4 answers 503, 409 operation_in_progress or
+// times out, B-O8 answers 503 and the saga worker keeps calling RP-4 with the
+// same key and completes the reversal itself (runReversalStep). A repeat of
+// the same request is allowed after the 7-day window once it is recorded.
 // No billing.events: RP-4 is IAM's lifecycle change.
 func (s *Service) RevertConversion(ctx context.Context, c Caller, tenantID string, r ReversalRequest) (ReversalResult, error) {
 	var (
 		sub  domain.Subscription
 		saga domain.ConversionSaga
-		disp *domain.Dispute
 	)
-	if err := s.Tx.RunInTenantTx(ctx, tenantID, func(ctx context.Context) error {
+	if err := s.locked(ctx, tenantID, func(ctx context.Context) error {
 		var found bool
 		var err error
 		if sub, found, err = s.Subs.Live(ctx, tenantID); err != nil {
@@ -383,13 +399,34 @@ func (s *Service) RevertConversion(ctx context.Context, c Caller, tenantID strin
 		if !found || (sub.Status != domain.StatusActive && sub.Status != domain.StatusPastDue) {
 			return domain.NewError(domain.ErrSubscriptionNotActive, "no active subscription to revert")
 		}
-		if sub.ConvertedAt == nil || s.now().Sub(*sub.ConvertedAt) > domain.RevertWindow {
-			return domain.NewError(domain.ErrRevertWindowExpired, "the 7-day reversal window has passed")
-		}
 		if saga, found, err = s.Sagas.BySubscription(ctx, sub.BillingSubscriptionID); err != nil {
 			return err
 		} else if !found {
 			return domain.NewError(domain.ErrSagaNotFound, "no conversion saga for the subscription")
+		}
+		if saga.State == domain.SagaReverting {
+			// Already recorded: a repeat of the same request continues it, even
+			// past the window; a different one waits for it (§8.2).
+			if deref(saga.ReversalReason) != r.Reason || saga.ReversalRefund == nil || *saga.ReversalRefund != r.Refund ||
+				deref(saga.ReversalDisputeID) != r.DisputeID {
+				return domain.NewError(domain.ErrRequestInProgress, "a different conversion reversal is already in progress for this subscription")
+			}
+			// The saga worker (or an earlier B-O8) holds it until next_attempt_at.
+			now := s.now()
+			if saga.NextAttemptAt != nil && saga.NextAttemptAt.After(now) {
+				return domain.NewError(domain.ErrIAMUnavailable, "the conversion reversal is in progress; Billing completes it (check B-O7)")
+			}
+			lease := now.Add(s.Settings.SagaClaim)
+			saga.NextAttemptAt = &lease
+			return s.Sagas.Update(ctx, saga)
+		}
+		if saga.State != domain.SagaConfirmed {
+			// Before TenantConverted the path is B-O9 refund; after a reversal
+			// or a refund there is nothing left to revert.
+			return domain.NewError(domain.ErrSubscriptionNotActive, "the conversion is not confirmed (saga "+string(saga.State)+")")
+		}
+		if sub.ConvertedAt == nil || s.now().Sub(*sub.ConvertedAt) > domain.RevertWindow {
+			return domain.NewError(domain.ErrRevertWindowExpired, "the 7-day reversal window has passed")
 		}
 		if r.DisputeID != "" {
 			d, ok, err := s.Money.Dispute(ctx, r.DisputeID)
@@ -399,73 +436,216 @@ func (s *Service) RevertConversion(ctx context.Context, c Caller, tenantID strin
 			if !ok || d.TenantID != tenantID {
 				return domain.NewError(domain.ErrValidation, "dispute_id does not belong to the tenant")
 			}
-			disp = &d
 		}
-		return nil
+		now := s.now()
+		// Leased past this call, so the saga worker does not race it.
+		lease := now.Add(s.Settings.SagaClaim)
+		refund, by := r.Refund, actorOf(c)
+		saga.State, saga.Attempts, saga.NextAttemptAt = domain.SagaReverting, 0, &lease
+		saga.ReversalRequestedAt, saga.ReversalRequestedBy, saga.ReversalReason, saga.ReversalRefund = &now, &by, &r.Reason, &refund
+		saga.ReversalDisputeID = nil
+		if r.DisputeID != "" {
+			saga.ReversalDisputeID = &r.DisputeID
+		}
+		return s.Sagas.Update(ctx, saga)
 	}); err != nil {
 		return ReversalResult{}, err
 	}
-	ans := s.RP.RevertConversion(ctx, tenantID, r.Reason, "revert:"+tenantID+":"+sub.BillingSubscriptionID)
+	res, terminal, err := s.reverse(ctx, c, saga, sub)
+	if terminal != "" && s.Log != nil {
+		s.logger(ctx).Warn("conversion reversal refused by Realm Provisioner; request dropped", map[string]any{
+			"tenant_id": tenantID, "saga_id": saga.SagaID, "rp": terminal})
+	}
+	return res, err
+}
+
+// reverse calls RP-4 for a reverting saga and acts on the answer:
+//   - 200: completes the reversal (completeReversal);
+//   - retryable (transport error or timeout, 5xx, 409 operation_in_progress
+//     or optimistic_lock_conflict): records the attempt with backoff for the
+//     saga worker and returns 503 IAM_UNAVAILABLE;
+//   - terminal (409 revert_window_expired, 400, 403, 404, anything else):
+//     drops the request (reverting → confirmed) and returns the error plus a
+//     description of the answer, so the caller can alert.
+func (s *Service) reverse(ctx context.Context, c Caller, saga domain.ConversionSaga, sub domain.Subscription) (ReversalResult, string, error) {
+	tenantID := saga.TenantID
+	if saga.ReversalRPDoneAt != nil {
+		// RP-4 already answered 200 for this request: only Billing's side is
+		// left, and the request is never dropped (RP may now refuse RP-4).
+		return s.finishReversal(ctx, c, saga, sub)
+	}
+	ans := s.RP.RevertConversion(ctx, tenantID, deref(saga.ReversalReason), "revert:"+tenantID+":"+sub.BillingSubscriptionID)
+	code := ans.ErrorCode
+	if code == "" && ans.Status != 200 {
+		code = fmt.Sprintf("http_%d", ans.Status)
+	}
 	switch {
-	case ans.Status == 409 && ans.ErrorCode == "revert_window_expired":
-		return ReversalResult{}, domain.NewError(domain.ErrRevertWindowExpired, "Realm Provisioner: the reversal window has passed")
-	case ans.Status == 0 || ans.Status >= 500 || ans.Status == 409 && ans.ErrorCode == "operation_in_progress":
-		return ReversalResult{}, domain.NewError(domain.ErrIAMUnavailable, "RP-4 unavailable; retry B-O8 with the same key")
-	case ans.Status != 200:
-		return ReversalResult{}, domain.NewError(domain.ErrInternal, "RP-4 refused the reversal: "+ans.ErrorCode)
+	case ans.Status == 200:
+		if err := s.locked(ctx, tenantID, func(ctx context.Context) error {
+			cur, ok, err := s.Sagas.Get(ctx, saga.SagaID)
+			if err != nil || !ok || cur.State != domain.SagaReverting || cur.ReversalRPDoneAt != nil {
+				return err
+			}
+			now := s.now()
+			cur.ReversalRPDoneAt = &now
+			return s.Sagas.Update(ctx, cur)
+		}); err != nil {
+			return ReversalResult{}, "", err
+		}
+		now := s.now()
+		saga.ReversalRPDoneAt = &now
+		return s.finishReversal(ctx, c, saga, sub)
+	// RP-4 fails its idempotency key on 409 optimistic_lock_conflict, so a
+	// retry with the same key re-runs it, as for RP-3 (domain.ClassifyRP3).
+	case ans.Status == 0 || ans.Status >= 500 ||
+		ans.Status == 409 && (ans.ErrorCode == "operation_in_progress" || ans.ErrorCode == "optimistic_lock_conflict"):
+		if err := s.reversalAttempt(ctx, tenantID, saga.SagaID, code, false); err != nil {
+			return ReversalResult{}, "", err
+		}
+		return ReversalResult{}, "", domain.NewError(domain.ErrIAMUnavailable,
+			"RP-4 is still running or unavailable; Billing completes the reversal when Realm Provisioner answers (repeat B-O8 with the same key to check)")
+	}
+	if err := s.reversalAttempt(ctx, tenantID, saga.SagaID, code, true); err != nil {
+		return ReversalResult{}, "", err
+	}
+	terminal := fmt.Sprintf("%d %s", ans.Status, code)
+	if ans.Status == 409 && ans.ErrorCode == "revert_window_expired" {
+		return ReversalResult{}, terminal, domain.NewError(domain.ErrRevertWindowExpired, "Realm Provisioner: the reversal window has passed")
+	}
+	// Terminal: 400 invalid_request (tenant not on a dedicated realm, e.g. a
+	// revert that already landed but whose RP ledger write failed), 403
+	// (insufficient_role, or an Istio RBAC denial with no problem body), 404.
+	return ReversalResult{}, terminal, domain.NewError(domain.ErrInternal,
+		"RP-4 refused the reversal ("+terminal+"); check the tenant's realm in B-O7 before repeating")
+}
+
+// finishReversal runs completeReversal; a failure is recorded on the saga
+// (attempts, backoff, last_error_code completion_failed) for the saga worker
+// to retry, and pages once at reversalPageAttempts.
+func (s *Service) finishReversal(ctx context.Context, c Caller, saga domain.ConversionSaga, sub domain.Subscription) (ReversalResult, string, error) {
+	res, err := s.completeReversal(ctx, c, saga, sub)
+	if err == nil {
+		return res, "", nil
+	}
+	attempts := 0
+	_ = s.locked(ctx, saga.TenantID, func(ctx context.Context) error {
+		cur, ok, gerr := s.Sagas.Get(ctx, saga.SagaID)
+		if gerr != nil || !ok || cur.State != domain.SagaReverting {
+			return gerr
+		}
+		now := s.now()
+		cur.Attempts++
+		attempts = cur.Attempts
+		code, next := "completion_failed", now.Add(domain.SagaBackoff(cur.Attempts, s.Settings.SagaMaxBackoff))
+		cur.LastErrorCode, cur.LastErrorAt, cur.NextAttemptAt = &code, &now, &next
+		return s.Sagas.Update(ctx, cur)
+	})
+	if attempts == reversalPageAttempts && s.Log != nil {
+		s.logger(ctx).Error("conversion reversal cannot complete after RP-4 succeeded; operator decision needed (SEV-2)", map[string]any{
+			"tenant_id": saga.TenantID, "saga_id": saga.SagaID, "attempts": attempts, "error": err.Error(),
+			"alert": "BillingReversalDecisionNeeded", "severity": "SEV-2"})
+	}
+	return ReversalResult{}, "", err
+}
+
+// reversalPageAttempts is the failed completion attempt that pages: with the
+// §8.1.2 backoff (2 s doubling, capped at SAGA_MAX_BACKOFF) about 20 minutes.
+const reversalPageAttempts = 8
+
+// reversalAttempt records an RP-4 answer on a still-reverting saga: a retry
+// with backoff, or (drop) the end of the request, reverting → confirmed.
+func (s *Service) reversalAttempt(ctx context.Context, tenantID, sagaID, code string, drop bool) error {
+	return s.locked(ctx, tenantID, func(ctx context.Context) error {
+		cur, ok, err := s.Sagas.Get(ctx, sagaID)
+		if err != nil || !ok || cur.State != domain.SagaReverting || cur.ReversalRPDoneAt != nil {
+			return err // never drop or reschedule once RP-4 answered 200
+		}
+		now := s.now()
+		cur.Attempts++
+		cur.LastErrorCode, cur.LastErrorAt = &code, &now
+		if drop {
+			cur.State, cur.NextAttemptAt = domain.SagaConfirmed, nil
+			cur.ReversalRequestedAt, cur.ReversalRequestedBy, cur.ReversalReason, cur.ReversalRefund, cur.ReversalDisputeID = nil, nil, nil, nil, nil
+		} else {
+			next := now.Add(domain.SagaBackoff(cur.Attempts, s.Settings.SagaMaxBackoff))
+			cur.NextAttemptAt = &next
+		}
+		return s.Sagas.Update(ctx, cur)
+	})
+}
+
+// completeReversal is §8.2 after RP-4 answered 200, from the request recorded
+// on the saga. Every step is safe to repeat: the provider cancel and refund
+// use keys derived from the subscription (BIL-IDEM-2), and the final commit
+// does nothing once the saga is reverted.
+func (s *Service) completeReversal(ctx context.Context, c Caller, saga domain.ConversionSaga, sub domain.Subscription) (ReversalResult, error) {
+	tenantID := saga.TenantID
+	reason, refund := deref(saga.ReversalReason), saga.ReversalRefund != nil && *saga.ReversalRefund
+	var disp *domain.Dispute
+	if saga.ReversalDisputeID != nil {
+		if err := s.Tx.RunInTenantTx(ctx, tenantID, func(ctx context.Context) error {
+			d, ok, err := s.Money.Dispute(ctx, *saga.ReversalDisputeID)
+			if ok {
+				disp = &d
+			}
+			return err
+		}); err != nil {
+			return ReversalResult{}, err
+		}
 	}
 	prov, err := s.provider(sub.Provider)
 	if err != nil {
 		return ReversalResult{}, err
 	}
-	if sub.ProviderSubscriptionID != nil && sub.Provider != manualProvider {
+	if sub.ProviderSubscriptionID != nil && sub.Provider != manualProvider && sub.Status != domain.StatusEnded {
 		if err := prov.CancelNow(ctx, port.SubscriptionRef{ProviderSubscriptionID: *sub.ProviderSubscriptionID}, "cancel:"+sub.BillingSubscriptionID+":reversal"); err != nil {
 			return ReversalResult{}, providerErr(err)
 		}
 	}
 	out := ReversalResult{ReversalStatus: "reverted", RPResponse: json.RawMessage(`{"status":200}`)}
 	fundsReturned := disp != nil && disp.ProviderStatus == "lost"
-	if r.Refund && !fundsReturned {
-		inv, found, err := s.conversionInvoice(ctx, tenantID)
+	if refund && !fundsReturned {
+		id, err := s.reversalRefund(ctx, c, tenantID, sub.BillingSubscriptionID, reason)
 		if err != nil {
 			return ReversalResult{}, err
 		}
-		if found && inv.AmountPaidMinor-inv.AmountRefundedMinor > 0 {
-			f, err := s.refund(ctx, c, tenantID, inv.InvoiceID, inv.AmountPaidMinor-inv.AmountRefundedMinor, inv.Currency,
-				domain.RefundCategoryConversionReversal, r.Reason)
-			if err != nil {
-				return ReversalResult{}, err
-			}
-			out.RefundID = &f.RefundID
-		}
+		out.RefundID = id
+	}
+	actor := deref(saga.ReversalRequestedBy)
+	if actor == "" {
+		actor = actorOf(c)
 	}
 	err = s.locked(ctx, tenantID, func(ctx context.Context) error {
 		now := s.now()
+		curSaga, ok, err := s.Sagas.Get(ctx, saga.SagaID)
+		if err != nil {
+			return err
+		}
+		if !ok || curSaga.State == domain.SagaReverted {
+			return nil // completed by the other path (B-O8 or the saga worker)
+		}
 		cur, err := s.Subs.Get(ctx, sub.BillingSubscriptionID)
 		if err != nil {
 			return err
 		}
 		if cur.Status != domain.StatusEnded {
 			from := cur.Status
-			reason := domain.CancelOperatorReversal
+			cancel := domain.CancelOperatorReversal
 			ended, err := s.Subs.Transition(ctx, cur.BillingSubscriptionID, 0, domain.StatusEnded, func(x *domain.Subscription) {
-				x.EndedAt, x.CancelReason = &now, &reason
+				x.EndedAt, x.CancelReason = &now, &cancel
 			})
 			if err != nil {
 				return err
 			}
-			if err := s.history(ctx, ended, &from, "operator:B-O8", c.UserID, nil, nil, nil); err != nil {
+			if err := s.history(ctx, ended, &from, "operator:B-O8", actor, nil, nil, nil); err != nil {
 				return err
 			}
 		}
-		if cur, ok, err := s.Sagas.Get(ctx, saga.SagaID); err != nil {
+		res := "reverted"
+		curSaga.State, curSaga.Resolution, curSaga.ResolutionReason, curSaga.ResolvedBy = domain.SagaReverted, &res, &reason, &actor
+		curSaga.NextAttemptAt = nil
+		if err := s.Sagas.Update(ctx, curSaga); err != nil {
 			return err
-		} else if ok && cur.State != domain.SagaReverted {
-			res := "reverted"
-			cur.State, cur.Resolution, cur.ResolutionReason, cur.ResolvedBy = domain.SagaReverted, &res, &r.Reason, &c.UserID
-			if err := s.Sagas.Update(ctx, cur); err != nil {
-				return err
-			}
 		}
 		// RP-4 put the tenant back on a trial (§8.2 step 3); Billing does not
 		// consume TrialReactivated, so it records that here. Without it the
@@ -474,16 +654,61 @@ func (s *Service) RevertConversion(ctx context.Context, c Caller, tenantID strin
 			return err
 		}
 		if disp != nil {
-			if err := s.Money.DecideDispute(ctx, disp.DisputeID, "reverted", c.UserID); err != nil {
+			if err := s.Money.DecideDispute(ctx, disp.DisputeID, "reverted", actor); err != nil {
 				return err
 			}
 		}
 		return s.Audit.Write(ctx, port.AuditEntry{TenantID: tenantID, EntryType: "billing.conversion.reverted", Action: "conversion.reverted",
-			ActorID: c.UserID, TargetType: "subscription", TargetID: sub.BillingSubscriptionID, SourceEventType: "ConversionReverted",
+			ActorID: actor, TargetType: "subscription", TargetID: sub.BillingSubscriptionID, SourceEventType: "ConversionReverted",
 			NaturalID: sub.BillingSubscriptionID, OccurredAt: now, IPAddress: c.ClientIP, UserAgent: c.UserAgent,
-			Metadata: map[string]any{"refund": r.Refund, "dispute_id": r.DisputeID, "reason": r.Reason}})
+			Metadata: map[string]any{"refund": refund, "dispute_id": deref(saga.ReversalDisputeID), "reason": reason}})
 	})
 	return out, err
+}
+
+// reversalRefund refunds what is left of the conversion payment under one
+// key per subscription, refund:reversal:<billing_subscription_id>, so B-O8
+// and the saga worker never refund twice. A refund already recorded under
+// that key is resumed with its own body (§9.2), not recomputed.
+func (s *Service) reversalRefund(ctx context.Context, c Caller, tenantID, billingSubscriptionID, reason string) (*string, error) {
+	rc := c
+	rc.IdempotencyKey = "refund:reversal:" + billingSubscriptionID
+	var (
+		prev  domain.Refund
+		found bool
+	)
+	if err := s.Tx.RunInTenantTx(ctx, tenantID, func(ctx context.Context) error {
+		var err error
+		prev, found, err = s.Money.RefundByKey(ctx, tenantID, rc.IdempotencyKey)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	if found {
+		// The provider refused it, or its key is too old to replay: the
+		// reversal completes (the subscription must stop billing) and the
+		// operator refunds by hand (B-O3).
+		if prev.Status == domain.RefundFailed || (prev.ProviderRefundID == nil && s.now().Sub(prev.CreatedAt) > providerKeyTTL) {
+			if s.Log != nil {
+				s.logger(ctx).Error("conversion reversal refund was not issued; refund by hand with B-O3 (SEV-2)", map[string]any{
+					"tenant_id": tenantID, "refund_id": prev.RefundID, "refund_status": prev.Status,
+					"alert": "BillingReversalDecisionNeeded", "severity": "SEV-2"})
+			}
+			return nil, nil
+		}
+		f, err := s.refund(ctx, rc, tenantID, prev.InvoiceID, prev.AmountMinor, prev.Currency, prev.Category, prev.Reason)
+		return &f.RefundID, err
+	}
+	inv, ok, err := s.conversionInvoice(ctx, tenantID)
+	if err != nil || !ok || inv.AmountPaidMinor-inv.AmountRefundedMinor <= 0 {
+		return nil, err
+	}
+	f, err := s.refund(ctx, rc, tenantID, inv.InvoiceID, inv.AmountPaidMinor-inv.AmountRefundedMinor, inv.Currency,
+		domain.RefundCategoryConversionReversal, reason)
+	if err != nil {
+		return nil, err
+	}
+	return &f.RefundID, nil
 }
 
 func (s *Service) conversionInvoice(ctx context.Context, tenantID string) (domain.Invoice, bool, error) {
@@ -519,8 +744,8 @@ func (s *Service) sagaRefund(ctx context.Context, c Caller, tenantID, sagaID str
 		if !found || saga.TenantID != tenantID {
 			return domain.NewError(domain.ErrSagaNotFound, "saga not found")
 		}
-		if saga.State == domain.SagaConfirmed || saga.State.Terminal() {
-			return domain.NewError(domain.ErrSagaAlreadyConfirmed, "the saga is confirmed or closed; use B-O8 or B-O3").With("state", string(saga.State))
+		if saga.State == domain.SagaConfirmed || saga.State == domain.SagaReverting || saga.State.Terminal() {
+			return domain.NewError(domain.ErrSagaAlreadyConfirmed, "the saga is confirmed, being reverted (B-O8) or closed; use B-O8 or B-O3").With("state", string(saga.State))
 		}
 		if sub, err = s.Subs.Get(ctx, saga.BillingSubscriptionID); err != nil {
 			return err

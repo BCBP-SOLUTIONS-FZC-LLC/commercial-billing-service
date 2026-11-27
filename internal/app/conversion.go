@@ -712,7 +712,7 @@ func (s *Service) runSagaStep(ctx context.Context, ref port.SagaRef) error {
 			return err
 		}
 		now := s.now()
-		if cur.State != domain.SagaRPConvertPending || cur.NextAttemptAt == nil || cur.NextAttemptAt.After(now) {
+		if (cur.State != domain.SagaRPConvertPending && cur.State != domain.SagaReverting) || cur.NextAttemptAt == nil || cur.NextAttemptAt.After(now) {
 			return nil
 		}
 		lease := now.Add(s.Settings.SagaClaim)
@@ -727,6 +727,9 @@ func (s *Service) runSagaStep(ctx context.Context, ref port.SagaRef) error {
 		return nil
 	}); err != nil || !claimed {
 		return err
+	}
+	if saga.State == domain.SagaReverting {
+		return s.runReversalStep(ctx, saga, sub)
 	}
 
 	ans := s.RP.Convert(ctx, saga.TenantID, port.ConvertRequest{Plan: sub.Plan, BillingSubscriptionID: sub.BillingSubscriptionID},
@@ -765,6 +768,27 @@ func (s *Service) runSagaStep(ctx context.Context, ref port.SagaRef) error {
 	})
 }
 
+// runReversalStep continues a B-O8 reversal that RP-4 had not finished
+// (§8.2, rev 0.63): RP-4 again with the same key, then the completion once it
+// answers 200. A terminal answer drops the request and pages the operator.
+func (s *Service) runReversalStep(ctx context.Context, saga domain.ConversionSaga, sub domain.Subscription) error {
+	// The request's operator is the actor of record (AL-5, subscription history).
+	c := Caller{UserID: deref(saga.ReversalRequestedBy)}
+	_, terminal, err := s.reverse(ctx, c, saga, sub)
+	if terminal != "" {
+		if s.Log != nil {
+			s.logger(ctx).Error("conversion reversal refused by Realm Provisioner; operator decision needed (SEV-2)", map[string]any{
+				"tenant_id": saga.TenantID, "saga_id": saga.SagaID, "rp": terminal,
+				"alert": "BillingReversalDecisionNeeded", "severity": "SEV-2"})
+		}
+		return nil
+	}
+	if domain.HasCode(err, domain.ErrIAMUnavailable) {
+		return nil // recorded with backoff; the next pass retries
+	}
+	return err
+}
+
 // ── TenantConverted (§7.1) ─────────────────────────────────────────────────
 
 // ConfirmConversion is the saga side of TenantConverted: in the event's
@@ -789,8 +813,11 @@ func (s *Service) confirmConversion(ctx context.Context, ev TenantLifecycleEvent
 		s.unmatchedConversion(ctx, ev, "no saga")
 		return false, nil
 	}
-	if saga.State == domain.SagaConfirmed {
-		return true, nil // already confirmed: no-op
+	if saga.State == domain.SagaConfirmed || saga.State == domain.SagaReverting {
+		// Already confirmed: no-op. Reverting: the conversion was confirmed
+		// before B-O8; a late or redelivered TenantConverted must not drop
+		// the recorded reversal.
+		return true, nil
 	}
 	if !domain.CanSagaTransition(saga.State, domain.SagaConfirmed) {
 		if s.Log != nil {

@@ -42,8 +42,8 @@ Full contract: LLD §5.4.2; BFF alignment status: `docs/lld/billing-open-items.m
 | Core (Org & Membership) | **I-11** `GET /api/v1/internal/tenants/:id/seat-usage` | Seat floor (`BIL-SEAT-3`), renewal, projection check, display (30 s cache for display only) | `CORE_TIMEOUT_MS` |
 | Core | **I-18** `GET /api/v1/internal/tenants/:id/plan-change-check?target_plan=` | Every downgrade, at request and at effect; `503` fails closed | `CORE_TIMEOUT_MS` |
 | Realm Provisioner | **RP-3** `POST …/tenants/:id/convert` (key `convert:<tenant_id>:<billing_subscription_id>`) | Conversion saga, only after payment is confirmed (`BIL-SAGA-1`) | `RP_TIMEOUT_MS` |
-| Realm Provisioner | **RP-4** `POST …/tenants/:id/revert-conversion` (key `revert:…`) | Reversal (B-O8), within 7 days | `RP_TIMEOUT_MS` |
-| Realm Provisioner | **RP-11** `GET …/tenants/:id/realm` | Operator saga view (B-O7) only | `RP_TIMEOUT_MS` |
+| Realm Provisioner | **RP-4** `POST …/tenants/:id/revert-conversion` (key `revert:…`) | Reversal (B-O8), within 7 days. B-O8 records the request on the saga (`reverting`) first; `409 operation_in_progress` / `optimistic_lock_conflict`, 5xx, timeout → `503 IAM_UNAVAILABLE` and the saga worker completes it | `RP_TIMEOUT_MS` |
+| Realm Provisioner | **RP-11** `GET …/tenants/:id/realm` | Operator saga view (B-O7) only | 2 s (its own budget, LLD §18.10) |
 | Entitlements | `GET /api/v1/internal/tenants/:id/entitlements` | Add-on eligibility (`BIL-ADD-1`): fresh on purchase (B-P20, fail closed `503 ENTITLEMENTS_UNAVAILABLE`), 60 s cache for B-P19. Egress restricted to this route (W-10); identity contract LLD §10.2 | `ENTITLEMENTS_TIMEOUT_MS` (1000) |
 | Audit Log | AL-5 via platform-audit, **outbox mode** | Audit entries written in the same transaction (§10.6) | — |
 | Stripe | stripe-go v87.2.0 (API `2026-11-18.endive`) in `provider/stripe` only | Every call with an idempotency key from Billing ids (`BIL-IDEM-2`) | `STRIPE_TIMEOUT_MS` |

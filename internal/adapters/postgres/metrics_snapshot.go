@@ -30,7 +30,7 @@ func (r *SnapshotRepository) MetricsSnapshot(ctx context.Context, overdueBefore 
 			args []any
 		}{
 			{`SELECT status::text, count(*) FROM payment_event_ledger WHERE status IN ('received','failed') GROUP BY 1`, s.WebhookBacklog, nil},
-			{`SELECT state::text, count(*) FROM conversion_sagas WHERE state IN ('payment_confirmed','rp_convert_pending','awaiting_tenant_converted','failed') GROUP BY 1`, s.SagasInFlight, nil},
+			{`SELECT state::text, count(*) FROM conversion_sagas WHERE state IN ('payment_confirmed','rp_convert_pending','awaiting_tenant_converted','failed','reverting') GROUP BY 1`, s.SagasInFlight, nil},
 			{`SELECT coalesce(collection_paused_by,'unknown'), count(*) FROM subscriptions WHERE collection_paused AND status <> 'ended' GROUP BY 1`, s.CollectionPaused, nil},
 			{`SELECT currency, count(*) FROM invoices WHERE held_for_review AND disposition IS NULL AND status = 'draft' GROUP BY 1`, s.InvoicesHeld, nil},
 			{`SELECT payload_builder, count(*) FROM scheduled_emissions WHERE status = 'pending' GROUP BY 1`, s.EmissionsPending, nil},
