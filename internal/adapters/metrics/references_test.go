@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/obsregistry"
 )
 
 const root = "../../.."
@@ -92,5 +94,45 @@ func TestReferencesPassMetricsLintRefs(t *testing.T) {
 	out, err := exec.Command("go", args...).CombinedOutput()
 	if err != nil || !strings.Contains(string(out), " 0 errors") {
 		t.Fatalf("metricslint refs:\n%s", out)
+	}
+}
+
+var platformName = regexp.MustCompile(`\bplatform_[a-z0-9_]+\b`)
+
+// Every platform_* name a rule, dashboard, HPA or runbook reads is in the
+// Platform Observability Registry and neither deprecated nor removed
+// (standard rules 10–11). metricslint refs checks only names with a series
+// suffix (_total, _seconds, …), on the assumption that a scrape catches
+// unregistered gauges; Billing's scrape holds only its own collectors, so
+// a gauge emitted by a library (platform-events, pgcommon) is checked here.
+func TestReferencedPlatformMetricsAreRegistered(t *testing.T) {
+	reg := obsregistry.Default()
+	for _, f := range referenceFiles(t) {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, loc := range platformName.FindAllStringIndex(string(b), -1) {
+			name := string(b[loc[0]:loc[1]])
+			if loc[1] < len(b) && (b[loc[1]] == ':' || b[loc[1]] == '*') || strings.HasSuffix(name, "_") {
+				continue // recording-rule level or wildcard in prose
+			}
+			m, ok := reg.Lookup(name)
+			if !ok {
+				for _, s := range []string{"_bucket", "_count", "_sum"} {
+					if base, cut := strings.CutSuffix(name, s); cut {
+						if m, ok = reg.Lookup(base); ok {
+							break
+						}
+					}
+				}
+			}
+			switch {
+			case !ok:
+				t.Errorf("%s reads %s, which is not in the Platform Observability Registry (no library emits it)", f, name)
+			case m.Status == obsregistry.StatusDeprecated || m.Status == obsregistry.StatusRemoved:
+				t.Errorf("%s reads %s, which the registry marks %s", f, name, m.Status)
+			}
+		}
 	}
 }
