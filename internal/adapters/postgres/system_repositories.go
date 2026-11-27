@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -137,10 +138,10 @@ func (r *LedgerRepository) Insert(ctx context.Context, e domain.LedgerEntry) (bo
 		tag, err := q.Exec(ctx, `
 			INSERT INTO payment_event_ledger (provider, provider_event_id, event_type, normalised_kind, tenant_id,
 			  provider_object_ref, livemode, provider_created_at, payload)
-			VALUES ($1, $2, $3, $4, $5::uuid, $6, $7, $8, $9)
+			VALUES ($1, $2, $3, $4, $5::uuid, $6, $7, $8, $9::jsonb)
 			ON CONFLICT (provider, provider_event_id) DO NOTHING`,
 			e.Provider, e.ProviderEventID, e.EventType, e.NormalisedKind, e.TenantID, e.ProviderObjectRef, e.Livemode,
-			e.ProviderCreatedAt, e.Payload)
+			e.ProviderCreatedAt, jsonText(e.Payload))
 		inserted = tag.RowsAffected() == 1
 		return err
 	})
@@ -207,8 +208,8 @@ func (r *IdempotencyRepository) Begin(ctx context.Context, rec domain.Idempotenc
 func (r *IdempotencyRepository) Complete(ctx context.Context, tenantID, scope, key string, statusCode int, body []byte) error {
 	return inTx(ctx, r.pool, func(q querier) error {
 		_, err := q.Exec(ctx, `
-			UPDATE idempotency_records SET state = 'completed', status_code = $4, response_body = $5, locked_until = NULL
-			WHERE tenant_id = $1::uuid AND scope = $2 AND key = $3`, tenantID, scope, key, statusCode, body)
+			UPDATE idempotency_records SET state = 'completed', status_code = $4, response_body = $5::jsonb, locked_until = NULL
+			WHERE tenant_id = $1::uuid AND scope = $2 AND key = $3`, tenantID, scope, key, statusCode, jsonText(body))
 		return err
 	})
 }
@@ -221,4 +222,84 @@ func (r *IdempotencyRepository) Release(ctx context.Context, tenantID, scope, ke
 			tenantID, scope, key)
 		return err
 	})
+}
+
+// ledgerColumns is the select list shared by Get and Claim.
+const ledgerColumns = `provider, provider_event_id, event_type, normalised_kind, tenant_id::text, provider_object_ref, livemode,
+  provider_created_at, received_at, payload, status, attempts, next_attempt_at, outcome`
+
+// Claim implements the §8.15 claim: due received or failed rows, plus
+// processing rows whose claim expired, never a row of a tenant that still has
+// an earlier row in live processing (BIL-PAY-5), oldest first, SKIP LOCKED.
+func (r *LedgerRepository) Claim(ctx context.Context, limit int, claimFor time.Duration) ([]domain.LedgerEntry, error) {
+	var out []domain.LedgerEntry
+	err := inTx(ctx, r.pool, func(q querier) error {
+		rows, err := q.Query(ctx, `
+			WITH next AS (
+			  SELECT provider, provider_event_id FROM payment_event_ledger l
+			  WHERE ((status IN ('received', 'failed') AND next_attempt_at <= now())
+			         OR (status = 'processing' AND claimed_until < now()))
+			    AND NOT EXISTS (SELECT 1 FROM payment_event_ledger e
+			                    WHERE e.tenant_id = l.tenant_id AND e.status = 'processing'
+			                      AND e.claimed_until >= now()
+			                      AND e.provider_created_at <= l.provider_created_at
+			                      AND (e.provider, e.provider_event_id) <> (l.provider, l.provider_event_id))
+			  ORDER BY provider_created_at
+			  LIMIT $1 FOR UPDATE SKIP LOCKED)
+			UPDATE payment_event_ledger p
+			SET status = 'processing', claimed_until = now() + $2::interval, attempts = attempts + 1
+			FROM next WHERE p.provider = next.provider AND p.provider_event_id = next.provider_event_id
+			RETURNING `+qualify("p", ledgerColumns), limit, claimFor.String())
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var e domain.LedgerEntry
+			if err := rows.Scan(&e.Provider, &e.ProviderEventID, &e.EventType, &e.NormalisedKind, &e.TenantID, &e.ProviderObjectRef,
+				&e.Livemode, &e.ProviderCreatedAt, &e.ReceivedAt, &e.Payload, &e.Status, &e.Attempts, &e.NextAttemptAt, &e.Outcome); err != nil {
+				return err
+			}
+			out = append(out, e)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// Finish records the outcome: processed / ignored (done), or failed with a
+// retry time; failed without a retry time is parked (next_attempt_at =
+// 9999-12-31, which Go reads back as a real time, unlike infinity) for the
+// runbook replay (§20.2, B-O13).
+func (r *LedgerRepository) Finish(ctx context.Context, provider, eventID string, status domain.LedgerStatus, outcome string, nextAttempt *time.Time) error {
+	return inTx(ctx, r.pool, func(q querier) error {
+		_, err := q.Exec(ctx, `
+			UPDATE payment_event_ledger
+			SET status = $3::ledger_status, outcome = $4, claimed_until = NULL,
+			    processed_at = CASE WHEN $3::ledger_status IN ('processed', 'ignored') THEN now() ELSE processed_at END,
+			    next_attempt_at = CASE WHEN $3::ledger_status = 'failed' THEN COALESCE($5::timestamptz, '9999-12-31T00:00:00Z'::timestamptz) ELSE next_attempt_at END
+			WHERE provider = $1 AND provider_event_id = $2`,
+			provider, eventID, status, outcome, nextAttempt)
+		return err
+	})
+}
+
+// qualify prefixes each column of a comma-separated list with alias.
+func qualify(alias, cols string) string {
+	parts := strings.Split(cols, ",")
+	for i, c := range parts {
+		parts[i] = alias + "." + strings.TrimSpace(c)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// jsonText passes JSON as text. Pools in PgBouncer mode use the simple query
+// protocol, where a []byte argument is sent as bytea and Postgres rejects it
+// as JSON; text plus an explicit ::jsonb cast works in both protocols.
+func jsonText(b []byte) *string {
+	if b == nil {
+		return nil
+	}
+	s := string(b)
+	return &s
 }

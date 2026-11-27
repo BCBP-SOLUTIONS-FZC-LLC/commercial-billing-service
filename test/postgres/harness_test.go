@@ -66,7 +66,10 @@ func run(m *testing.M) int {
 	}
 
 	mk := func(dsn string, guc bool, name string) *pgcommon.Pool {
-		cfg := pgcommon.Config{DSN: dsn, PoolName: name, MaxConns: 4}
+		// PgBouncer mode (simple query protocol) for the service roles, as
+		// in production (§12 PG_BOUNCER_MODE=true), so parameter encoding
+		// issues surface here.
+		cfg := pgcommon.Config{DSN: dsn, PoolName: name, MaxConns: 4, PGBouncerMode: name != "super"}
 		if guc {
 			cfg.GUCProvider = pgcommon.GUCSetFromContext
 		}
