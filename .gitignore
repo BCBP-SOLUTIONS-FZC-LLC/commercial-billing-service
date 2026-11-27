@@ -25,11 +25,32 @@ profile.cov
 go.work
 go.work.sum
 
-# env file
+# env file (secrets; change .env-example instead) and the local private-module token
 .env
+.go_private_token
+
+# Build outputs (make build writes bin/; make cover-all writes .coverage/)
+bin/
+.coverage/
+# Root-anchored: a bare `server` (no leading slash) would also match the
+# cmd/server/ *directory* at any depth and silently hide real source files.
+# These match only root-level binaries from `go build ./cmd/<name>` run
+# without -o from the repo root (never commit binaries; use make build).
+/server
+/jobs
+/migrate
+/certify
+/commercial-billing
+
+# macOS
+.DS_Store
 
 # Editor/IDE
 # .idea/
-# .vscode/
-bin/
-.coverage/
+.vscode/
+
+# Claude Code agent worktrees (temporary, not project code)
+.claude/worktrees/
+
+# Staged Glue schema copies under their event-type names (make _stage-produced / schema-register, CI)
+.tmp/

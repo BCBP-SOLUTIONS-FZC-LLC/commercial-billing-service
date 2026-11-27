@@ -11,10 +11,11 @@ if git diff --cached --name-only --diff-filter=ACMR | grep -Eq '(^|/)\.env$'; th
   exit 1
 fi
 
-echo "[pre-commit] running tidy..."
-make tidy
-if ! git diff --quiet -- go.mod go.sum; then
-  echo "[pre-commit] go mod tidy changed go.mod / go.sum: review and stage them, then commit again" >&2
+# go mod tidy -diff reports what tidy would change without touching the
+# files, so unrelated unstaged edits to go.mod / go.sum don't fail the hook.
+echo "[pre-commit] checking go mod tidy..."
+if ! go mod tidy -diff >/dev/null; then
+  echo "[pre-commit] go.mod / go.sum are not tidy: run make tidy, review, stage, then commit again" >&2
   exit 1
 fi
 

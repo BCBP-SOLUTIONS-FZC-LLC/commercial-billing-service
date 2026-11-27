@@ -1,8 +1,56 @@
+# Build context for the Dockerfile's `COPY --link . .`. The image build needs
+# only go.mod / go.sum, cmd/, internal/, pkg/ and api/ (the embedded
+# asyncapi.yaml); migrations and event schemas are embedded from internal/.
+
+# Version control and CI
 .git
-.github
+.gitignore
+.github/
+.githooks/
+
+# Environment files — never bake secrets into the image
 .env
-bin
-docs
-test
-coverage*
-*.out
+.env.*
+*.env
+.go_private_token
+
+# Development tooling and docs (the OpenAPI golden is not embedded, so all of
+# docs/ stays out, unlike services that serve docs/swagger from the binary)
+.claude/
+docs/
+deploy/
+scripts/
+*.md
+ARCHITECTURE.md
+README.md
+
+# Local compose (host-only)
+docker-compose.yml
+
+# Test artefacts
+test/
+coverage.out
+coverage.html
+*.coverprofile
+**/*_test.go
+
+# Build artefacts already compiled outside Docker (make build → bin/, cover-all
+# → .coverage/; root-level `go build ./cmd/<name>` binaries, as in .gitignore)
+bin/
+.coverage/
+.tmp/
+/server
+/jobs
+/migrate
+/certify
+/commercial-billing
+
+# IDE and OS noise
+.idea/
+.vscode/
+*.DS_Store
+*.swp
+*.swo
+
+# Go tool cache (not needed in image)
+vendor/
