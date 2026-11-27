@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/problem"
 )
 
 // NotImplementedError marks a route whose use case lands in a later build
@@ -18,6 +19,15 @@ type NotImplementedError struct {
 
 func (e *NotImplementedError) Error() string {
 	return fmt.Sprintf("%s is implemented in phase %s", e.Route, e.Phase)
+}
+
+// As lets gincommon classify it as its 501 not-implemented problem.
+func (e *NotImplementedError) As(target any) bool {
+	if p, ok := target.(**problem.Error); ok {
+		*p = problem.NewNotImplementedError(e.Error())
+		return true
+	}
+	return false
 }
 
 func notImplemented(route, phase string) error {

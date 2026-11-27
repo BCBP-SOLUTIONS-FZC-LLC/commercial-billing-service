@@ -1,0 +1,44 @@
+# Recording rules for commercial-billing (LLD §11.1, §11.2). Names follow
+# level:metric:operations. Inputs are Tier 1 platform_* series (emitted by
+# platform-gincommon / platform-events) and Billing's Tier 3
+# commercial_billing_* series; no rule reads a deprecated name.
+# Counters and histograms are per pod and summed; exporter gauges are the
+# same on every replica and use max.
+groups:
+  - name: commercial_billing.recording
+    interval: 30s
+    rules:
+      # API traffic (tenant, internal and operator routes; probes excluded).
+      - record: commercial_billing:http_requests:rate5m
+        expr: sum by (status_class) (rate(platform_http_requests_total{service="commercial-billing",route=~"/api/v1/(tenants|internal|operator)/.*"}[5m]))
+      - record: commercial_billing:http_errors:ratio_rate5m
+        expr: |
+          sum(rate(platform_http_requests_total{service="commercial-billing",route=~"/api/v1/(tenants|internal|operator)/.*",status_class="5xx"}[5m]))
+            / sum(rate(platform_http_requests_total{service="commercial-billing",route=~"/api/v1/(tenants|internal|operator)/.*"}[5m]))
+      # Webhook acknowledgement (B-W1) and processing.
+      - record: commercial_billing:webhook_ack_seconds:p99_5m
+        expr: histogram_quantile(0.99, sum by (le) (rate(platform_http_request_duration_seconds_bucket{service="commercial-billing",route="/api/v1/webhooks/:provider"}[5m])))
+      - record: commercial_billing:webhook_processing_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(commercial_billing_webhook_processing_seconds_bucket{service="commercial-billing"}[5m])))
+      # Purchase confirmation → event (Billing's share of the 60 s targets).
+      - record: commercial_billing:purchase_to_event_seconds:p99_5m
+        expr: histogram_quantile(0.99, sum by (le, kind) (rate(commercial_billing_purchase_confirmation_to_event_seconds_bucket{service="commercial-billing",kind=~"seats|token_addon"}[5m])))
+      # B-I1 latency (p95 6 s, p99 12 s): quantiles, the platform buckets
+      # have no 6 s / 12 s boundary.
+      - record: commercial_billing:signup_charge_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(platform_http_request_duration_seconds_bucket{service="commercial-billing",route="/api/v1/internal/subscriptions/authorize-and-charge"}[5m])))
+      - record: commercial_billing:signup_charge_seconds:p99_5m
+        expr: histogram_quantile(0.99, sum by (le) (rate(platform_http_request_duration_seconds_bucket{service="commercial-billing",route="/api/v1/internal/subscriptions/authorize-and-charge"}[5m])))
+      # Tenant read routes (B-P1, B-P17) p99 < 150 ms.
+      - record: commercial_billing:tenant_reads_seconds:p99_5m
+        expr: histogram_quantile(0.99, sum by (le) (rate(platform_http_request_duration_seconds_bucket{service="commercial-billing",method="GET",route=~"/api/v1/tenants/:id/(subscription|invoices)"}[5m])))
+      # Dependencies.
+      - record: commercial_billing:dependency_errors:ratio_rate5m
+        expr: |
+          sum by (dependency) (rate(platform_dependency_request_seconds_count{service="commercial-billing",outcome="error"}[5m]))
+            / sum by (dependency) (rate(platform_dependency_request_seconds_count{service="commercial-billing"}[5m]))
+      # Business state (exporter gauges: max across replicas).
+      - record: commercial_billing:subscriptions:max
+        expr: max by (status, plan, provider) (commercial_billing_subscriptions{service="commercial-billing"})
+      - record: commercial_billing:webhook_backlog:max
+        expr: max by (status) (commercial_billing_webhook_backlog{service="commercial-billing"})

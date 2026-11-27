@@ -44,8 +44,19 @@ func (a *Adapter) VerifyAndNormalise(_ context.Context, h http.Header, body []by
 	if ev.Livemode != a.cfg.Livemode {
 		return domain.PaymentEvent{}, fmt.Errorf("%w: livemode %v in a livemode=%v environment", port.ErrInvalidSignature, ev.Livemode, a.cfg.Livemode)
 	}
+	return normalise(ev.ID, ev.Type, ev.Created, ev.Livemode, ev.Data.Object)
+}
+
+// normalise builds the PaymentEvent and the allow-listed payload
+// (BIL-PCI-3) from a verified event, or from one listed by reconciliation.
+func normalise(id, typ string, created int64, livemode bool, object json.RawMessage) (domain.PaymentEvent, error) {
+	ev := struct {
+		ID, Type string
+		Created  int64
+		Livemode bool
+	}{id, typ, created, livemode}
 	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(ev.Data.Object, &obj); err != nil {
+	if err := json.Unmarshal(object, &obj); err != nil {
 		return domain.PaymentEvent{}, fmt.Errorf("%w: malformed event object", port.ErrInvalidSignature)
 	}
 	kind, objKind := normaliseKind(ev.Type, str(obj["mode"]))
@@ -171,10 +182,24 @@ var allowedObjectFields = map[string]bool{
 	"payment_status": true, "collection_method": true, "auto_advance": true, "pause_collection": true,
 }
 
+// allowedMetadataKeys are the only metadata keys kept (BIL-PCI-3, §4.2.15):
+// the ids Billing itself sets. Anything else a dashboard user or another
+// integration put in metadata is dropped.
+var allowedMetadataKeys = map[string]bool{
+	"tenant_id": true, "billing_subscription_id": true, "purpose": true, "purchase_id": true, "change_id": true,
+}
+
 func allowList(obj map[string]json.RawMessage) map[string]json.RawMessage {
 	out := make(map[string]json.RawMessage, len(obj))
 	for k, v := range obj {
 		if !allowedObjectFields[k] {
+			continue
+		}
+		if k == "metadata" {
+			if m := metadata(v); len(m) > 0 {
+				b, _ := json.Marshal(m)
+				out[k] = b
+			}
 			continue
 		}
 		if k == "customer" || k == "subscription" || k == "invoice" || k == "charge" || k == "payment_intent" {
@@ -213,10 +238,17 @@ func idOf(raw json.RawMessage) string {
 	return ""
 }
 
+// metadata returns the allow-listed metadata keys (BIL-PCI-3).
 func metadata(raw json.RawMessage) map[string]string {
+	all := map[string]json.RawMessage{}
 	m := map[string]string{}
-	if len(raw) > 0 {
-		_ = json.Unmarshal(raw, &m)
+	if len(raw) == 0 || json.Unmarshal(raw, &all) != nil {
+		return m
+	}
+	for k, v := range all {
+		if s := str(v); s != "" && allowedMetadataKeys[k] {
+			m[k] = s
+		}
 	}
 	return m
 }

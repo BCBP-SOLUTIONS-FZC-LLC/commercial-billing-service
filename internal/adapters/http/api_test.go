@@ -119,7 +119,7 @@ func newAPI(t *testing.T, live bool) (*Router, *recorder, *memIdem) {
 	api := &APIConfig{Tenant: rec, Internal: rec, Operator: rec,
 		Idem:             &Idempotency{Repo: idem, Tx: passTx{}, TTL: 72 * time.Hour, Lock: 30 * time.Second},
 		OperatorPathLive: live, BFFCallerPrincipal: "cluster.local/ns/bff/sa/bff-signup"}
-	return NewRouter(RouterConfig{Routes: []func(gin.IRouter){api.Register}}), rec, idem
+	return NewRouter(RouterConfig{GinConfig: testGin(), Routes: []func(gin.IRouter){api.Register}}), rec, idem
 }
 
 type req struct {
@@ -457,5 +457,19 @@ func TestPrincipalFromXFCC(t *testing.T) {
 		if got := principalFromXFCC(h); got != want {
 			t.Errorf("%q: %q", h, got)
 		}
+	}
+}
+
+// §12: a route behind a disabled feature flag is not registered (404).
+func TestDisabledRoutes(t *testing.T) {
+	rec := &recorder{charge: func() (app.ChargeResult, error) { return app.ChargeResult{}, nil }}
+	api := &APIConfig{Tenant: rec, Internal: rec, Operator: rec, Idem: &Idempotency{Repo: newMemIdem(), Tx: passTx{}, TTL: time.Hour, Lock: time.Second},
+		OperatorPathLive: true, BFFCallerPrincipal: "cluster.local/ns/bff/sa/bff-signup", Disabled: map[string]bool{"B-I1": true, "B-P19": true}}
+	r := NewRouter(RouterConfig{GinConfig: testGin(), Routes: []func(gin.IRouter){api.Register}})
+	if w := do(r, req{"POST", "/api/v1/internal/subscriptions/authorize-and-charge", `{}`, nil}); w.Code != 404 {
+		t.Errorf("B-I1: %d", w.Code)
+	}
+	if w := do(r, req{"GET", "/api/v1/tenants/" + tenantA + "/token-packs", "", identity(tenantA, "tenant_owner")}); w.Code != 404 {
+		t.Errorf("B-P19: %d", w.Code)
 	}
 }

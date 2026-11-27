@@ -1,0 +1,17 @@
+# Staging (Stripe test mode with Test Clocks, §13.5, §14.4).
+# Account-specific values are not kept here: the deploy pipeline sets the
+# IRSA role ARN (serviceAccount.annotations), the SNS topic ARN, both queue
+# URLs and networkPolicy.postgresCIDRs from the GitHub environment's
+# variables, and the chart refuses to render staging without them.
+env:
+  APP_ENV: staging
+  TENANT_APP_BASE_URL: https://app.staging.bcbpsolutions.com
+  SNS_BILLING_EVENTS_TOPIC_ARN: ""
+  SQS_TENANT_BILLING_QUEUE_URL: ""
+  SQS_USAGE_BILLING_QUEUE_URL: ""
+externalSecret:
+  secretPath: commercial/staging/billing
+gateway:
+  hostnames: [api.staging.bcbpsolutions.com]
+  tenant:
+    corsOrigins: [https://app.staging.bcbpsolutions.com]

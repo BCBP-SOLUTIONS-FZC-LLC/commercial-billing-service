@@ -25,6 +25,12 @@ type APIConfig struct {
 	DevLike          bool
 	// BFFCallerPrincipal is BIL-AUTH-3's allowed mTLS principal.
 	BFFCallerPrincipal string
+	// Disabled lists routes behind a feature flag that is off: they are not
+	// registered, so they answer 404 (§12 feature flags).
+	Disabled map[string]bool
+	// OnOperatorAction counts commercial_billing_operator_actions_total{action,
+	// outcome}: success < 400, failure 4xx, error 5xx (§11.2). Optional.
+	OnOperatorAction func(action, outcome string)
 }
 
 // Route is one endpoint of the catalogue (§5.3).
@@ -80,18 +86,35 @@ func (a *APIConfig) Register(r gin.IRouter) {
 	tenant := r.Group(tenantPrefix, append(gincommon.ProtectedMiddlewares(a.GinConfig),
 		rejectSystemCaller(), bodyLimit(apiBodyLimit), requireJSONContentType(), requirePathTenant())...)
 	for _, d := range tenantRoutes {
+		if a.Disabled[d.ID] {
+			continue
+		}
 		chain := []gin.HandlerFunc{requirePermission(d.ID), a.Idem.handle(idemRoute{scope: d.ID, mode: d.Idem, tenant: pathTenant})}
 		tenant.Handle(d.Method, d.Path[len(tenantPrefix):], append(chain, d.handler.make(a))...)
 	}
 
 	// Internal (B-I1): mTLS principal only; no gateway identity.
+	if !a.Disabled[internalRoute.ID] {
+		a.registerInternal(r)
+	}
+
+	// Operator: identity → BIL-AUTH-4 → BIL-AUTH-2/6 → 415 → per route.
+	a.registerOperator(r)
+}
+
+func (a *APIConfig) registerInternal(r gin.IRouter) {
 	r.Handle(internalRoute.Method, internalRoute.Path, requireBFFCaller(a.BFFCallerPrincipal), rejectSystemCaller(),
 		bodyLimit(apiBodyLimit), requireJSONContentType(),
 		a.Idem.handle(idemRoute{scope: "B-I1", mode: idemRequired, tenant: headerTenant, key: chargeKey, reused: subscriptionExists}),
 		internalRoute.handler.make(a))
+}
 
-	// Operator: identity → BIL-AUTH-4 → BIL-AUTH-2/6 → 415 → per route.
-	op := r.Group(operatorPrefix, append(gincommon.ProtectedMiddlewares(a.GinConfig),
+func (a *APIConfig) registerOperator(r gin.IRouter) {
+	ids := map[string]string{}
+	for _, d := range operatorRoutes {
+		ids[d.Method+" "+d.Path] = d.ID
+	}
+	op := r.Group(operatorPrefix, append(append([]gin.HandlerFunc{countOperatorAction(ids, a.OnOperatorAction)}, gincommon.ProtectedMiddlewares(a.GinConfig)...),
 		rejectSystemCaller(), requireOperator(a.OperatorPathLive, a.DevLike), bodyLimit(apiBodyLimit), requireJSONContentType())...)
 	for _, d := range operatorRoutes {
 		chain := append([]gin.HandlerFunc{}, d.extra...)
@@ -187,3 +210,26 @@ func noContent(fn func(a *APIConfig, c *gin.Context, who app.Caller) error) hand
 
 // param returns a UUID path parameter or the validation error.
 func param(c *gin.Context, name string) (string, error) { return pathUUID(c, name) }
+
+// countOperatorAction reports every operator call, refused ones included,
+// by route id once the response is written.
+func countOperatorAction(ids map[string]string, on func(action, outcome string)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Next()
+		if on == nil {
+			return
+		}
+		action, ok := ids[c.Request.Method+" "+c.FullPath()]
+		if !ok {
+			action = "unknown"
+		}
+		switch st := c.Writer.Status(); {
+		case st >= 500:
+			on(action, "error")
+		case st >= 400:
+			on(action, "failure")
+		default:
+			on(action, "success")
+		}
+	}
+}

@@ -8,6 +8,7 @@ linters:
   default: standard
   enable:
     - bodyclose
+    - depguard
     - exhaustive
     - forbidigo
     - nilerr
@@ -17,6 +18,130 @@ linters:
     - unparam
 
   settings:
+    # LLD §11: every log, metric and span goes through platform-gincommon.
+    # Only the two observability adapters may name the underlying types
+    # (gincommon has no helper yet for span attributes and links, the span
+    # id, the Prometheus AlreadyRegistered case or the Pushgateway); they
+    # take the tracer, registry and logger from gincommon.
+    depguard:
+      rules:
+        observability:
+          files:
+            - "$all"
+            - "!$test"
+            - "!**/internal/adapters/observability/**"
+          deny:
+            - pkg: "go.opentelemetry.io"
+              desc: "spans go through port.Tracer / gincommon (adapters/observability)"
+            - pkg: "log$"
+              desc: "logs go through gincommon's logger (port.Logger)"
+            - pkg: "log/slog"
+              desc: "logs go through gincommon's logger (port.Logger)"
+            - pkg: "go.uber.org/zap"
+              desc: "logs go through gincommon's logger (port.Logger)"
+            - pkg: "github.com/sirupsen/logrus"
+              desc: "logs go through gincommon's logger (port.Logger)"
+            - pkg: "github.com/rs/zerolog"
+              desc: "logs go through gincommon's logger (port.Logger)"
+        # BIL-OPS-10: metrics are gincommon's types and constructors
+        # (gincommon.CounterVec, NewCounterVec, NewShared*Vec,
+        # MetricsRegisterer, MetricsHandler); no production package names
+        # Prometheus, adapters/metrics included.
+        metrics:
+          files:
+            - "$all"
+            - "!$test"
+          deny:
+            - pkg: "github.com/prometheus"
+              desc: "metrics go through gincommon (gincommon.CounterVec, NewCounterVec, MetricsHandler)"
+        # LLD §7, BIL-OPS-2: events, the outbox and processed-message
+        # dedup go through platform-events (events, outbox, inbox, config).
+        # The AWS messaging SDKs are platform-events' business; only the
+        # Glue encode codec (adapters/eventbus), which platform-events does
+        # not ship, names the AWS SDK.
+        events:
+          files:
+            - "$all"
+            - "!$test"
+          deny:
+            - pkg: "github.com/aws/aws-sdk-go-v2/service/sns"
+              desc: "publish through platform-events (events.NewSNSPublisher via the outbox runner)"
+            - pkg: "github.com/aws/aws-sdk-go-v2/service/sqs"
+              desc: "consume through platform-events (events.NewSQSConsumer, NewSQSDLQPublisher)"
+            - pkg: "github.com/aws/aws-sdk-go$"
+              desc: "AWS SDK v1 is not used; messaging goes through platform-events"
+            - pkg: "github.com/aws/aws-sdk-go/"
+              desc: "AWS SDK v1 is not used; messaging goes through platform-events"
+        # The Glue encode codec, which platform-events does not ship yet
+        # (v2.3.0 has only GlueDecodeCodec), is the one exception: only
+        # adapters/eventbus names the Glue client and AWS config.
+        events-glue:
+          files:
+            - "$all"
+            - "!$test"
+            - "!**/internal/adapters/eventbus/**"
+          deny:
+            - pkg: "github.com/aws/aws-sdk-go-v2/service/glue"
+              desc: "the Glue codec lives in adapters/eventbus"
+            - pkg: "github.com/aws/aws-sdk-go-v2/config"
+              desc: "platform-events' config package loads region and endpoint (LoadSNS / LoadSQS)"
+        # BIL-OPS-2: platform-events stays behind the messaging boundary.
+        # Use cases see port.EventEnqueuer / port.InboxRunner, never
+        # envelopes, outbox, inbox or consumer types.
+        events-boundary:
+          files:
+            - "$all"
+            - "!$test"
+            - "!**/internal/adapters/eventbus/**"
+            - "!**/internal/adapters/postgres/**"
+            - "!**/internal/adapters/consumer/**"
+            - "!**/internal/bootstrap/**"
+            - "!**/internal/certify/**"
+            - "!**/cmd/**"
+          deny:
+            - pkg: "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events"
+              desc: "platform-events is used only by adapters/eventbus, adapters/postgres (outbox, inbox), adapters/consumer and the composition roots"
+        # LLD §3.3, §4, BIL-OPS-1: every connection, setting and statement
+        # goes through platform-pgcommon (NewPool, ConfigFromEnv,
+        # RunInTx*, pgcommon.Tx / Row / Rows / ErrNoRows, SQLSTATE helpers).
+        database:
+          files:
+            - "$all"
+          deny:
+            - pkg: "github.com/jackc/pgx"
+              desc: "use platform-pgcommon (NewPool, RunInTx, pgcommon.Tx/Row/Rows/ErrNoRows)"
+            - pkg: "github.com/jackc/pgconn"
+              desc: "use platform-pgcommon's SQLSTATE helpers (SQLState, Is*)"
+            - pkg: "github.com/jackc/puddle"
+              desc: "use platform-pgcommon pools"
+            - pkg: "database/sql"
+              desc: "this service uses platform-pgcommon, not database/sql"
+            - pkg: "github.com/lib/pq"
+              desc: "this service uses platform-pgcommon"
+            - pkg: "github.com/golang-migrate"
+              desc: "migrations run through platform-pgcommon's migrate.Runner"
+            - pkg: "github.com/pressly/goose"
+              desc: "migrations run through platform-pgcommon's migrate.Runner"
+            - pkg: "gorm.io"
+              desc: "this service uses platform-pgcommon"
+            - pkg: "github.com/jmoiron/sqlx"
+              desc: "this service uses platform-pgcommon"
+        # BIL-OPS-11: platform-pgcommon itself stays behind the persistence
+        # boundary. Use cases, inbound adapters and other outbound adapters
+        # see repository ports and their errors (port.ErrAccountExists,
+        # domain codes), never pgcommon types or SQLSTATEs.
+        database-boundary:
+          files:
+            - "$all"
+            - "!$test"
+            - "!**/internal/adapters/postgres/**"
+            - "!**/internal/bootstrap/**"
+            - "!**/internal/certify/**"
+            - "!**/cmd/**"
+            - "!**/test/**" # test harness code (test/testkit) opens pools
+          deny:
+            - pkg: "github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon"
+              desc: "pgcommon is used only by adapters/postgres and the composition roots (bootstrap, cmd, certify)"
     # A default branch is an explicit choice for the rest of an enum (as with
     # provider enums Billing does not mirror).
     exhaustive:
@@ -37,6 +162,15 @@ linters:
           msg: "BIL-OPS-1: construct connections only via pgcommon.NewPool"
         - pattern: 'sql\.Open$'
           msg: "BIL-OPS-1: this service uses pgx/pgcommon, not database/sql"
+        # BIL-OPS-10: log lines only through gincommon's logger. fmt.Fprint*
+        # to stderr stays allowed for the pre-logger failure in cmd/* and
+        # the certify CLI's output.
+        - pattern: '^fmt\.Print(f|ln)?$'
+          msg: "BIL-OPS-10: log through gincommon's logger (port.Logger), not fmt.Print*"
+        - pattern: '^(builtin\.)?print(ln)?$'
+          msg: "BIL-OPS-10: log through gincommon's logger (port.Logger), not print/println"
+        - pattern: '^gin\.(Default|Logger|LoggerWithConfig|LoggerWithFormatter|LoggerWithWriter)$'
+          msg: "BIL-OPS-10: gincommon.ObservabilityMiddlewares owns request logging; use gin.New()"
   exclusions:
     rules:
       - path: '_test\.go'

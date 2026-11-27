@@ -7,18 +7,45 @@
 | Document type | Low-Level Design (LLD) |
 | Service | `commercial-billing` (Billing) |
 | Go module | `github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service` (the repository name, as in the IAM services). Service name, ServiceAccount, pod label, envelope `source` and metric prefix stay `commercial-billing` (CD-17, CD-19) |
-| Status | **Submitted for sign-off** (rev 0.34) — design stage; no code yet. **All nine partner-team design decisions approved (S-1 to S-9, 2026-11-23)**, and the Commercial Team's additions to S-2, S-3, S-5 and S-6 acknowledged by Finance, Product and Legal; awaiting final sign-off (HLD v0.65 merge; PCI re-confirmation of §4 and §5.4.4). Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
+| Status | **Submitted for sign-off** (rev 0.61) — design stage; implemented on the feat/billing-phase-* branches, not deployed. **All nine partner-team design decisions approved (S-1 to S-9, 2026-11-23)**, and the Commercial Team's additions to S-2, S-3, S-5 and S-6 acknowledged by Finance, Product and Legal; awaiting final sign-off (HLD v0.65 merge; PCI re-confirmation of §4 and §5.4.4). Approvers: Commercial Team (CD-4, whole document); PCI owner group (§4, §5.4.4, §10). Partner-team approvals needed for Proposed items are listed in §16.1; go-live gates do not block design sign-off |
 | Base HLD | Commercial Domain HLD **v0.65** (`hld-commercial-domain-v0.65.md`), the only HLD for the domain. Rebased from v0.51 in rev 0.14 (to v0.64) and to v0.65 in rev 0.23: v0.52 to v0.65 checked for Billing impact (§1.1, "HLD v0.52 to v0.65"); v0.64 (`platform-audit`) changes Billing, already applied in rev 0.5; v0.65 is text-only and adopts this LLD's D-1, D-5, D-8 and D-9. Parent: IAM HLD **v1.59** |
 | Supersedes | `hld-billing-service.md` v0.2 (draft Billing HLD, dropped in Commercial HLD v0.28). Its open items B-1 to B-13 are dispositioned in §16.3 and are never a source of requirements |
 | Sibling LLDs | Commercial: `commercial-lld-entitlements-service.md`, `commercial-lld-usage-metering-service.md` (to be written; until it exists the consumed `UsagePeriodClosed` contract is unverified, BL-OQ-24). IAM (contracts verified against these): Core `iam-lld-org-membership-service.md` rev 2.49 (I-11, I-18, `billing-orgm-q`, EVT-14/15/18, SEAT-2), Realm Provisioner `iam-lld-realm-provisioner-service.md` rev 1.46+ (RP-3, RP-4, RP-11, `billing-realm-q`, `iam.tenant.events` payloads), Audit Log `iam-lld-audit-log-service.md` rev 0.37 (AL-5, entry taxonomy, Billing admission since rev 0.34, `billing.token_addon.refunded` since rev 0.37), `platform-audit` `docs/lld/platform-lld-audit.md` rev 1.5 (§4, §11, §18.6, §19.2), AuthZ Enrichment `iam-lld-authz-enrichment.md` v1.50 (operator path, CD-52; §8.9.1 OP-G4 lists Billing B-O1 to B-O15). Edge: `signup-bff-lld.md` (Signup BFF, `BillingClient.AuthorizeAndCharge`) |
-| Repository | Interim home `BCBP-SOLUTIONS-FZC-LLC/commercial-hld-docs` (`commercial-lld-billing-service.md`); moves to `commercial-billing/docs/lld/` when the service repo exists (CD-3a) |
+| Repository | `BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service`, `docs/lld/commercial-lld-billing-service.md` (CD-3a), with the open-items detail in `docs/lld/billing-open-items.md` and invariant coverage in `docs/invariants-coverage.md`. The interim copy in `commercial-hld-docs` is no longer the source |
 | Owner | Commercial Team. Production changes to Billing need a second reviewer from the PCI owner group (HLD §15.4) |
-| Deployment stage | Not built; nothing deployed to any environment. Phase 1 (MVP) scope per HLD §16 |
+| Deployment stage | Phases 0 to 8 implemented on the stacked branches `feat/billing-phase-0-scaffolding` … `feat/billing-phase-5-api`, `feat/billing-phase-6-flows`; phases 6a–6h, 7a–7d, 8 and the post-phase work (platform-library routing, RFC 9457, observability standard, tests, CI/CD, the production-readiness reviews of rev 0.59 / 0.60) are on `feat/billing-phase-6-flows`. `main` holds only this LLD. Nothing is deployed to any environment. Helm chart 0.7.0; Stripe adapter 1.1.0, not yet certified (§3.5). Phase 1 (MVP) scope per HLD §16 |
 
 ### Revision history
 
 | Rev | Date | Change |
 |---|---|---|
+| 0.61 | 2026-11-27 | **Documentation alignment with the implementation.** Stale descriptions in the current sections corrected against the code, chart and pipeline; no design decision, route, event, schema or default changes. (1) **Header:** deployment stage (stacked phase branches, `main` holds only the LLD, chart 0.7.0, Stripe adapter 1.1.0 uncertified); repository row now this repo. (2) **§3:** package tree rewritten to the real layout (`cmd/{server,jobs,migrate,certify}`, `internal/{config,certify,bootstrap}`, `pkg/requestctx`, app files by area, `test/*` suites, `scripts/`, `.githooks`); four binaries, `certify` not in the image. (3) **§3.2:** `.go-arch-lint.yml` as checked in (`config`, `certify`, `requestctx` components, `depOnAnyVendor`); `BIL-PCI-1` is enforced by `check-stripe-imports.sh`; `make guards` / `make lint`. (4) **§3.3, §3.4:** repositories use pgcommon's classifiers, not `SQLState`; adapter errors list `ErrPriceMismatch`, `ProviderErrorToDomain`, `IgnoredEvent` / `ParkedEvent`; `CustomerInput.TenantID` is a string. (5) **§4, §4.4:** pgcommon `migrate.Runner` lock; `000000_outbox_schema` is the platform-events library schema (outbox and inbox), domain files `000001`–`000007` tracked in `billing_schema_migrations`; `MIGRATE_TIMEOUT` 10 m default, 7 m in the hook Job. (6) **§5:** 45 endpoint ids = 44 operations on 39 paths in `routes.go` / `openapi.json` plus B-W1. (7) **§7:** `usage-billing-q` consumer off by default (`USAGE_BILLING_CONSUMER_ENABLED`). (8) **§4.2.2, §7.4, §19.1:** `price-book-sync.sh` and `stripe-fixtures.sh` are not in the repository (manual setup, checked by `scripts/check-first-deploy.sh`); §19.1 names that script. (9) **§11:** platform-audit rule and dashboard paths under `deploy/monitoring/`; rule counts (20 alerts in 27 rules, 4 schema-registry, 13 platform-audit, 11 recording, 8 + 2 SLO); Prometheus Adapter rule; logs through gincommon, not `slog`. (10) **§12:** how keys are loaded (75 in `config.go`, `LoadFor` per binary, library keys); `DATABASE_URL` and `AWS_REGION` rows; ranges of `PROCESSED_EVENTS_TTL_DAYS`, `WEBHOOK_MAX_BODY_BYTES`, `LOG_LEVEL`; `MIN_CHARGE_MINOR` is one value for all currencies (decision pending). (11) **§13.1:** chart templates, `kubeVersion`, image contents, readiness as built (pools and draining; Glue checked at startup; SNS not probed), startup probe, HPA adapter rule, CronJob resources, gateway principal. (12) **§13.3:** the seven workflows and `.githooks`; HLD §15.4 deploy role and canary marked not built. (13) **§14:** suites as built (about 580 tests), coverage gate 96 % (98.4 % measured), Pact for B-I1 not built, `test/e2e` vs staging E2E. (14) **§20:** runbook index (27 files); §20.10 checks 8 to 13 (Loki rules, gateway namespace, platform versions, manual provider setup, release-pipeline gaps, cross-team gates). (15) `billing-open-items.md`: LLD rev and the status of W-8 to W-10 (built, not deployed). (16) **§3.2:** `.go-arch-lint.yml` restructured in the IAM services' layout: `workdir: .`, non-runtime directories excluded, and the `api` (embedded AsyncAPI) and `cmd` (composition roots) components added, so `cmd/*` imports are checked too; component rules unchanged. |
+| 0.60 | 2026-11-27 | **Production-readiness review, round 2: money, operations and deployment fixes.** (1) **New invariants (§7.4):** `BIL-PAY-6` one provider invoice settles at most one purchase or plan change (a looked-up invoice already recorded on another is never used, re-checked under the lock); `BIL-PAY-7` a purchase is granted only when the invoice's amount paid (or total) and currency equal the purchase's, otherwise SEV-2 `BillingPaymentParked` (callback: ledger `failed:invoice_amount_mismatch`, no retry). Known limit: the synchronous paid responses of `ChargeOneOff`, `ChangeQuantity` and `ChangePrice` are not amount-checked (the port results carry no amount). (2) **Closing a purchase's invoice (§8.5.1):** a draft invoice is deleted (new port method `DeleteDraftInvoice`, §3.4), not voided; proration lookups use `created` ≥ the purchase's own creation time (no backward slack; add-ons keep matching on the exact metadata `purchase_id`) and need a positive line for `seats_after` (seats) or the target price (upgrades); settling needs the amount and currency to match. (3) **Token add-on (§8.7 step 2):** the invoice is created with `auto_advance = false`; paying finalises it (B-P23 still works); a draft whose item fails is deleted at once, its id returned only if the delete fails. (4) **Webhooks (§8.15 step 4, §8.1.1):** parked outcome `failed:invoice_amount_mismatch`; an unlinked `invoice.paid` with no `billing_subscription_id` metadata → `ignored:unknown_subscription`; one whose Billing subscription is linked to a different provider subscription → `ignored:superseded_provider_subscription` (warning, nothing mirrored), except a `cancelled` subscription's `subscription_create` invoice, which retries while a B-P14 reactivation awaits its link. Replaces rev 0.59's "otherwise retryable, never ignored". (5) **§8.1.1:** confirming the payment from `invoice.paid` marks the conversion checkout session `completed`; a completion of an expired session is parked only when the Billing subscription is `ended` or linked to a different provider subscription (the linked one → `ignored:already_linked`). (6) **Checkout expiry (§8.1.3, §13.2):** `purchase-expiry` expires the session at the provider first, outside any transaction, with B-P2's keys; `ErrCheckoutCompleted` leaves it open for the callbacks; the outcome commits under the lock with a re-read. (7) **§9.2:** a resume compares every body field (adjustment: kind, amount, currency, description, reason; refund: invoice, amount, currency, category, reason) → mismatch `422 IDEMPOTENCY_KEY_REUSED`. (8) **Stripe adapter 1.1.0 (§3.1, §3.5, §14.6):** `adapterSemver` bumped; re-certification of 1.1.0 needed before new accounts (`BIL-PROV-4`), an open go-live item. (9) **Alerts (§11.5):** new `BillingCronJobNeverSucceeded` (kube-state-metrics `kube_cronjob_status_last_schedule_time` / `kube_cronjob_status_last_successful_time` plus the pushed success stamp; SEV-2 `saga-sweeper`, SEV-3 others, for 15 min; a fresh deploy does not page); `BillingBackgroundLoopStopped`: loops restart in-process with backoff 1 s → 5 min and liveness is not failed (only the platform-audit runner's `Alive` stays); `BillingOutboxLag`: the gauge keeps its last value on query failure, counted by `platform_outbox_errors_total{operation="oldest_pending"}`. (10) **Deployment (§13.1):** deterministic startup checks (configuration, Glue versions, `RedrivePolicy` of each enabled queue outside dev, transient lookup retried 3 times) before the listeners open; shutdown order readiness off → drain delay ≤ 5 s → API ∥ workers ≤ 25 s → pools closed once with `DrainAndClose` ≤ 11 s → metrics listener ≤ 2 s → tracer, logger last, worst case 48 s within 50 s; `metrics.scrapeMode` `plaintext` (default; metrics port `PERMISSIVE`, authorised by `metrics.monitoringCIDRs` or by NetworkPolicy alone) or `mesh` (`STRICT`, authorised by namespace); staging and prod refuse to render with PeerAuthentication, AuthorizationPolicy or NetworkPolicy off; migrate hook ServiceAccount and Secret deleted on success or failure (Helm ≥ 3.19; CI pins 3.21.4); `MIGRATE_TIMEOUT` 7m and `activeDeadlineSeconds` 480 under Helm's 10 min; Kubernetes ≥ 1.30 (the rev 0.59 "≥ 1.29" corrected). (11) **Network (§10.2, §10.3):** HTTPS egress to public addresses plus `networkPolicy.awsEndpointCIDRs` (server only) for VPC interface endpoints and optional `networkPolicy.egressGateway`; webhook rate limit one bucket per IPv4 and per IPv6 client (`0.0.0.0/0`, `::/0`), which depends on the gateway's `numTrustedHops`. (12) **New §20.10 go-live checks:** Pushgateway `honorLabels: true`; kube-state-metrics CronJob families for `billing`; AWS endpoint CIDRs; client IP trust; metrics scrape mode; Stripe adapter 1.1.0 certification; `production` environment deployment-branch rules (`v*` tags and `main` only). (13) **Stale labels:** RP-3 retry and failure labels in §8.1.2 and §9.3.1 now match §9.3.2 (any `5xx`, `409 optimistic_lock_conflict`; other `409` fails). (14) **BL-OQ-28 wording:** nothing is deployed, so F-5 "would" dead-letter Glue-framed events once Billing publishes them (staging, prod). Header Status corrected: implemented on the `feat/billing-phase-*` branches, not deployed. |
+| 0.59 | 2026-11-27 | **Production-readiness review: money, deployment and operations fixes.** (1) **Superseded checkouts (§5.4.1 B-P2, §8.1.1):** a replaced open session is expired at the provider before it is replaced (new port method `ExpireCheckout`, key `bsub:<old id>:expire`; already completed → `409 SUBSCRIPTION_ALREADY_EXISTS`); transaction 2 re-reads the session and a session a concurrent B-P2 replaced is expired at the provider, answering `409 CONCURRENT_UPDATE`. A completion of a session Billing expired is not linked (`failed:checkout_superseded`). (2) **Out-of-order conversion payment (§8.1.1):** `invoice.paid` for an unlinked provider subscription resolves the Billing subscription from `billing_subscription_id` in the provider subscription metadata, links and confirms; an `ended` one → `failed:paid_after_end`; otherwise retryable, never ignored. `checkout.session.completed` whose session invoice is already paid confirms the payment itself. (3) **Parked ledger outcomes (§8.15, `BIL-OPS-6`):** `failed:checkout_superseded` and `failed:paid_after_end`, no retry, SEV-2 log alert `BillingPaymentParked` (runbook `operator-review.md`). The claim still skips only tenants with a `processing` row. (4) **Purchase invoices (§3.4, §8.4.1, §8.5.1, §13.2):** new port method `FindInvoice`; `purchase-expiry` and declines void only `open` / `draft` invoices, settle a purchase whose invoice is paid (never expire or fail it), and look up an unrecorded invoice first; declines of add-on, seat and upgrade void outside the transaction (`…:void` keys); a provider error on `ChangePrice` leaves the upgrade `pending_payment`. (5) **Idempotent resume (§9.2):** a retry under the same key resumes the add-on, adjustment or refund row and its provider key; different body → `422 IDEMPOTENCY_KEY_REUSED`; concurrent insert → `409 REQUEST_IN_PROGRESS` (`port.ErrIdempotencyKeyTaken`); rows older than 23 h are not replayed. (6) **§8.9:** only the first invoice (`subscription_create`) reactivates a `cancelled` subscription; an old cycle invoice is mirrored only. (7) **RP-3 (§9.3.2):** `409 optimistic_lock_conflict` and every `5xx` retry; other `409`s (`realm_name_unavailable`, `credential_replay_expired`) fail. **I-18 `400 invalid_target_plan`** now maps to `500 INTERNAL` as §5.4.1 states (I-11's `400` stays `503`). (8) **§4.2.15:** the ledger metadata allow-list is enforced key by key. (9) **`saga-sweeper` (§9.7, §13.2):** alerts overdue sagas (under the tenant lock) before re-running due sagas; re-runs get at most 80 % of the remaining job time. (10) **Metrics (§11.2):** four Tier 3 gauges (`background_loop_running`, `cron_job_last_success_timestamp_seconds`, `metrics_snapshot_last_success_timestamp_seconds`, `seat_projection_last_run_mismatches`); snapshot gauges always expose known statuses; `cmd/server` now calls `events.InitMetrics` (platform-events metrics were never emitted, so `BillingDLQNotEmpty` and `BillingOutboxDeadLetter` could not fire). (11) **Alerts (§11.5):** new `BillingCronJobNotSucceeding`, `BillingQueueBacklog`, `BillingQueueStalled`, `BillingOutboxLag`, `BillingBackgroundLoopStopped`, `BillingMetricsSnapshotStale`, each with a runbook; `BillingDLQNotEmpty` reads source queue names; `BillingSeatProjectionDrift` is gauge-based; log-based SEV-2 `BillingPaymentParked` (Loki rule owed by the observability team); schema-registry alerts listed. (12) **Configuration (§12):** `USAGE_BILLING_CONSUMER_ENABLED` (`false`, BL-OQ-24), `SHUTDOWN_DRAIN_DELAY` (`2s`, 0–5 s); `APP_ENV` required inside Kubernetes; per-binary required secrets; `SQS_DRAIN_TIMEOUT` and `OUTBOX_DRAIN_TIMEOUT` capped at 15 s. `OUTBOX_MAX_ATTEMPTS` unchanged; recommendation recorded as BL-OQ-29 (needs HLD §9.3). (13) **Deployment (§13.1):** grace 60 s, native `preStop` sleep 10 s, 50 s shutdown budget (worst case 45 s), probe timeout 6 s, liveness covers supervised loops and the audit runner; component labels with server-only selectors; native Istio sidecars (none on migrate); migrate hook ServiceAccount and Secret; per-workload secrets; `automountServiceAccountToken: false`; small CronJob pools; render-time guards for staging and prod fed by `release.yml`. XFCC text corrected: the sidecar appends the client certificate (`APPEND_FORWARD`; `forwardClientCertDetails` applies to gateways only) and `PeerAuthentication STRICT` prevents plaintext spoofing. (14) **Network (§10.2, §10.3):** per-workload NetworkPolicies (CronJob, migrate), istiod `15012` egress; webhook rate limit 50 rps per client IP and optional source-CIDR allow-list. **Open inconsistency:** the chart's gateway namespace is `gateway`, §10.2 says `envoy-gateway-system`; not resolved here. (15) **§3.2:** `http` and `httpx` may import `pkg/requestctx` (`X-Request-ID` forwarding; the §10.2 build gap is closed). (16) **§4.3, §4.4:** migration `000007_rls_helper_grants` (`rls_check_tenant` for `billing_app`, `admin_readonly`, `billing_audit_drainer` only; `app_tenant_id`, `log_rls_violation` for no role). (17) **§16.1:** BL-OQ-28 (Entitlements: F-5 critical Glue decode, F-1 / F-2 still open, F-6 plan-change race; RP queue-name hygiene) and BL-OQ-29. |
+| 0.58 | 2026-11-27 | **Five bugs found by the coverage suites, fixed.** (1) **B-P2 / B-I1, concurrent first checkout or signup (§8.1, §8.3):** the account is re-read under the tenant lock before it is inserted. Before, a request that lost the race recovered from the insert's unique violation with a read on the transaction the violation had aborted, so it failed. Now a losing checkout continues as a second checkout would (§8.1.3: the earlier incomplete subscription is abandoned), and a losing B-I1 answers `409 SUBSCRIPTION_ALREADY_EXISTS` with the winner's id. A unique violation that can still happen (a writer outside the lock) is a retryable `409 CONCURRENT_UPDATE`, never a read on an aborted transaction. (2) **§18.8:** Stripe `409` and `idempotency_key_in_use` map to `ErrProviderUnavailable` (retry with the same key), not `ErrIdempotencyMismatch`. (3) **Disputes and early fraud warnings:** a failed invoice-payments lookup is returned, so the callback is retried; before, it was dropped and the CD-10 conversion-payment check silently missed. (4) **B-O11 / B-O12 `VerifyPrice`:** a recurring price must have `interval_count = 1`; a 3-monthly price was accepted as monthly. (5) **Certification suite `decline` case:** reports the signup error instead of panicking on a nil evidence map. No route, schema, event or configuration change. |
+| 0.57 | 2026-11-27 | **Enterprise Platform Observability Standard: audit and one alert fix (§11.2, §11.5).** Billing already met the standard (rev 0.43, 0.44). Tier 1 is registry names only, through gincommon's shared constructors. Tier 2 `commercial_*` is none, as nothing is ratified; candidates are in `docs/observability/registry-proposals.md`. Tier 3 is `commercial_billing_*` through gincommon's validated constructors. `domain`, `service` and `environment` are injected centrally, and the registry's forbidden high-cardinality labels are refused by the constructors and `metricslint`. CI already ran `metricslint` on the scrape and `metricslint refs` on alerts, rules, SLOs, dashboard, HPA values and runbooks, and checked the inventory. **Defect found:** `BillingOutboxDeadLetter`, its runbook, §11.5 and the proposals file read `platform_outbox_dead_letters`, which is in no registry and emitted by no library, so the alert could never fire. `metricslint refs` checks only names with a series suffix and leaves gauges to a scrape that holds only Billing's own collectors. The alert now reads `sum(increase(platform_dlq_messages_total{operation="outbox_publish"}[24h])) > 0`, platform-events' approved count of rows moved to `outbox_dead_letters`, and the runbook closes only on an empty table. New test `TestReferencedPlatformMetricsAreRegistered` checks every referenced `platform_*` name, gauges included, against the registry. New `make metrics-lint` runs the standard's compliance tests, which are also part of `make test`. |
+| 0.56 | 2026-11-27 | **`BIL-API-6`: RFC 9457 reading through platform-gincommon too (§5.1).** An audit against the platform RFC 9457 adoption brief confirmed Billing already produces every error through gincommon. The global `ObservabilityMiddlewares` boundary (recovery included), `NoRoute` / `NoMethod` problems, `AbortWithProblem` / `ClassifyError`, `BindingError` and `NewValidationError` are in place, with one `problem.Type` per §17 code and no service-owned problem model, DTO, recovery or validation mapper. Two service-owned problem **parsers** remained and now use gincommon's `problem.Decode`. (1) `httpx.Call` reads callees' `errorCode` from their problem body; this covers Core, Realm Provisioner and Entitlements, still tolerating a legacy `application/json` body, and `Accept` now names `application/problem+json`. (2) The idempotency middleware detects `REQUEST_IN_PROGRESS` in its captured response. `check-problem-details.sh` now also fails on service-owned error DTOs or parsers and on `recover()` in the HTTP adapters. Codes, statuses and the wire contract are unchanged. Test: `TestCallReadsProblemErrorCode`. |
+| 0.55 | 2026-11-27 | **`BIL-OPS-2` tightened: events, outbox and processed-message dedup through platform-events only, behind the messaging boundary (§3.2).** An audit found every path already on platform-events: envelopes, ordered outbox, runner and prune, SNS publisher, SQS consumers, DLQ forwarding, inbox `Process` / `Prune`, schemas and Glue decoding. No code change was needed. Enforcement now matches the rule. (1) depguard `events` denies the SNS and SQS SDKs everywhere, `adapters/eventbus` included, and AWS SDK v1. (2) New rule `events-glue` limits the Glue and AWS config SDKs to `adapters/eventbus`. (3) New rule `events-boundary` limits `platform-events` to `adapters/eventbus`, `adapters/postgres`, `adapters/consumer`, `bootstrap`, `certify` and `cmd/*`. (4) `check-outbox-access.sh` now catches every statement form on the outbox and inbox tables (TRUNCATE, COPY, ALTER, LOCK, MERGE, REFERENCES, schema-qualified and quoted names). **Remaining exception:** the Glue encode codec (`adapters/eventbus/glue_codec.go`, the Glue wire header and schema-version lookup), until platform-events ships an encoder; the IAM producers carry the same hand-written codec. |
+| 0.54 | 2026-11-27 | **`BIL-OPS-11` tightened: database access through platform-pgcommon only, with no leak past the persistence boundary (§3.2).** (1) Repositories classify database errors only with pgcommon's helpers (`IsUniqueViolation`, `IsCheckViolation`; the price-book exclusion constraint by `pgcommon.ConstraintName`), replacing hand-coded SQLSTATE literals. (2) **New port error `port.ErrAccountExists`:** `AccountRepo.Create` returns it for a tenant that already has an account, and the conversion (B-P2) and direct-signup (B-I1) use cases test for it with `errors.Is` instead of inspecting a SQLSTATE in the app layer. Behaviour is unchanged. (3) Enforcement: depguard rule `database-boundary` limits `platform-pgcommon` to `adapters/postgres`, `bootstrap`, `certify` and `cmd/*`; rule `database` also denies `golang-migrate`, `goose`, `gorm` and `sqlx`; new guard `check-pgcommon.sh` in `make guards` fails on SQLSTATE literals, hand-rolled `SQLState()` interfaces and hand-written session settings. Test: `TestBIL_OPS_11_AccountExistsIsAPortError`. |
+| 0.53 | 2026-11-27 | **`BIL-OPS-10` tightened: metrics through platform-gincommon only, no exception (§3.2).** `adapters/metrics` uses gincommon's metric types and constructors and no longer names Prometheus types. The shared `platform_dependency_request_seconds` is registered before the event bus is built, and platform-events reuses it. The CronJob Pushgateway push sends the text exposition `gincommon.MetricsHandler` renders, filtered to the job's `commercial_billing_*` series, as a plain HTTP `PUT`. Lint: depguard rule `metrics` denies `github.com/prometheus` in all production code; `logrus` and `zerolog` are added to the denied loggers; `forbidigo` denies `fmt.Print*`, `print` / `println` and `gin.Default` / `gin.Logger*`. The one remaining exception is `adapters/observability` (OpenTelemetry types for span attributes, links and the log span id), until gincommon provides helpers for them. No behaviour change. |
+| 0.52 | 2026-11-27 | **BL-OQ-8: Signup BFF reply.** §5.4.2 B-I1 response table now lists every code the route returns: `409 REQUEST_IN_PROGRESS`, `409 PROVIDER_OPERATION_UNSUPPORTED`, `422 CURRENCY_MISMATCH` and `403 INSUFFICIENT_ROLE` added. `409 SUBSCRIPTION_ALREADY_EXISTS`: the BFF never provisions with the returned id (§5.4.2, §8.3 failure table). New note on the BFF's retry behaviour. §16.1 BL-OQ-8 status (BFF PR #6 merged, `c2e9a1d`). No Billing code change. |
+| 0.51 | 2026-11-26 | **Entitlements contract test (approved 2026-11-26).** §14.3 and §7.6: the contract suite now covers Entitlements' consumption of `TenantQuotaAddOnChanged`. It checks schema compatibility both ways, decodes into Entitlements' inbound structs, and runs daily against Entitlements' `main`. The refund event's domain validation (`BIL-ADD-4`) is tightened to match the consumer: a refund's `purchase_ref` must be a canonical UUID (Entitlements declares `format: uuid` and decodes `uuid.UUID`; Billing always sets the `purchase_id`, a UUID). The canonical schema is unchanged. This closes the last untested cross-service contract of the add-on purchase and refund flow. |
+| 0.50 | 2026-11-26 | **Billing → Entitlements identity and header contract (F-2, approved 2026-11-26), proposed text.** §10.2 now states the contract for `GET /api/v1/internal/tenants/:id/entitlements`. Identity is the Istio XFCC principal `cluster.local/ns/billing/sa/commercial-billing`, never a caller-written header (no `x-service-token` / `x-service-name`). Headers: `x-tenant-id` (= `:id`), `x-user-id` and `x-tenant-roles` `commercial-system` (actor only), `traceparent`, optional `X-Request-ID`. Fail-closed rules and the per-environment verification are included. To be agreed with Entitlements and copied identically into the Entitlements LLD. Build gap: the client does not yet forward `X-Request-ID`. W-8, W-9, W-10 approved (2026-11-26). |
+| 0.49 | 2026-11-26 | **Open-item documents consolidated.** The ten working documents in `docs/lld/` (sign-off blockers, register extract, by-team list, hand-off, Entitlements items and decided-items build, TL corrections, IAM actions and reply, OP-G2 request) are replaced by one file, `billing-open-items.md`, holding only items not closed, with the Entitlements re-check of 2026-11-26 (W-1, W-3 to W-7 pass on `dc9b654`; W-2 fails, F-1 and F-2; F-3 minor; F-4 with the TL). Closed items stay in §16.1 and git history. No design change. |
+| 0.48 | 2026-11-25 | **BL-OQ-27 (a) merged.** Org & Membership PRs #69, #70 and #71 are merged to `main` (#71 `8150ea1`), not deployed. The rev 0.47 direct-signup request is withdrawn: Billing read the merged code, and every tenant is created as `trial` with its signup plan (I-1), so `DirectPaidSignup` records `trial_plan` = the signup plan and a reversed direct signup becomes a trial of that plan. No Billing change. |
+| 0.47 | 2026-11-25 | **BL-OQ-27 status.** (a) Org & Membership accepted Billing's answer unchanged: PR #71 (O&M LLD rev 2.65, open, after #69 and #70) restores `plan` from a new `tenants.trial_plan`, sets `licensed_seats` to 10 and raises both the seat and plan watermarks to the revert time on `TrialReactivated{reason: conversion_revert}`; Billing needs no change. Raised with them: a direct paid signup has no trial plan, so Billing asked that `trial_plan` be the signup plan (a trial runs on its plan's own tier, §8.4.3). (b) Raised with Entitlements (`billing-note-to-entitlements-revert-plan.md`): consume `TrialReactivated` on `tenant-entitlements-q` (not in its filter today), recompute a trial snapshot from I-17, handle reading I-17 before Org & Membership has applied the event, and decide whether a trial applies add-on balance not refunded. No Billing change. |
+| 0.46 | 2026-11-25 | **A reverted tenant can convert again (found from Org & Membership's revised note).** RP-4 gives the tenant a real trial (14 days from the reversal, RP's `new_trial_ends_at`), but Billing does not consume `TrialReactivated`, so `billing_accounts.iam_lifecycle` stayed `active` from `TenantConverted` and B-P2 / B-O1 refused reconversion (`409 SUBSCRIPTION_ALREADY_EXISTS`); B-P1 also showed the tenant as not on trial. Fix: B-O8's final commit sets `iam_lifecycle = 'trial'`, clears `iam_suspension_source` and advances `iam_last_event_at` to the commit time, so IAM lifecycle events stamped before the reversal are skipped (`BIL-EVT-3`); an offboarded account is left unchanged (§8.2 step 3, B-O8). Reconversion goes through B-P2 as for any trial (new payment, confirmation). No new event, queue, schema or config. |
+| 0.45 | 2026-11-25 | **Plan and seats after a conversion reversal (Org & Membership note, Billing reply `billing-reply-to-org-membership-revert-plan.md`).** A reverted tenant kept the paid `plan` and `licensed_seats` for its new trial, because Billing sends no events after a reversal. Decided: (1) **§8.2 step 3:** Org & Membership resets both when it applies RP's `TrialReactivated{reason: conversion_revert}`: the pre-conversion trial plan (which Org & Membership records) and the trial seat allowance (T-8), with members kept. Billing still sends no `billing.events` after a reversal: it never knew the trial plan, `TenantPlanChanged` can't express it, and the trial allowance is IAM's rule, not a paid count. Resetting inside RP's event's projection also avoids Core's shared plan/status recency watermark. RP-4 carries no plan or seats. (2) **Guarantee recorded:** no Billing seat event follows a reversal (the `BIL-EVT-6` delayed event is cancelled for an `ended` subscription; `seat-projection-check` scans `active`/`past_due` only). (3) **Add-ons:** a reversal does not undo them (Finance approved the conversion payment only, BL-OQ-7). The operator refunds add-on invoices since conversion through B-O3 (category `fraud`), which emits `TenantQuotaAddOnChanged{reason: refund}` (`BIL-ADD-4`); runbook `reversal-decision.md` updated. (4) **New BL-OQ-27** for Org & Membership and Entitlements. No code, route, schema, event or config change. |
+| 0.44 | 2026-11-24 | **No compatibility period for metric renames (Commercial Team).** No environment is deployed, so nothing consumes the former `commercial_*` names. They are removed instead of emitted in parallel: `OBSERVABILITY_LEGACY_METRICS` and the legacy series are gone (§11.2, §12). CI still rejects any reference to an unratified `commercial_*` name (it fails as Tier 2). The standard's migration process (parallel emission, migrate consumers, deprecate, remove) applies to renames after the first deployment. |
+| 0.43 | 2026-11-24 | **Metrics on the Enterprise Platform Observability Standard (Commercial Team).** (1) **§11.2 tiers:** Tier 1 `platform_*` only from the Platform Observability Registry. **No Tier 2:** the four `commercial_*` names of earlier revisions were never ratified (standard rule 11), and Billing is their only emitter, so they become Tier 3 `commercial_billing_purchase_confirmation_to_event_seconds{kind}`, `commercial_billing_events_emitted_total{event_type}`, `commercial_billing_operator_actions_total{action, outcome}` and `commercial_billing_cross_tenant_job_runs_total{job_name, result}`. `result` (`success`, `partial`, `failure`) replaces `outcome`, whose platform vocabulary has no `partial`; `job_name` replaces `job`, which the Pushgateway reserves. Everything Billing owns is Tier 3, built with gincommon's validated constructors. (2) **Compatibility period:** the four old names are emitted in parallel while the new `OBSERVABILITY_LEGACY_METRICS` key is `true` (default, §12). No alert, recording rule, SLO, dashboard, HPA or runbook reads them; at the approved sunset the key is set `false` and the legacy code removed. (3) **Ratification:** `docs/observability/registry-proposals.md` submits `commercial_events_emitted_total`, `commercial_operator_actions_total` and `commercial_cross_tenant_job_runs_total` as Commercial domain metrics (semantics, labels, values, aggregation; new labels `action`, `job_name`, `result`). It also lists the "proposed" platform entries Billing relies on. Billing adopts a shared name only after approval, using the standard's migration steps. (4) **§11.1, §11.5:** new `deploy/monitoring/recording-rules.yml` (SLIs) and `slo-rules.yml`. The SLO rules hold availability 99.9 % / 30 d with multi-window burn-rate alerts `BillingAvailabilityBudgetBurnFast` (SEV-2) and `…Slow` (SEV-3, runbook `slo-burn.md`), plus good-event ratios for webhook acknowledgement, webhook processing, purchase → event and tenant reads. B-I1's 6 s / 12 s targets are watched as quantiles because the platform buckets have no such boundary. All rule files are rendered by the chart. The "Commercial / Billing" Grafana dashboard is `deploy/monitoring/dashboards/commercial-billing.json`, deployed as a ConfigMap for the Grafana sidecar. The inventory `docs/observability/metric-registry.md` is generated from the code (`make metrics-inventory`). (5) **§13.3 CI:** metricslint on the live scrape must be clean except the platform's own "proposed" warnings; the legacy names are the only compatibility findings; every `commercial_*` name referenced in alerts, rules, SLOs, the dashboard, the HPA or runbooks must be exposed and not deprecated; `metricslint refs -deny-deprecated` on those files; inventory drift; promtool and chart copies of every rule file. |
+| 0.42 | 2026-11-24 | **RFC 9457 problem details through platform-gincommon only (Commercial Team).** (1) **New `BIL-API-6` (§5.1):** every error response is produced by `platform-gincommon` (`gincommon.AbortWithProblem`), which owns the problem model, `application/problem+json`, `traceId` / `instance` / `tenantId` enrichment, validation formatting, panic recovery and error logging. Billing defines no problem model, error DTO, recovery middleware or validation mapper. (2) **§17 types:** each catalogue code is one `problem.Type` (`problem.MustType`, type URI `https://errors.bcbpsolutions.com/commercial/<code-in-kebab-case>`, title from the code). `domain.DomainError` and the build-phase `NotImplementedError` convert themselves to gincommon's `*problem.Error` through `errors.As`, so handlers pass them unchanged. Codes, messages, extension members and statuses are unchanged. `INTERNAL` and unknown codes are gincommon's 500 with no detail. **§3.2:** the domain package may import `platform-gincommon/v2/pkg/problem` (net/http only, no gin) for this; it already carried each code's HTTP status. (3) **Three deliberate exceptions:** (a) the §5.1 `Retry-After` header on `409 REQUEST_IN_PROGRESS` and `503` is set before handing off, because gincommon has no header hook; (b) the JSON body decode stays local because §10.4's per-route unknown-field rule (rejected on tenant and operator routes, tolerated on B-I1) cannot vary in gincommon's binding, and every error it produces is formatted by `gincommon.BindingError` with code `VALIDATION_ERROR` (an unknown field is now reported with gincommon's generic invalid-body detail, not by name); (c) the idempotency replay re-sends a stored gincommon response byte for byte. (4) **Behaviour:** B-W1 errors are gincommon problems (`400 INVALID_SIGNATURE`, `413 PAYLOAD_TOO_LARGE`, `503 DB_UNAVAILABLE`, `404` for an unknown provider). Unmatched routes and methods answer gincommon `404` / `405` problems. Failed `/healthz` and `/readyz` answer `503` problems (`failed_check` and `checks` extensions). gincommon's middleware is always the error boundary (no gin recovery fallback). (5) **Enforcement:** `.github/scripts/check-problem-details.sh` (`make guards`) fails on hand-written problem bodies, the problem media type, `gin.Recovery`, `AbortWithStatus*` and `c.JSON` / `c.String` / `c.Status` with an error status. Contract tests assert the media type and members on every error path. |
+| 0.41 | 2026-11-24 | **Events through platform-events only (Commercial Team).** (1) **`BIL-OPS-2` extended (§3.2):** events, the outbox and processed-message dedup go through `platform-events` only. Enqueue uses `outbox.EnqueueOrdered`, publishing uses `outbox.Runner` with `events.NewSNSPublisher`, consumption uses `events.NewSQSConsumer` with `NewSQSDLQPublisher`, dedup uses `inbox.Store.Process`, and pruning uses `PrunePublished` and `inbox.Store.Prune`. SNS, SQS and outbox settings are loaded by its `config` package (`LoadSNS`, `LoadSQS`, `LoadOutbox`, `SNSConfigFromEnv`, `SQSConfigFromEnv`, `SQSConsumerOptions`, `RunnerConfigFromEnv`), and Billing applies its validated §12 values on top. The server builds no SQS or Glue client. Enforcement: `check-outbox-access.sh` covers reads and writes of `outbox_events`, `outbox_dead_letters` and `processed_events`, and depguard denies the AWS SNS, SQS, Glue and config SDKs outside `adapters/eventbus`. (2) **Glue encoding:** `platform-events` ships only `GlueDecodeCodec`, so Billing's Glue encode codec stays in `adapters/eventbus`. It is built from the region and endpoint platform-events resolved, and plugged into its publisher with `events.WithCodec`; `events.NoopCodec` replaces Billing's copy. (3) **§11.5 fix:** the consumers now enable the queue-depth sampler (`SQS_QUEUE_DEPTH_INTERVAL`, default 60 s), without which `platform_dlq_depth` — the source of `BillingDLQNotEmpty` — was never emitted. (4) **§12:** new keys read by platform-events: `SQS_CONCURRENCY`, `SQS_HANDLER_TIMEOUT` (20 s), `SQS_DRAIN_TIMEOUT` (15 s), `SQS_QUEUE_DEPTH_INTERVAL` (60 s), `OUTBOX_PUBLISH_TIMEOUT` (10 s); `AWS_REGION` / `AWS_ENDPOINT_URL` are resolved by platform-events. |
+| 0.40 | 2026-11-24 | **Shared-library-only rules (Commercial Team).** (1) **New `BIL-OPS-10` (§3.2): logs, metrics and traces go through `platform-gincommon` only.** The app layer uses `port.Tracer`, implemented by `adapters/observability` on `gincommon.NewTracer`, `RecordSpanError` and `SpanTraceID`. Every metric is registered on `gincommon.MetricsRegisterer`, and every scrape and CronJob push reads `gincommon.MetricsGatherer`, so Billing keeps no registry of its own. Outbound HTTP (`adapters/httpx`) creates client spans with `gincommon.NewSpanTracer`, propagates context with `gincommon.InjectTraceContext`, and no longer uses `otelhttp`; call timings go to the shared `platform_dependency_request_seconds`. Logs use gincommon's logger, with `trace_id` and `span_id` from the tracer. Only `adapters/observability` and `adapters/metrics` may name OpenTelemetry or Prometheus types, for what gincommon has no helper for yet: span attributes and links, the span id, an already-registered collector, the Pushgateway, and Tier 2 metrics awaiting ratification. CI enforces this with depguard. (2) **New `BIL-OPS-11` (§3.2): every database connection, setting and statement goes through `platform-pgcommon`.** Pools come only from `pgcommon.NewPool`, in one place (`pgadapter.OpenPools`). Every pool starts from `pgcommon.ConfigFromEnv` (DSN, TLS, sizing, PgBouncer mode, `PG_STATEMENT_TIMEOUT`, `PG_LOCK_TIMEOUT`). The system and audit-drainer pools are that configuration with their own role (`PG_SYSTEM_*`, `PG_AUDIT_DRAINER_*`); there is no separate system DSN. Statements run in pgcommon transactions on pgcommon's types (`Tx`, `Row`, `Rows`, `TxOptions`, `ErrNoRows`), with its SQLSTATE helpers. CI denies `pgx`, `pgconn`, `puddle`, `database/sql` and `lib/pq` imports everywhere, tests included (depguard). `BIL-OPS-1` is kept and now enforced by the same rule. (3) **§12:** outside developer environments, `PG_SYSTEM_PASSWORD` and `PG_AUDIT_DRAINER_PASSWORD` are required. Startup refuses rather than running the system pool as `billing_app`. (4) **§12 correction:** `PG_STATEMENT_TIMEOUT` and `PG_LOCK_TIMEOUT` are read by `pgcommon.ConfigFromEnv`. The rev 0.38 "not yet wired" note was wrong and is removed; the chart sets 5 s and 2 s. (5) **§2, §3.2:** new package `adapters/observability`; `httpx` described accordingly; arch rules updated. |
+| 0.39 | 2026-11-24 | **Phase 8 decisions (Commercial Team): how the certification suite runs.** (1) **§14.7 method:** `cmd/certify` runs the adapter through Billing's real app layer (use cases, B-W1, the processor and the CronJob use cases). IAM (Core, Realm Provisioner) and Entitlements are stubbed: the suite certifies the provider and Billing's mapping of it. The throwaway database is `certify_<run>`, created on a scratch Postgres server (`CERTIFY_SERVER_DSN`), migrated, used through the service's roles, and dropped at the end. In test mode, every customer is created on a Stripe Test Clock. Events are read raw from the account's event list, signed with the run's own webhook secret, and posted to B-W1 in process, so no public endpoint is needed. The `webhook_delivery` cases therefore prove Billing's side; that the provider retries after a `503` is its documented behaviour. (2) **stripe-mock rehearsal:** `make certify-rehearsal` runs the suite against stripe-mock. Requests go through the real adapter. Where Billing needs provider state, the suite substitutes it and lists each substitution in the case's evidence (`mock_substitutions`). The record carries `provider_account_ref: "stripe-mock"`, and `certify submit` refuses it. (3) **§3.4 / §12:** the Stripe adapter's config gains `TestClock`, which attaches new customers to a Test Clock. It is used for certification only; the adapter refuses it with livemode and the server never sets it. (4) **§14.7 counts:** 30 required cases (the 29 `cert-1.0` cases and the proration case of the declared mode). The recorded optional case is `collection_pause/pause_and_resume`; the optional disputes group has no case in `cert-1.0`. (5) **§19.6:** the example record's case ids are corrected to `cert-1.0` (`increase_quantity`, `redelivered`, `exhausted_past_due_cancelled`). (6) **Process (§14.6, §19.6):** `certify run` writes evidence to a local directory, which is uploaded with `aws s3 sync` before `certify submit` (B-O14); `certify review` is B-O17. The release gate is `certify check <provider> <adapter_version>` on a read-only DSN (`CERTIFY_CHECK_DSN`); `certify adapter-version` prints the build's version. (7) **§19.1 step 2:** five roles and migrations `000001`–`000006`, not four roles and `000000`–`000003`; `scripts/check-first-deploy.sh` checks the §19.1 order, read-only, and stops at the first incomplete step. |
+| 0.38 | 2026-11-24 | **Phase 7b–7d decisions (Commercial Team).** (1) **§11.2 label vocabulary:** the platform fixes `outcome` to `success`, `failure` and `error`, and reserves `state` for connection pools, so `metricslint` refused five labels. They are renamed, with the values unchanged: `result` on `commercial_billing_webhooks_total`, `_rp_convert_attempts_total`, `_seat_changes_total` and `_addon_purchases_total`, and `saga_state` on `commercial_billing_sagas_in_flight`. (2) **§11.5 approximations:** the metrics carry no tenant or age labels (§11.2). `BillingWebhookBacklog` (received branch) fires when received rows stay non-zero for 5 min. `BillingSeatProjectionDrift` fires on two mismatches in 24 h, and the SEV-3 log line names the tenant. `BillingSuspensionDraftsAwaitingDecision` fires when held drafts remain for 24 h with no subscription still paused. `BillingReviewTrigger` and `BillingReversalDecisionNeeded` come from log lines, as Loki rules. (3) **§11.3 trace links:** the envelope carries `trace_id` only, so a consumer span links to the producer's trace, not its span. The ledger stores no trace context, so a webhook's receive and processing spans are tied only by `billing.provider_event_id`. (4) **§11.2, §13.2:** CronJobs push with grouping key `job=<cronjob name>` (the Pushgateway reserves `job`). Scraped with `honor_labels`, the series keep `{job, outcome}`. Dependency names on `platform_dependency_request_seconds` are `stripe`, `core`, `realm_provisioner` and `entitlements`; operation names are bounded (method and path without ids). `commercial_events_emitted_total` counts at enqueue. The `conversion_seats` timing includes `SEATS_AFTER_CONVERSION_DELAY`. (5) **§14.4:** the Test Clock rehearsal (`scripts/testclock`) links a stub tenant to a clock-bound Stripe customer through the §19.3 stub → Stripe switch, with `trial_end` = the stub's period end; its evidence file is the go-live record. (6) **§13.3:** `helm-check` runs as its own CI job (chart lint and kubeconform on four value sets, promtool, chart contract tests). (7) **§12:** `PG_STATEMENT_TIMEOUT` and `PG_LOCK_TIMEOUT` are not read by the service or by `platform-pgcommon`. They are marked "not yet wired"; the chart does not set them. Still open: ratification of the four Tier 2 `commercial_*` metrics in the platform registry, and the `partial` value of `commercial_cross_tenant_job_runs_total{outcome}` (rev 0.37), which is outside the platform vocabulary and goes with that ratification. |
+| 0.37 | 2026-11-24 | **Phase 7a decisions (Commercial Team).** (1) **§12, §13.2:** new key `PUSHGATEWAY_URL`. Each CronJob pushes `commercial_cross_tenant_job_runs_total{job, outcome}` there; when the key is empty the job logs the outcome instead. (2) **§8.16 step 3:** the renewal price notice waits for BL-OQ-12 (NTF-3). No event is defined, so none is emitted; B-P1's `scheduled_unit_price` is the notice until then. (3) **§8.13:** auto-repair applies from Phase 7 and replaces the rev 0.36 report-only note. A `status_mismatch` where the provider has ended the subscription is repaired by a ledger row `recon:<run_id>:<provider_object_id>` (`event_type = reconciliation.reread`); the normal processor re-reads that object (`BIL-PAY-4`). Other status mismatches stay reported. A missing event is ledgered from the provider's event listing, normalised as a delivery would be. (4) **§3.4:** `QuantityChange.KeepIfUnpaid` applies the quantity even when the invoice is unpaid (Stripe `payment_behavior = allow_incomplete`); it is used only for the renewal top-up (§8.6.3, BL-OQ-6). **§2:** new package `internal/bootstrap` holds the composition shared by `cmd/server` and `cmd/jobs`. **§13.2:** `idempotency-prune` also removes stored previews (scope `preview`), and the CronJobs select across tenants as `billing_system` (read-only) and write in tenant transactions on the app pool. |
+| 0.36 | 2026-11-24 | **Commercial Team decisions on eight items raised at the end of Phase 6.** (1) **§8.13:** reconciliation is report-only (non-mutating) until Phase 7. `auto_repair` is accepted and recorded, but no repair runs before then. (2) **§8.16:** until `renewal-repricing` ships in Phase 7, a renewal uses the committed (current) price. (3) **§14.7:** the `cert-1.0` case ids are now listed. (4) **New invariant `BIL-AUD-1`:** a global change (price book, token packs, provider certification, reconciliation run) and its AL-5 entry under `platform_tenant` commit in one `billing_system` transaction. Migration `000006` grants `billing_system` `SELECT, INSERT` on `pending_audit_entries` (§4.2, §4.4). (5) **B-P16:** the `checkout.session.completed` (setup) handler only completes the session. The lifecycle follow-up worker then reads the new payment method from the provider, makes it the default (key `pmdefault:<session_id>`, outside any transaction, `BIL-CONC-2`), sets `default_pm_set` and stamps the new column `checkout_sessions.default_applied_at` (§4.2.7). (6) **B-O11/B-O12:** new port method `VerifyPrice` (§3.4). The provider price must exist, be active, and match amount, currency and interval, else `422 PROVIDER_PRICE_MISMATCH`; `manual` is exempt. (7) **B-P24:** offset paging is accepted; keyset paging is planned if history volume grows. (8) **§14.4:** Stripe Test Clock scenarios run in test mode in Phase 7 and are go-live evidence. |
+| 0.35 | 2026-11-24 | **Three ordering corrections found during implementation (Phase 6); no design change.** (1) B-P2 and B-I1: `chk_ba_customer` requires the provider customer id when a Stripe account row is inserted, so on a tenant's first checkout or signup `EnsureCustomer` (`bsub:<id>:customer`) runs **before** transaction 1, still outside any transaction (`BIL-CONC-2`); a later request reuses the account's customer. (2) B-P2 and B-P14: `checkout_sessions.provider_session_id` is `NOT NULL` and unique, so transaction 1 stores the placeholder `pending:<session_id>`, which transaction 2 replaces with the provider's session id (§4.2.7 note). (3) §8.6.3: the renewal's fresh I-11 read and any top-up are HTTP calls and cannot run inside the cycle `invoice.paid` handler's transaction (`BIL-CONC-2`); the handler rolls the period and leaves the schedule `applying`, and the next `seat-renewal` run (≤ 15 min) reads I-11, charges any top-up and commits the result. |
 | 0.34 | 2026-11-24 | **Three implementation clarifications approved (Phase 5); no design change.** (1) §12: new setting `OPERATOR_PATH_LIVE` (default `false`), the explicit rollout control for `BIL-AUTH-6`: it models whether IAM's operator path (CD-52, OP-G1 to OP-G4) is available; until it is `true`, every operator route answers `403 INSUFFICIENT_ROLE` outside dev and test. (2) §5.1: `validationErrors[]` entries are the platform-standard `gincommon/v2` shape `{field, message}`; the `code` member previously documented is removed (neither emitted nor supported by gincommon; the platform standard is the source of truth). (3) §5.4.2, §13.1, §5.2 `BIL-AUTH-3`: the B-I1 caller principal is read from the Istio-generated `X-Forwarded-Client-Cert` header (SPIFFE URI of the nearest hop); the deployment must keep the sidecar's client-certificate forwarding enabled (`forwardClientCertDetails: SANITIZE_SET`), stated as a Helm/deployment requirement. |
 | 0.33 | 2026-11-23 | **§3.1: stripe-go pinned at v87.2.0** (the latest stable at first build), which pins Stripe API version `2026-11-18.endive`; the Stripe adapter version is therefore `1.0.0+stripeapi.2026-11-18.endive`. The `2026-10-28.acacia` values in §5.4.4 and §19.6 are format examples. No design change. |
 | 0.32 | 2026-11-23 | **§14.2: integration tests run on Postgres 17**, matching the IAM services (`postgres:17-alpine`), instead of 16. No design change. |
@@ -185,7 +212,7 @@ Refined into an implementable spec, this document gives the database schema, the
 | Realm Provisioner LLD rev 1.46 and `iam-realm-provisioner/api/asyncapi.yaml` | RP-3 / RP-4 / RP-11 routes, bodies, responses and error codes; detached conversion and `CONVERT_TIMEOUT`; published payloads of `TenantConverted`, `TenantSuspended`, `TenantReactivated`, `TenantOffboarded`; the `billing-realm-q` consumed schema (`tenant_id` required in `data`) |
 | Audit Log LLD rev 0.33, updated to rev 0.37 (Billing admission rev 0.34; `billing.token_addon.refunded` rev 0.37) | AL-5 request contract and responses; `billing-audit-q` mapping; entry types `tenant.plan_changed`, `tenant.payment_past_due`, `tenant.subscription_cancelled`, `tenant.reactivated`, `tenant.seats_changed`, `billing.token_addon.*`, `billing.adjustment.issued`, `billing.refund.issued`, `commercial.cross_tenant_job.ran` |
 | Commercial sibling-team change list (13 Nov 2026) and replies | SGN-1 / SGN-2, IAM-1 to IAM-11, SRE-3, SRE-6 to SRE-8, NTF-3, FE-1, FE-4, FE-10, BIZ-1 / BIZ-5 to BIZ-7 |
-| `billing-iam-actions.md`, `billing-iam-actions-reply.md`, `billing-open-items-corrections.md`, `op-g2-platform-edge-request.md` (this folder, 19 Nov 2026) | IAM actions A-1 to A-8 and IAM's reply; TL corrections to the Entitlements and Audit Log responses; OP-G2 request to platform edge |
+| `billing-open-items.md` (this folder; replaces the 19–26 Nov action, reply, correction, OP-G2 request and hand-off documents, which remain in git history) | IAM actions A-1 to A-8 and IAM's reply; TL corrections to the Entitlements and Audit Log responses; OP-G2 request to platform edge |
 | AuthZ Enrichment LLD v1.50 | Operator path (CD-52), OP-G1 to OP-G5 numbering (§8.9.1), operator header contract, OP-G4 coverage of B-O1 to B-O15 |
 | Team responses of 19 Nov 2026 (`billing-open-items-team-response.md`) and AI team reply (`billing-reply-ai-team.md`, draft, not signed off) | Entitlements and IAM Core answers (rev 0.7); BL-OQ-19 and PD-LLM-1 R-1, R-2, R-4 status (rev 0.9). **Not in this repository**; to be added to `docs/lld/` so the citations resolve |
 | Signup BFF LLD and `internal/core/port/billing.go` | `ChargeRequest {TenantID, PaymentToken, Plan, Seats, IdempotencyKey}` and `ChargeResponse {BillingSubscriptionID}` |
@@ -264,90 +291,86 @@ Billing **never writes another service's database**, never calls Keycloak, and m
 ---
 ## 3. Architecture and Package Layout
 
-The service follows the platform hexagonal (ports-and-adapters) layout. Dependencies point inward: `internal/domain` imports nothing outside the standard library; `internal/app` (use cases and ports) imports `domain`; adapters implement the ports. The binaries under `cmd/` are the only composition roots.
+The service follows the platform hexagonal (ports-and-adapters) layout. Dependencies point inward: `internal/domain` imports nothing outside the standard library (except `platform-gincommon/v2/pkg/problem` for its error types, §3.2); `internal/app` (use cases and ports) imports `domain`; adapters implement the ports. The four binaries under `cmd/` (`commercial-billing` from `cmd/server`, `jobs`, `migrate`, `certify`) and `internal/bootstrap` are the only composition roots; the image ships the first three (`certify` runs from a workstation or CI, §14.7).
 
 ```
 commercial-billing-service/
 ├── cmd/
-│   ├── server/
-│   │   ├── main.go                         # composition root: pools, gincommon v2 middlewares, router, workers, shutdown
-│   │   ├── wiring.go                       # provider registry, Glue codec + topic publisher, IAM / Entitlements / Audit clients
-│   │   ├── workers.go                      # in-pod workers: outbox runner, webhook processor, saga worker, auditoutbox.Runner,
-│   │   │                                   #   2 SQS consumers, delayed-emission worker, metric exporter (§13.1)
-│   │   └── identity.go                     # resolveAppEnv / loggerEnv (one resolved environment for metrics, traces, logs)
-│   ├── migrate/main.go                     # Helm pre-install / pre-upgrade hook Job (§19.1)
-│   └── jobs/
-│       ├── main.go                         # one binary, --job=<name>, one CronJob each (§13.2)
-│       └── jobs/
-│           ├── saga_sweeper.go
-│           ├── seat_renewal.go
-│           ├── downgrade_apply.go
-│           ├── purchase_expiry.go
-│           ├── seat_projection_check.go
-│           ├── outbox_prune.go
-│           ├── processed_events_prune.go
-│           └── idempotency_prune.go
+│   ├── server/                             # bin/commercial-billing (image entrypoint)
+│   │   ├── main.go                         # composition root: config, gincommon v2 logger / tracer / metrics, pools, router, startup checks
+│   │   ├── wiring.go                       # supervised in-pod workers (§13.1): registry refresh, webhook processor, outbox runner,
+│   │   │                                   #   SQS consumers, delayed-emission worker, saga worker, lifecycle follow-ups, metric exporter
+│   │   ├── events.go                       # event bus: Glue codec + SNS publisher, tenant-billing-q / usage-billing-q consumers, DLQ redrive check
+│   │   ├── service.go                      # poll loops
+│   │   ├── lifecycle.go                    # loop supervision (restart with backoff), /readyz and /healthz checks, shutdown budget (§13.1)
+│   │   └── identity.go                     # loggerEnv (the environment comes from config.ResolveEnv: one value for metrics, traces, logs)
+│   ├── jobs/main.go                        # bin/jobs: one binary, --job=<name>, one CronJob each (§13.2); Pushgateway push
+│   ├── migrate/main.go                     # bin/migrate: Helm pre-install / pre-upgrade hook Job (§4.4, §19.1)
+│   └── certify/main.go                     # bin/certify: provider certification tool (§14.7, §19.6); not in the image
 ├── internal/
+│   ├── config/config.go                    # §12 settings: defaults, ranges, per-binary required keys (LoadFor); reports every problem at once
 │   ├── domain/                             # entities, value objects, state machines; no I/O
-│   │   ├── account.go                      # BillingAccount, IAMLifecycle
-│   │   ├── money.go                        # Money{AmountMinor int64, Currency string}; ISO 4217 exponents
-│   │   ├── price.go                        # PlanPrice, TokenPack
-│   │   ├── subscription.go                 # Subscription, SubscriptionItem, Status, transition table (BIL-SUB-*)
-│   │   ├── saga.go                         # ConversionSaga, SagaKind, SagaState, transition table (§9.3)
-│   │   ├── plan_change.go                  # PlanChangeRequest, PlanRank (starter < pro < enterprise)
-│   │   ├── seats.go                        # SeatPurchase, SeatChangeSchedule, RenewalSeatCount (BIL-SEAT-*)
+│   │   ├── entities.go / enums.go          # BillingAccount, Subscription, items, purchases, invoices, refunds, adjustments, disputes
+│   │   ├── money.go / money_ops.go         # Money{AmountMinor int64, Currency string}; ISO 4217 exponents
+│   │   ├── subscription.go                 # status transition table (BIL-SUB-*, §8.14)
+│   │   ├── saga.go / conversion.go         # ConversionSaga, SagaKind, SagaState, transition table (§9.3)
+│   │   ├── plan_change.go / plan_change_request.go   # PlanRank (starter < pro < enterprise), PlanChangeRequest
+│   │   ├── seats.go / seat_purchase.go     # RenewalSeatCount, SeatPurchase, SeatChangeSchedule (BIL-SEAT-*)
 │   │   ├── addon.go                        # QuotaAddOnPurchase, Eligibility (BIL-ADD-*)
 │   │   ├── proration.go                    # Billing's calculator for adapters without a proration engine (§8.5.3)
-│   │   ├── invoice.go / refund.go / adjustment.go / dispute.go
+│   │   ├── lifecycle.go                    # IAM lifecycle view
+│   │   ├── certification.go                # CertSuite (cert-1.0 case ids), certification record rules (§14.7, BIL-PROV-*)
 │   │   ├── payment_event.go                # provider-neutral normalised callback (§7.4)
 │   │   ├── permission.go                   # Permission constants + role → permission map (§5.2)
 │   │   ├── events.go                       # billing.events payload types (§7.3)
-│   │   └── errors.go                       # DomainError catalogue → errorCode (§17)
-│   ├── app/                                # use cases (one file per aggregate) + ports
+│   │   └── errors.go / problem.go          # DomainError catalogue → errorCode and problem.Type (§17, BIL-API-6)
+│   ├── app/                                # use cases on one Service, grouped by area, + ports
 │   │   ├── port/
-│   │   │   ├── payment_provider.go         # PaymentProvider (§3.4) — the CD-56 abstraction
-│   │   │   ├── repositories.go             # AccountRepo, SubscriptionRepo, SagaRepo, PurchaseRepo, ScheduleRepo, InvoiceRepo,
-│   │   │   │                               #   LedgerRepo, IdempotencyRepo, ReconRepo, UsageRecordRepo
-│   │   │   ├── iam.go                      # CoreClient (I-11, I-18), RealmProvisionerClient (RP-3, RP-4, RP-11)
-│   │   │   ├── entitlements.go             # EntitlementsReader (add-on eligibility, BL-OQ-3)
-│   │   │   ├── audit.go                    # AuditWriter port; implemented by platform-audit auditoutbox.Enqueuer (§3.3)
-│   │   │   ├── events.go                   # EventEnqueuer (ordered outbox, BIL-EVT-5)
-│   │   │   └── tx.go / clock.go / ids.go / logger.go
-│   │   ├── subscription_service.go         # read, cancel, resume, collection pause
-│   │   ├── checkout_service.go             # conversion checkout, payment-method setup, reactivation checkout
-│   │   ├── conversion_service.go           # saga orchestration (trial, direct, stub), reversal
-│   │   ├── signup_charge_service.go        # B-I1 authorize-and-charge
-│   │   ├── plan_change_service.go          # upgrade, downgrade, apply at period end
-│   │   ├── seat_service.go                 # preview, purchase, schedule, renewal, projection check
-│   │   ├── addon_service.go                # catalog, eligibility, purchase
-│   │   ├── webhook_service.go              # verify → ledger → normalise → re-read → dispatch
-│   │   ├── lifecycle_service.go            # dunning, cancellation, reactivation, IAM lifecycle reactions
-│   │   ├── invoice_service.go              # mirror, list, download link
-│   │   ├── operator_service.go             # adjustments, refunds, saga actions, reversal, collection pause, price book
-│   │   ├── reconciliation_service.go
-│   │   └── authorizer.go                   # RequirePermission / RequirePlatformOperator / RequireBFFCaller
+│   │   │   ├── payment_provider.go         # PaymentProvider (§3.4) — the CD-56 abstraction; adapter errors
+│   │   │   ├── repositories.go             # repositories, TxRunner, ErrAccountExists, ErrIdempotencyKeyTaken
+│   │   │   ├── iam.go                      # CoreClient (I-11, I-18), RealmProvisionerClient (RP-3, RP-4, RP-11), EntitlementsReader
+│   │   │   ├── audit.go                    # AuditWriter port; implemented over platform-audit auditoutbox.Enqueuer (§3.3)
+│   │   │   ├── events.go / consumers.go    # EventEnqueuer (ordered outbox, BIL-EVT-5), InboxRunner
+│   │   │   └── jobs.go / logger.go / observability.go
+│   │   ├── service.go / api.go             # Service, Settings (§12 values); request and view types of §5.4
+│   │   ├── authorizer.go                   # caller identity, permission / operator / BFF-principal checks
+│   │   ├── conversion.go                   # B-P1, B-P2, saga orchestration, reversal
+│   │   ├── direct_signup.go                # B-I1 authorize-and-charge
+│   │   ├── operator_conversion.go          # B-O1 stub, B-O9 saga actions
+│   │   ├── plan_change.go / seats.go / addons.go / purchase_invoice.go
+│   │   ├── lifecycle.go / suspension.go / lifecycle_consumer.go   # cancel / resume / reactivate; collection pause; tenant-billing-q handlers
+│   │   ├── tenant_reads.go / operator_views.go / money.go / admin.go   # reads; B-O2 / B-O3 / B-O16; price book and certifications
+│   │   ├── webhook_processor.go            # ledger claim → re-read → dispatch (§8.15)
+│   │   ├── emission_worker.go / jobs.go    # scheduled_emissions; the §13.2 CronJob use cases
+│   │   └── logging.go / trace.go           # correlation fields, span names and attributes (§11.3, §11.4)
+│   ├── bootstrap/bootstrap.go              # composition shared by cmd/server, cmd/jobs and the certification suite; no behaviour
+│   ├── certify/                            # cert-1.0 suite: cases, throwaway database, webhook delivery into B-W1, stripe-mock state (§14.7)
 │   └── adapters/
-│       ├── http/                           # Gin router, tenant / internal / operator handlers, DTOs, middleware, error mapping
+│       ├── http/                           # Gin router, routes.go (route catalogue B-P*, B-I1, B-O*), middleware, idempotency,
+│       │                                   #   probes, OpenAPI generator (docs/swagger/openapi.json), /asyncapi
 │       ├── webhook/                        # B-W1 handler: body limit, signature verify via provider, ledger insert, 200
-│       ├── consumer/                       # tenant-billing-q, usage-billing-q (platform-events SQS + pkg/inbox)
-│       ├── postgres/                       # repositories, app pool + sysPool, migrations/, RLS logger adapter
-│       ├── eventbus/                       # Glue ValidatingCodec, ordered publisher, schemas/*.json (embedded)
+│       ├── consumer/                       # tenant-billing-q, usage-billing-q (platform-events SQS + inbox)
+│       ├── postgres/                       # repositories, pools (app, system, audit drainer), MigrateSchema, migrations/, metrics snapshot
+│       ├── eventbus/                       # schemas/*.json (embedded) + ValidatingCodec; Glue encode codec for platform-events' publisher
 │       ├── provider/
-│       │   ├── registry.go                 # name → PaymentProvider
-│       │   ├── stripe/                     # stripe-go adapter, webhook verifier, normaliser, error mapper (§18.8)
+│       │   ├── registry.go                 # name → PaymentProvider; certification gate (§3.5)
+│       │   ├── stripe/                     # stripe-go adapter, webhook verifier and normaliser, error mapper (§18.8)
 │       │   └── manual/                     # Phase 1 stub adapter; no external calls
 │       ├── iamclient/                      # Core (I-11, I-18), Realm Provisioner (RP-3, RP-4, RP-11) as commercial-system
 │       ├── entitlementsclient/             # GET /api/v1/internal/tenants/:id/entitlements
-│       ├── httpx/                          # otelhttp client factory used by every outbound HTTP client
-│       └── metrics/                        # Tier 1 / 2 / 3 registration (§11.2)
-├── pkg/requestctx/                         # RequestContext{UserID, TenantID, Roles, ClientIP, UserAgent}; GUC binding
+│       ├── httpx/                          # outbound HTTP: gincommon client spans + InjectTraceContext, problem decoding, dependency timing
+│       ├── observability/                  # port.Tracer on gincommon's tracer; log correlation fields (BIL-OPS-10)
+│       └── metrics/                        # Tier 1 / 3 registration on gincommon's registry; Pushgateway push (§11.2)
+├── pkg/requestctx/                         # RequestContext type; X-Request-ID forwarding (http → httpx)
 ├── api/
 │   ├── asyncapi.yaml                       # billing.events produced; tenant-billing-q / usage-billing-q consumed (§7.6)
 │   └── embed.go
-├── docs/{swagger,lld,observability,runbooks}/
-├── deploy/{helm,monitoring,iam}/
-├── scripts/                                # init-db.sql, stripe-fixtures.sh, price-book-sync.sh
-├── test/{unit,postgres,integration,contract,e2e}/
+├── test/                                   # integration suites (§14.2): bus, certify, contract, e2e, flows, helm, postgres,
+│                                           #   scenarios/{commerce,jobs,lifecycle}, stripemock, testkit
+├── docs/{lld,observability,runbooks,swagger}/ + docs/invariants-coverage.md
+├── deploy/{helm,monitoring,iam}/           # chart; alert, recording, SLO rules and dashboards; IRSA policy
+├── scripts/                                # init-db.sql, init-floci.sh, check-first-deploy.sh, testclock/
+├── .github/{workflows,scripts}/  .githooks/  # CI/CD (§13.3), guard scripts; pre-commit, pre-push
 └── Dockerfile  docker-compose.yml  Makefile  go.mod  .golangci.yml  .go-arch-lint.yml
 ```
 
@@ -366,67 +389,157 @@ require (
 ```
 
 - `platform-gincommon/v2` is used from the first release, as in the IAM services; errors are RFC 9457 problems (CD-31). v2.7.0 is the minimum: it is the first release whose observability registry accepts `domain="commercial"` (earlier releases panic at startup on it).
-- Versions track the latest platform releases at build time (the IAM services' practice); the values above are those of Phase 0 (2026-11-23).
+- Versions track the latest platform releases at build time (the IAM services' practice); the values above are those of Phase 0 (2026-11-23) and are still the pinned ones at rev 0.61 (`go.mod`; also `gin` v1.12.0, OpenTelemetry v1.47.0).
 - `platform-audit` v0.1.2 is used **only** for AL-5 direct-write (HLD v0.64 §11.6). Billing builds no AL-5 adapter of its own; the in-repo `auditclient` planned in rev 0.4 is dropped. `pkg/auditoutbox` (outbox mode) is the only delivery mode used; `auditbuffer` is not.
 - `platform-schemagov` is a Python CLI used in CI (`schema-gov validate | extract --check | diff | register`), not a Go dependency, exactly as in IAM.
 - Go 1.26.11, the patch the IAM services pin (HLD §3.3). Billing never imports `iam-keycloakclient` (HLD §15.2).
+- The Stripe adapter's own semver (`adapterSemver` in `internal/adapters/provider/stripe/adapter.go`) is **1.1.0** since rev 0.60 (the port gained `DeleteDraftInvoice` and the one-off invoice mapping changed), so `AdapterVersion()` is `1.1.0+stripeapi.<pinned API version>`; the stripe-go pin is unchanged (§3.5).
 
 ### 3.2 Dependency rules (enforced in CI)
 
-`.go-arch-lint.yml`:
+`.go-arch-lint.yml` (from the repository root, covering `internal/`, `pkg/requestctx`, `api` and the `cmd/*` composition roots; tests, `test/`, `scripts/`, `deploy/` and `docs/` excluded; run by `.github/scripts/arch-lint.sh`, `make arch-lint`):
 
 ```yaml
 version: 3
-workdir: internal
+workdir: .
+allow:
+  depOnAnyVendor: true
+  deepScan: false
+exclude:
+  - test
+  - scripts
+  - deploy
+  - docs
+excludeFiles:
+  - '.*_test\.go$'
 components:
-  domain:        { in: domain/** }
-  app:           { in: app/* }
-  port:          { in: app/port/** }
-  http:          { in: adapters/http/** }
-  webhook:       { in: adapters/webhook/** }
-  consumer:      { in: adapters/consumer/** }
-  postgres:      { in: adapters/postgres/** }
-  eventbus:      { in: adapters/eventbus/** }
-  stripe:        { in: adapters/provider/stripe/** }
-  manual:        { in: adapters/provider/manual/** }
-  registry:      { in: adapters/provider/registry.go }
-  iamclient:     { in: adapters/iamclient/** }
-  entclient:     { in: adapters/entitlementsclient/** }
-  httpx:         { in: adapters/httpx/** }
-  metrics:       { in: adapters/metrics/** }
-vendors:
-  stripe-go:     { in: github.com/stripe/stripe-go/** }
+  domain:
+    in: internal/domain/**
+  port:
+    in: internal/app/port/**
+  app:
+    in: internal/app
+  config:
+    in: internal/config/**
+  requestctx:
+    in: pkg/requestctx/**
+  apispec:
+    in: api
+  http:
+    in: internal/adapters/http/**
+  webhook:
+    in: internal/adapters/webhook/**
+  consumer:
+    in: internal/adapters/consumer/**
+  postgres:
+    in: internal/adapters/postgres/**
+  eventbus:
+    in: internal/adapters/eventbus/**
+  registry:
+    in: internal/adapters/provider
+  stripe:
+    in: internal/adapters/provider/stripe/**
+  manual:
+    in: internal/adapters/provider/manual/**
+  iamclient:
+    in: internal/adapters/iamclient/**
+  entclient:
+    in: internal/adapters/entitlementsclient/**
+  httpx:
+    in: internal/adapters/httpx/**
+  metrics:
+    in: internal/adapters/metrics/**
+  observability:
+    in: internal/adapters/observability/**
+  bootstrap:
+    in: internal/bootstrap/**
+  certify:
+    in: internal/certify/**
+  cmd:
+    in:
+      - cmd/server
+      - cmd/jobs
+      - cmd/migrate
+      - cmd/certify
 deps:
-  domain:      { mayDependOn: [] }
-  port:        { mayDependOn: [domain] }
-  app:         { mayDependOn: [domain, port] }
-  http:        { mayDependOn: [domain, port, app, metrics] }
-  webhook:     { mayDependOn: [domain, port, app, metrics] }
-  consumer:    { mayDependOn: [domain, port, app, metrics] }
-  postgres:    { mayDependOn: [domain, port] }
-  eventbus:    { mayDependOn: [domain, port] }
-  stripe:      { mayDependOn: [domain, port, httpx], canUse: [stripe-go] }
-  manual:      { mayDependOn: [domain, port] }
-  registry:    { mayDependOn: [port, stripe, manual] }
-  iamclient:   { mayDependOn: [domain, port, httpx] }
-  entclient:   { mayDependOn: [domain, port, httpx] }
+  port:
+    mayDependOn: [domain]
+  app:
+    mayDependOn: [domain, port]
+  http:
+    mayDependOn: [domain, port, app, metrics, requestctx]
+  webhook:
+    mayDependOn: [domain, port, app, metrics]
+  consumer:
+    mayDependOn: [domain, port, app, metrics]
+  postgres:
+    mayDependOn: [domain, port]
+  eventbus:
+    mayDependOn: [domain, port]
+  stripe:
+    mayDependOn: [domain, port, httpx]
+  manual:
+    mayDependOn: [domain, port]
+  registry:
+    mayDependOn: [port, stripe, manual]
+  iamclient:
+    mayDependOn: [domain, port, httpx]
+  entclient:
+    mayDependOn: [domain, port, httpx]
+  metrics:
+    mayDependOn: [domain, port]
+  observability:
+    mayDependOn: [port]
+  httpx:
+    mayDependOn: [requestctx]
+  bootstrap:
+    mayDependOn: [domain, port, app, config, postgres, eventbus, registry, stripe, manual, iamclient, entclient, httpx, metrics, observability]
+  certify:
+    mayDependOn: [domain, port, app, config, bootstrap, postgres, stripe, webhook]
+  cmd:
+    mayDependOn:
+      - domain
+      - port
+      - app
+      - config
+      - requestctx
+      - apispec
+      - http
+      - webhook
+      - consumer
+      - postgres
+      - eventbus
+      - registry
+      - stripe
+      - manual
+      - iamclient
+      - entclient
+      - httpx
+      - metrics
+      - observability
+      - bootstrap
+      - certify
 ```
+
+`make guards` runs the four guard scripts named below (`check-stripe-imports.sh`, `check-outbox-access.sh`, `check-problem-details.sh`, `check-pgcommon.sh`); `make lint` runs golangci-lint v2 (`depguard`, `forbidigo`) over the default build and every test tag.
 
 | # | Rule | Enforcement |
 |---|---|---|
-| BIL-PCI-1 | Only `adapters/provider/stripe` imports `github.com/stripe/*`; no provider type crosses a port; the domain and events are provider-neutral (CD-56) | `go-arch-lint` |
-| BIL-OPS-1 | Every DB pool is created by `pgcommon.NewPool` | `golangci-lint` `forbidigo` bans `pgxpool.New`, `pgxpool.NewWithConfig`, `pgxpool.Connect`, `pgx.Connect`, `sql.Open` |
-| BIL-OPS-2 | Every `outbox_events` mutation goes through `platform-events` | `.github/scripts/check-outbox-access.sh` (same script as IAM) |
+| BIL-PCI-1 | Only `adapters/provider/stripe` imports `github.com/stripe/*`; no provider type crosses a port; the domain and events are provider-neutral (CD-56) | `.github/scripts/check-stripe-imports.sh` (`make guards`); `go-arch-lint` keeps `stripe` behind the `registry` and `bootstrap` components |
+| BIL-OPS-1 | Every DB pool is created by `pgcommon.NewPool` | `golangci-lint` `forbidigo` bans `pgxpool.New`, `pgxpool.NewWithConfig`, `pgxpool.Connect`, `pgx.Connect`, `sql.Open`; `BIL-OPS-11`'s depguard rule |
+| BIL-OPS-2 | Events, the outbox and processed-message dedup go through `platform-events` only: envelopes from `events.NewEnvelope`, `outbox.EnqueueOrdered` / `outbox.Runner` (including `PrunePublished`), `events.NewSNSPublisher`, `events.NewSQSConsumer` / `NewSQSDLQPublisher` with `GlueDecodeCodec`, `inbox.Store` (`Process`, `Prune`), the outbox and inbox schemas (`ApplySchema`), and its `config` package for SNS / SQS / outbox settings (rev 0.41). platform-events stays behind the messaging boundary: use cases see `port.EventEnqueuer` and `port.InboxRunner` only (rev 0.55). The one exception is the Glue **encode** codec in `adapters/eventbus`, because platform-events v2.3.0 ships only `GlueDecodeCodec` | `.github/scripts/check-outbox-access.sh`: no hand-written SQL on `outbox_events`, `outbox_dead_letters` or `processed_events` in any statement form (INSERT, UPDATE, DELETE, SELECT / JOIN, TRUNCATE, COPY, ALTER, LOCK, MERGE, REFERENCES; schema-qualified or quoted). `depguard`: rule `events` denies the AWS SNS and SQS SDKs and AWS SDK v1 everywhere; `events-glue` denies the Glue and AWS config SDKs outside `adapters/eventbus`; `events-boundary` denies `platform-events` outside `adapters/eventbus`, `adapters/postgres`, `adapters/consumer`, `bootstrap`, `certify` and `cmd/*` |
 | BIL-OPS-3 | No HTTP call inside an open transaction (`BIL-CONC-2`) | `forbidigo` bans `*http.Client` method calls in `adapters/postgres`; code review checklist for `app/` |
 | BIL-OPS-4 | Namespace `billing`, ServiceAccount and `app.kubernetes.io/name` exactly `commercial-billing` (CD-19) | `helm-check` job renders the chart and asserts the names |
+| BIL-OPS-10 | Every log line, metric and span goes through `platform-gincommon`: its logger, its registry and metric types (`MetricsRegisterer`, `MetricsGatherer`, `MetricsHandler`, `CounterVec` / `GaugeVec` / `HistogramVec` and their `New*` / `NewShared*` constructors; no private registry) and its tracer (`NewTracer`, `NewSpanTracer`, `RecordSpanError`, `SpanTraceID`, `InjectTraceContext`). CronJob pushes send the text `MetricsHandler` renders. **No package names Prometheus types** (rev 0.53). Only `adapters/observability` names OpenTelemetry types, for span attributes, span links and the log span id, which gincommon has no helper for yet (rev 0.40) | `golangci-lint` `depguard`: rule `observability` denies `go.opentelemetry.io` outside `adapters/observability` and `log`, `log/slog`, `zap`, `logrus`, `zerolog` everywhere; rule `metrics` denies `github.com/prometheus` in all production code. `forbidigo` denies `fmt.Print*`, `print` / `println` and `gin.Default` / `gin.Logger*` |
+| BIL-OPS-11 | Every database connection, setting and statement goes through `platform-pgcommon`: pools from `pgcommon.NewPool` in `pgadapter.OpenPools`; settings from `pgcommon.ConfigFromEnv` (other roles differ only by credentials and size; the migration DSN from `MigrationDSNFromEnv`); session settings only through pgcommon's `Config`, `GUCProvider` and `WithGUCSet`; statements in `pgcommon.RunInTx*` (or `Pool.WithConn` for the certify tool's `CREATE` / `DROP DATABASE`) on pgcommon's types; migrations through pgcommon's `migrate.Runner`; database errors classified only by pgcommon's helpers (`IsUniqueViolation`, `IsCheckViolation`, …, `ConstraintName` for exclusion constraints), and **mapped to domain codes or port errors inside `adapters/postgres`** (e.g. `port.ErrAccountExists`), so no other layer sees pgcommon types or SQLSTATEs (rev 0.40; tightened rev 0.54) | `golangci-lint` `depguard`: rule `database` denies `github.com/jackc/pgx`, `pgconn`, `puddle`, `database/sql`, `github.com/lib/pq`, `golang-migrate`, `goose`, `gorm`, `sqlx` everywhere, tests included; rule `database-boundary` denies `platform-pgcommon` outside `adapters/postgres`, `bootstrap`, `certify` and `cmd/*`. `check-pgcommon.sh` (`make guards`) fails on SQLSTATE literals, hand-rolled `SQLState()` interfaces and hand-written session settings (`set_config`, `SET LOCAL`, timeouts) outside migrations and tests |
 
 ### 3.3 Shared library integration
 
 | Library | How Billing uses it |
 |---|---|
-| `platform-gincommon/v2` | `ObservabilityMiddlewares(cfg)` (panic recovery → request ID → tracing → correlation → metrics → logging → 30 s request deadline, innermost); `ProtectedMiddlewares` (RequireAuth → ContextMiddleware) on tenant and operator groups; `AbortWithProblem` for every error (§17); `NewShared*Vec` for Tier 1/2 metrics and `NewCounterVec`/`NewHistogramVec`/`NewGauge` for Tier 3; `MetricsHandler` on port 9090. `Config{ServiceName: "commercial-billing", Domain: "commercial", Environment, BuildVersion}` |
-| `platform-pgcommon/v2` | App pool (`billing_app`, `GUCProvider = GUCSetFromContext`, transaction-local `app.tenant_id` on every checkout); `sysPool` (`billing_system`, BYPASSRLS) for the webhook pre-resolution, cron tenant listing and reconciliation; `RunInTxWithRetryOpts` (retries 40P01 / 40001) for writes, `RunInTx` for reads; SQLSTATE helpers for error mapping (§9.4); `migrate.Runner` in `cmd/migrate`; `Pool.Health` in `/readyz`; `Pool.DrainAndClose` at shutdown |
-| `platform-events/v2` | `outbox.EnqueueOrdered(tx, rec, orderingKey=tenant_id)` in the state-change transaction (`BIL-EVT-5`); `outbox.Runner` (500 ms poll, batch 50, max attempts 5, `PrunePublished` 8 days); SQS consumer with `eventcfg` env loading, `GlueDecodeCodec`, `WithDLQForwarding` (receive 4); `pkg/inbox` `Store.Process` / `Prune` for `processed_events`; Glue `ValidatingCodec` against registry `billing-events` |
+| `platform-gincommon/v2` | `ObservabilityMiddlewares(cfg)` (panic recovery → request ID → tracing → correlation → metrics → logging → 30 s request deadline, innermost); `ProtectedMiddlewares` (RequireAuth → ContextMiddleware) on tenant and operator groups; `AbortWithProblem` for every error (§17); `NewShared*Vec` for Tier 1/2 metrics and `NewCounterVec`/`NewHistogramVec`/`NewGauge` for Tier 3; `MetricsHandler` on port 9090. `Config{ServiceName: "commercial-billing", Domain: "commercial", Environment, BuildVersion}` | **Only path for logs, metrics and traces (`BIL-OPS-10`, rev 0.40).**
+| `platform-pgcommon/v2` | App pool (`billing_app`, `GUCProvider = GUCSetFromContext`, transaction-local `app.tenant_id` on every checkout); `sysPool` (`billing_system`, BYPASSRLS) for the webhook pre-resolution, cron tenant listing and reconciliation; `RunInTxWithRetryOpts` (retries 40P01 / 40001) for writes, `RunInTx` for reads; SQLSTATE helpers for error mapping (§9.4); `migrate.Runner` in `cmd/migrate`; `Pool.Health` in `/readyz`; `Pool.DrainAndClose` at shutdown | **Only path to the database (`BIL-OPS-11`, rev 0.40):** `pgadapter.OpenPools` builds the app and system pools from `pgcommon.ConfigFromEnv`, and the audit-drainer config the same way (`AuditDrainerConfig`), each differing only by role and size. Repositories use `pgcommon.Tx`, `Row`, `Rows`, `ErrNoRows` and pgcommon's error classifiers (`IsUniqueViolation`, `ConstraintName`, …; rev 0.54), never a raw SQLSTATE.
+| `platform-events/v2` | `outbox.EnqueueOrdered(tx, rec, orderingKey=tenant_id)` in the state-change transaction (`BIL-EVT-5`); `outbox.Runner` (500 ms poll, batch 50, max attempts 5, `PrunePublished` 8 days); SQS consumer with `eventcfg` env loading, `GlueDecodeCodec`, `WithDLQForwarding` (receive 4); `pkg/inbox` `Store.Process` / `Prune` for `processed_events`; Glue `ValidatingCodec` against registry `billing-events` | **Only path for events (`BIL-OPS-2`, rev 0.41):** settings from its `config` package with Billing's §12 values applied on top; consumers and the DLQ publisher from its constructors (no service-built SQS client); `events.NoopCodec` in dev, Billing's Glue encode codec (platform-events has decode only) elsewhere; queue-depth sampler on.
 | `platform-audit` v0.1.2 (`pkg/audit`, `pkg/auditoutbox`, `pkg/config`) | AL-5 direct-write in **outbox mode** (library LLD §7.1). `cmd/migrate`: `auditoutbox.ApplySchema` before Billing's RLS migration (§4.4). `main`: `auditconfig.FromEnv("")` (fails fast on a malformed `AUDIT_*`); `audit.InitMetrics(MetricsIdentity{Domain: "commercial", Service: "commercial-billing"}, gincommon.MetricsRegisterer())`; `auditoutbox.CheckEnqueueAccess(ctx, appPool)` fails startup if `billing_app` cannot INSERT; one `Enqueuer` (`NewEnqueuer(cfg.EnqueueConfig(log))`) behind the `AuditWriter` port; `auditoutbox.NewRunner(cfg.RunnerConfig(drainerPool, client, enq, log))` started as an in-pod worker and stopped at shutdown. In the business transaction: `enq.Enqueue(ctx, tx, entry, enq.NewKeyStrict(<source_event_type>, <natural id>))`, `OccurredAt` from the change. The runner claims with `SKIP LOCKED`, posts to AL-5 with `Idempotency-Key`, retries `429`/`5xx`/timeouts with backoff and `Retry-After`, holds `422 UNKNOWN_ENTRY_TYPE` (deploy skew) and `401`/`403` (not admitted) without spending attempts, and parks other `4xx` for operator disposition. Caller identity `AUDIT_CALLER_DOMAIN=commercial`: `x-tenant-roles: commercial-system`, `x-user-id …00c1`, `CommercialSystemActor()` for automated entries. Never blocks the business write (AUDIT-CALLER-1) |
 
 ### 3.4 Payment provider abstraction (CD-56)
@@ -446,6 +559,7 @@ type PaymentProvider interface {
 	EnsureCustomer(ctx context.Context, in CustomerInput, idemKey string) (CustomerRef, error)
 	UpdateCustomer(ctx context.Context, ref CustomerRef, in CustomerInput, idemKey string) error
 	CreateHostedCheckout(ctx context.Context, in CheckoutInput, idemKey string) (HostedSession, error)
+	ExpireCheckout(ctx context.Context, providerSessionID string, idemKey string) error              // a superseded B-P2 session (§8.1.1); nil when expired (now or already); ErrCheckoutCompleted when the customer already completed it; manual: ErrUnsupported (rev 0.59)
 	CreatePaymentMethodSetup(ctx context.Context, in SetupInput, idemKey string) (HostedSession, error)
 	ListPaymentMethods(ctx context.Context, ref CustomerRef) ([]PaymentMethodView, error)
 	AttachDefaultPaymentMethod(ctx context.Context, ref CustomerRef, pmRef string, idemKey string) error
@@ -471,9 +585,14 @@ type PaymentProvider interface {
 	InvoicePDFLink(ctx context.Context, ref InvoiceRef) (URLWithExpiry, error)
 	PayOpenInvoiceLink(ctx context.Context, ref InvoiceRef) (URLWithExpiry, error)
 	VoidInvoice(ctx context.Context, ref InvoiceRef, idemKey string) error
+	DeleteDraftInvoice(ctx context.Context, ref InvoiceRef) error                                     // deletes a draft (never finalised) invoice, which the provider cannot void; already gone → nil; manual: `ErrUnsupported` (never called: manual purchases have no provider invoice) (§8.5.1, §8.7, rev 0.60)
 	FinalizeInvoice(ctx context.Context, ref InvoiceRef, idemKey string) error                       // B-O16: finalise a held draft and collect it automatically
+	FindInvoice(ctx context.Context, q InvoiceQuery) (InvoiceRef, bool, error)                       // looks up an invoice Billing started but did not record: one-off invoices by metadata purchase_id; proration invoices by subscription, billing_reason=subscription_update and amount, with a positive line for q.Quantity (seats after) or q.PriceRef (target price) when set (rev 0.60); created since q.CreatedSince; manual: never found (§8.5.1, rev 0.59)
 	Refund(ctx context.Context, in RefundInput, idemKey string) (RefundResult, error)
 	CreditBalance(ctx context.Context, in BalanceAdjustment, idemKey string) (string, error)        // operator adjustments
+
+	// Price book
+	VerifyPrice(ctx context.Context, priceRef string, want PriceExpectation) error                   // B-O11/B-O12: exists, active, amount, currency, interval; ErrPriceMismatch → 422 PROVIDER_PRICE_MISMATCH (rev 0.36)
 
 	// Callbacks and re-read
 	VerifyAndNormalise(ctx context.Context, h http.Header, body []byte) (domain.PaymentEvent, error) // ErrInvalidSignature
@@ -515,7 +634,7 @@ type ProviderCapabilities struct {
 // OffSessionCharges, HostedCardEntry. The others change behaviour but do not block enablement.
 
 type CustomerInput struct {
-	TenantID uuid.UUID; Currency string; Name, Email, Company, Country, TaxID string
+	TenantID string; Currency string; Name, Email, Company, Country, TaxID string
 }
 type CheckoutInput struct {
 	Customer CustomerRef; Purpose CheckoutPurpose // conversion | reactivation | addon_payment
@@ -544,6 +663,7 @@ type PaymentOutcome struct {
 
 type QuantityChange struct {
 	Sub SubscriptionRef; From, To int; ProrationInstant time.Time; InvoiceNow bool
+	KeepIfUnpaid bool // renewal top-up only: quantity applied even if unpaid; the invoice follows dunning (§8.6.3, rev 0.37)
 }
 type PriceChange struct{ Sub SubscriptionRef; ToPriceRef string; ProrationInstant time.Time }
 type PeriodEndChange struct{ Sub SubscriptionRef; ToPriceRef string; ToQuantity int; At time.Time }
@@ -567,7 +687,7 @@ type InvoiceView struct {
 type URLWithExpiry struct{ URL string; ExpiresAt time.Time }
 ```
 
-**Adapter errors** are mapped to domain errors in the adapter (`port.ErrProviderUnavailable`, `ErrDeclined{Code}`, `ErrActionRequired{ClientSecret}`, `ErrInvalidSignature`, `ErrUnsupported`, `ErrIdempotencyMismatch`, `ErrNotFound`); the app layer never inspects provider error types.
+**Adapter errors** are mapped to domain errors in the adapter (`port.ErrProviderUnavailable`, `ErrDeclined{Code}`, `ErrActionRequired{ClientSecret}`, `ErrInvalidSignature`, `ErrUnsupported`, `ErrIdempotencyMismatch`, `ErrNotFound`, `ErrPriceMismatch`, `ErrCheckoutCompleted` (rev 0.59)); `port.ProviderErrorToDomain` converts them to §17 codes, and the app layer never inspects provider error types. Callback outcomes use `port.IgnoredEvent` (`ignored:<reason>`) and `port.ParkedEvent` (`failed:<reason>`, no retry, §8.15).
 
 | Adapter | Phase | Capability notes |
 |---|---|---|
@@ -591,12 +711,13 @@ An adapter is usable for **new** billing accounts only when `provider_certificat
 - **At startup** the registry reads `provider_certifications` on the sysPool. A listed provider without a valid record is kept **loaded** but not **enabled**, logged at ERROR, and `commercial_billing_provider_certified{provider, adapter_version} = 0` raises `BillingProviderNotCertified` (§11.5). If `DEFAULT_PAYMENT_PROVIDER` is not enabled, account creation answers `503 PROVIDER_NOT_ENABLED`; the service still starts so existing tenants are served.
 - **At runtime** the registry re-reads the table every `PROVIDER_REGISTRY_REFRESH` (60 s), so an approved record (B-O17) or a B-O15 revocation takes effect without a restart. A `pending_review` record enables nothing.
 - `AdapterVersion()` returns `<adapter semver>+stripeapi.<pinned version>` (for Stripe), so a pinned provider API version change is a new adapter version (`BIL-PROV-2`).
+- **Stripe adapter 1.1.0 (rev 0.60).** The Stripe adapter in the code is `1.1.0` (`adapterSemver`): the rev 0.59 and 0.60 mapping changes (`ExpireCheckout`, `FindInvoice`, `DeleteDraftInvoice`, `auto_advance = false` on one-off invoices). A record for 1.0.0 does not cover it: 1.1.0 must be certified (`cmd/certify`, B-O14, then B-O17 by a second `pci_owner_reviewer`, `BIL-PROV-4`) before Stripe takes new accounts. Open go-live item (§20.10).
 
 ---
 
 ## 4. Data Model
 
-Database: `billing`, a separate logical database on the platform RDS PostgreSQL Multi-AZ pattern (HLD §7.1), the only Commercial database in PCI-adjacent scope. Fronted by PgBouncer in transaction-pooling mode. App pool `pgcommon.NewPool(… PGBouncerMode: true, GUCProvider: pgcommon.GUCSetFromContext, MinConns: 0, MaxConns: 10 …)` (HLD §7.1 starting point); sysPool `MaxConns: 4`; audit drainer pool (`billing_audit_drainer`, `PGBouncerMode: true`, `MaxConns: 2`) used only by `platform-audit`'s `auditoutbox.Runner` (§3.3). Migrations (`cmd/migrate`, including `auditoutbox.ApplySchema`) connect directly to RDS, never through PgBouncer: golang-migrate's advisory lock is session-scoped and does not survive transaction pooling.
+Database: `billing`, a separate logical database on the platform RDS PostgreSQL Multi-AZ pattern (HLD §7.1), the only Commercial database in PCI-adjacent scope. Fronted by PgBouncer in transaction-pooling mode. App pool `pgcommon.NewPool(… PGBouncerMode: true, GUCProvider: pgcommon.GUCSetFromContext, MinConns: 0, MaxConns: 10 …)` (HLD §7.1 starting point); sysPool `MaxConns: 4`; audit drainer pool (`billing_audit_drainer`, `PGBouncerMode: true`, `MaxConns: 2`) used only by `platform-audit`'s `auditoutbox.Runner` (§3.3). Migrations (`cmd/migrate`, including `auditoutbox.ApplySchema`) connect directly to RDS, never through PgBouncer: the migration runner's advisory lock (pgcommon `migrate.Runner`) is session-scoped and does not survive transaction pooling.
 
 | # | Invariant |
 |---|---|
@@ -724,7 +845,7 @@ CREATE TABLE plan_prices (
 | `pro` | 6900 | 70380 |
 | `enterprise` | 17900 | 182580 |
 
-Provider price ids are filled per environment by `scripts/price-book-sync.sh` (creates the Stripe Product per plan and Price per row, then writes `provider_price_id` through the operator price-book route B-O11). A price change inserts a new row and closes the old one; live subscriptions keep their price until their next renewal on or after the new row's `effective_from`, then move to it (`renewal-repricing`, §8.16; Product and Finance approved, BL-OQ-16).
+Provider price ids are filled per environment by `price-book-sync.sh` (creates the Stripe Product per plan and Price per row, then writes `provider_price_id` through the operator price-book route B-O11). The script is not in the repository yet (rev 0.61); until it is, the Stripe Products and Prices are created by hand and the rows posted through B-O11, and `scripts/check-first-deploy.sh` step 3 checks that every current `stripe` row carries a `provider_price_id`. A price change inserts a new row and closes the old one; live subscriptions keep their price until their next renewal on or after the new row's `effective_from`, then move to it (`renewal-repricing`, §8.16; Product and Finance approved, BL-OQ-16).
 
 #### 4.2.3 `token_packs` (global, no RLS)
 
@@ -844,7 +965,7 @@ CREATE TABLE checkout_sessions (
   session_id               uuid PRIMARY KEY,
   tenant_id                uuid NOT NULL,
   purpose                  text NOT NULL CHECK (purpose IN ('conversion','reactivation','payment_method_setup','addon_payment')),
-  provider_session_id      text NOT NULL,
+  provider_session_id      text NOT NULL,                -- 'pending:<session_id>' until the provider session exists (BIL-CONC-2)
   billing_subscription_id  uuid REFERENCES subscriptions(billing_subscription_id),
   addon_purchase_id        uuid,
   requested_plan           plan_code,
@@ -854,11 +975,14 @@ CREATE TABLE checkout_sessions (
   requested_by             uuid NOT NULL,
   expires_at               timestamptz NOT NULL,
   created_at               timestamptz NOT NULL DEFAULT now(),
+  default_applied_at       timestamptz,                  -- payment_method_setup: new method made default by the lifecycle follow-up (B-P16, 000006)
   CONSTRAINT uq_cs_provider UNIQUE (provider_session_id)
 );
 CREATE UNIQUE INDEX uq_cs_one_open ON checkout_sessions (tenant_id, purpose)
   WHERE status = 'open' AND purpose IN ('conversion','reactivation');
 CREATE INDEX idx_cs_expiry ON checkout_sessions (expires_at) WHERE status = 'open';
+CREATE INDEX idx_cs_pm_pending ON checkout_sessions (tenant_id)
+  WHERE purpose = 'payment_method_setup' AND status = 'completed' AND default_applied_at IS NULL;
 ```
 
 #### 4.2.8 `conversion_sagas`
@@ -1109,7 +1233,7 @@ CREATE INDEX idx_pel_recv   ON payment_event_ledger (received_at);
 
 The ledger is written **before** the tenant is known (a callback carries provider ids only), so it cannot sit under tenant RLS. `billing_system` inserts and claims rows; the processor then binds the resolved tenant on the app pool for every domain write. Tenant routes never read it; operators see it through B-O7 (ids and types only).
 
-**Payload allow-list (BIL-PCI-3).** Per object type the scrubber keeps: `id`, `object`, `customer`, `subscription`, `invoice`, `payment_intent`, `status`, `billing_reason`, `amount_due`, `amount_paid`, `amount_refunded`, `currency`, `period_start`, `period_end`, `current_period_start`, `current_period_end`, `cancel_at_period_end`, `pending_update` (presence only), `quantity`, `price.id`, `metadata.{tenant_id,billing_subscription_id,purpose,purchase_id,change_id}`, `reason` (dispute), `created`, `livemode`. Everything else, including `billing_details`, `payment_method_details`, `client_secret`, `customer_email`, `address`, `fingerprint`, is dropped.
+**Payload allow-list (BIL-PCI-3).** Per object type the scrubber keeps: `id`, `object`, `customer`, `subscription`, `invoice`, `payment_intent`, `status`, `billing_reason`, `amount_due`, `amount_paid`, `amount_refunded`, `currency`, `period_start`, `period_end`, `current_period_start`, `current_period_end`, `cancel_at_period_end`, `pending_update` (presence only), `quantity`, `price.id`, `metadata.{tenant_id,billing_subscription_id,purpose,purchase_id,change_id}`, `reason` (dispute), `created`, `livemode`. Everything else, including `billing_details`, `payment_method_details`, `client_secret`, `customer_email`, `address`, `fingerprint`, is dropped. The `metadata` allow-list is enforced key by key since rev 0.59 (`allowedMetadataKeys` in the Stripe adapter): only `tenant_id`, `billing_subscription_id`, `purpose`, `purchase_id` and `change_id` are kept; any other key a dashboard user or another integration set is dropped before the row is stored.
 
 #### 4.2.16 `adjustments`
 
@@ -1281,7 +1405,7 @@ CREATE TABLE reconciliation_findings (
 |---|---|---|
 | `outbox_events`, `outbox_dead_letters` | `platform-events/v2` schema (`outbox.MigrateSchema`) | Ordered on `ordering_key = tenant_id` (`BIL-EVT-5`); published rows pruned after 8 days |
 | `processed_events` | `(event_id uuid, consumer text, processed_at)`; PK `(event_id, consumer)` | `pkg/inbox`; consumers `tenant-billing`, `usage-billing`; 8-day retention > 4-day SQS retention (PE-1) |
-| `pending_audit_entries` | Owned by `platform-audit` (migration `000001_pending_audit_entries`, applied by `auditoutbox.ApplySchema`; tracked in `platform_audit_schema_migrations`). Billing does not define or alter its columns | AL-5 outbox (§10.6). Billing adds RLS after `ApplySchema`: `tenant_isolation` on `tenant_id`, with `WITH CHECK` admitting `platform_tenant` (`…00b1`) rows (library LLD §4.3). Grants: `billing_app` `SELECT, INSERT`; drainer `billing_audit_drainer` (`NOBYPASSRLS`, policy `audit_drainer_all`) `SELECT, INSERT, UPDATE, DELETE`. Delivered rows deleted; parked rows kept until an operator disposes of them; disposed rows purged after `AUDIT_DISPOSED_RETENTION` |
+| `pending_audit_entries` | Owned by `platform-audit` (migration `000001_pending_audit_entries`, applied by `auditoutbox.ApplySchema`; tracked in `platform_audit_schema_migrations`). Billing does not define or alter its columns | AL-5 outbox (§10.6). Billing adds RLS after `ApplySchema`: `tenant_isolation` on `tenant_id`, with `WITH CHECK` admitting `platform_tenant` (`…00b1`) rows (library LLD §4.3). Grants: `billing_app` `SELECT, INSERT`; `billing_system` `SELECT, INSERT` (global changes, `BIL-AUD-1`, migration `000006`); drainer `billing_audit_drainer` (`NOBYPASSRLS`, policy `audit_drainer_all`) `SELECT, INSERT, UPDATE, DELETE`. Delivered rows deleted; parked rows kept until an operator disposes of them; disposed rows purged after `AUDIT_DISPOSED_RETENTION` |
 | `rls_violation_log` | Same as IAM (`table_name, row_tenant_id, app_tenant_id, violation_type, …`) | 1%-sampled; RLS disabled on itself |
 
 #### 4.2.24 `provider_certifications` (global, no RLS)
@@ -1376,7 +1500,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON <t> TO billing_app;   -- history: SELECT
 GRANT SELECT ON <t> TO admin_readonly;
 ```
 
-`rls_check_tenant(row_tenant uuid, tbl text)` is the platform `SECURITY DEFINER` function: missing or malformed `app.tenant_id` → false (0 rows) with a sampled `missing_or_invalid_guc` log; cross-tenant → false with `cross_tenant_access`. Global tables (`plan_prices`, `token_packs`) have no RLS: `billing_app` gets `SELECT`, writes only through `billing_system`. `payment_event_ledger`, `reconciliation_runs`, `reconciliation_findings` are `billing_system` only (`billing_app` has no grant).
+`rls_check_tenant(row_tenant uuid, tbl text)` is the platform `SECURITY DEFINER` function: missing or malformed `app.tenant_id` → false (0 rows) with a sampled `missing_or_invalid_guc` log; cross-tenant → false with `cross_tenant_access`. **Grants on the helpers (`000007_rls_helper_grants`, rev 0.59):** `rls_check_tenant` is executable only by `billing_app`, `admin_readonly` and `billing_audit_drainer` (the roles whose queries evaluate a policy; the drainer's `audit_drainer_all` policy is OR-ed with `tenant_isolation`, which is still evaluated). `app_tenant_id` and `log_rls_violation` are executable by no role: they are called only inside `rls_check_tenant`, which runs as its owner. `billing_system` has `BYPASSRLS`, never evaluates a policy and has no grant. `PUBLIC` has none. Global tables (`plan_prices`, `token_packs`) have no RLS: `billing_app` gets `SELECT`, writes only through `billing_system`. `payment_event_ledger`, `reconciliation_runs`, `reconciliation_findings` are `billing_system` only (`billing_app` has no grant).
 
 **GUC binding (HLD §7.2).**
 
@@ -1400,15 +1524,17 @@ GRANT SELECT ON <t> TO admin_readonly;
 
 | File | Content |
 |---|---|
-| `000000_outbox_schema` | `platform-events` outbox, dead letters, `processed_events` |
+| (library) `000000_outbox_schema` | `platform-events` outbox, dead letters (`outbox.ApplySchema`) and `processed_events` (`inbox.ApplySchema`); library schemas with their own tracking, not files in `internal/adapters/postgres/migrations/` |
 | (library) `platform-audit` `000001_pending_audit_entries` | Applied by `auditoutbox.ApplySchema` after `000000_outbox_schema` and before `000001_initial_schema`; own tracking table `platform_audit_schema_migrations` |
-| `000001_initial_schema` | Extensions, enums, all tables in §4.2, indexes, RLS, `rls_check_tenant`, `rls_violation_log`, triggers (§4.5), grants for `billing_app`, `billing_system`, `admin_readonly` (granted explicitly, not assumed through ownership) |
+| `000001_initial_schema` (first file in `internal/adapters/postgres/migrations/`, embedded; tracking table `billing_schema_migrations`) | Extensions, enums, all tables in §4.2, indexes, RLS, `rls_check_tenant`, `rls_violation_log`, triggers (§4.5), grants for `billing_app`, `billing_system`, `admin_readonly` (granted explicitly, not assumed through ownership) |
 | `000002_seed_price_book` | `plan_prices` seed (§4.2.2) as `provider = 'manual'` rows only (the stub's prices). Stripe rows need a `provider_price_id` (`chk_pp_provider_ref`), so `price-book-sync.sh` creates them per environment through B-O11 |
 | `000003_views` | `v_subscription_summary` (`security_invoker = true`) |
 | `000004_provider_certifications` | `certification_status` enum, `provider_certifications` table, `trg_pc_guard` and grants (§4.2.24); inserts the `manual` adapter's `exempt` record for its compiled `adapter_version` |
 | `000005_audit_outbox_rls` | RLS on `pending_audit_entries` (`tenant_isolation`, `WITH CHECK` admits `platform_tenant`), role `billing_audit_drainer` (`NOBYPASSRLS`) with policy `audit_drainer_all`, grants (library LLD §4.3) |
+| `000006_system_audit_and_pm_default` | `billing_system` `SELECT, INSERT` on `pending_audit_entries` (`BIL-AUD-1`); `checkout_sessions.default_applied_at` and `idx_cs_pm_pending` (B-P16 default via the lifecycle follow-up) |
+| `000007_rls_helper_grants` | Least privilege on the `SECURITY DEFINER` RLS helpers (§4.3, rev 0.59): `EXECUTE` on `rls_check_tenant` only for `billing_app`, `admin_readonly`, `billing_audit_drainer`; none on `app_tenant_id`, `log_rls_violation`; `PUBLIC` revoked again |
 
-Rules: backward-compatible two-release migrations (HLD §15.5); `cmd/migrate` runs `MigrateSchema` (outbox first, then domain) under `MIGRATE_TIMEOUT`; production runs require the `production-data-migrations` environment approval.
+Rules: backward-compatible two-release migrations (HLD §15.5); `cmd/migrate` runs `pgadapter.MigrateSchema` (outbox and inbox, then `platform-audit`, then `000001`–`000007`, each `.up.sql` with its `.down.sql`) under `MIGRATE_TIMEOUT` (default `10m`; the chart's hook Job sets `7m`, §13.1); production runs require the `production-data-migrations` environment approval.
 
 ### 4.5 Triggers
 
@@ -1454,7 +1580,7 @@ Applied `BEFORE UPDATE … FOR EACH ROW WHEN (OLD.* IS DISTINCT FROM NEW.*)` on 
 ---
 ## 5. API Contract
 
-**Endpoint count.** 26 tenant routes (`B-P1`–`B-P26`), 1 internal route (`B-I1`), 1 webhook route (`B-W1`), 17 operator routes (`B-O1`–`B-O17`): **45 endpoint IDs**. IDs are stable and never reused; a retired route keeps its ID struck through, as in IAM.
+**Endpoint count.** 26 tenant routes (`B-P1`–`B-P26`), 1 internal route (`B-I1`), 1 webhook route (`B-W1`), 17 operator routes (`B-O1`–`B-O17`): **45 endpoint IDs**. IDs are stable and never reused; a retired route keeps its ID struck through, as in IAM. The route catalogue `internal/adapters/http/routes.go` and the generated `docs/swagger/openapi.json` hold the **44** API operations (39 paths: every ID except B-W1); B-W1 is registered by the webhook adapter (`internal/adapters/webhook`) and specified only in §5.4.3. Probes (`/healthz`, `/readyz`) and `GET /asyncapi`, `/asyncapi.yaml` are not endpoint IDs.
 
 ### 5.1 Conventions
 
@@ -1462,7 +1588,7 @@ Applied `BEFORE UPDATE … FOR EACH ROW WHEN (OLD.* IS DISTINCT FROM NEW.*)` on 
 - Every route runs behind `gincommon.ObservabilityMiddlewares`. Tenant and operator groups add `gincommon.ProtectedMiddlewares` (RequireAuth → ContextMiddleware), then `GUCBridge` and `RequireJSONContentType` (`415 UNSUPPORTED_MEDIA_TYPE`). Tenant routes add `RequirePathTenantMatch` and `RequirePermission(p)`; operator routes add `RequirePlatformOperator`; the internal route adds `RequireCallerPrincipal(BFF_CALLER_PRINCIPAL)`.
 - **Identity** comes only from gateway- or mesh-injected `x-user-id`, `x-tenant-id`, `x-tenant-roles` under mesh mTLS. No JWT parsing. Identity fields in a body are ignored (`BIL-API-1`).
 - Content type `application/json; charset=utf-8`. Timestamps RFC 3339 UTC with second precision. **Money** is `{"amount_minor": 6900, "currency": "USD"}` — integer minor units and ISO 4217 code; never floats.
-- **Errors** are RFC 9457 problems from `gincommon/v2` (`application/problem+json`): `type`, `title`, `status`, `detail`, `instance`, `errorCode`, `validationErrors[]` (`{field, message}`, the platform-standard `gincommon/v2` entry; the message is a fixed phrase that never echoes the value), `traceId`, `tenantId`, `timestamp`, plus documented extension members. `errorCode` values are `UPPER_SNAKE` and frozen once published (CD-31; §17). `request_id` travels only in the `X-Request-ID` header.
+- **Errors** are RFC 9457 problems from `gincommon/v2` (`application/problem+json`): `type`, `title`, `status`, `detail`, `instance`, `errorCode`, `validationErrors[]` (`{field, message}`, the platform-standard `gincommon/v2` entry; the message is a fixed phrase that never echoes the value), `traceId`, `tenantId`, `timestamp`, plus documented extension members. `errorCode` values are `UPPER_SNAKE` and frozen once published (CD-31; §17). `request_id` travels only in the `X-Request-ID` header. **Every error response is produced by `platform-gincommon` (`BIL-API-6`, rev 0.42):** domain errors convert themselves to its `*problem.Error`, and handlers call `gincommon.AbortWithProblem`; unmatched routes or methods, a recovered panic and failed probes are its problems too.
 - **Idempotency.** `Idempotency-Key` (8–200 chars, `[A-Za-z0-9:_\-.]`) is **required** on every mutating internal and operator route and on tenant routes that can create a charge or a provider object (B-P2, B-P4, B-P7, B-P10, B-P14, B-P16, B-P20, B-P23); optional on the other tenant mutations. Semantics in §9.2.
 - **Optimistic locking.** Mutations that act on a subscription the caller read take `record_version` (body field); mismatch → `409 OPTIMISTIC_LOCK_CONFLICT` with extension `record_version` (current). Every subscription response returns `record_version`.
 - **Lists** are cursor-paginated: `?limit=` 1–100 (default 20), `?cursor=` opaque; response `{"items": […], "next_cursor": "…" | null}`.
@@ -1486,6 +1612,7 @@ Applied `BEFORE UPDATE … FOR EACH ROW WHEN (OLD.* IS DISTINCT FROM NEW.*)` on 
 | BIL-API-3 | A route that can create a charge never charges twice for one `Idempotency-Key` (§9.2). |
 | BIL-API-4 | No response body contains card data, `client_secret` (except the 3-D Secure action object returned to the caller that started the payment), provider API keys or webhook secrets. |
 | BIL-API-5 | Provider-hosted URLs returned to the browser (`checkout_url`, `setup_url`, `payment_url`, invoice links) come from the provider adapter only and are never built from request input. Redirect URLs (`success_url`, `cancel_url`) are built from `TENANT_APP_BASE_URL` and the tenant slug-free path `/billing`, never from the request. |
+| BIL-API-6 | Every error response is an RFC 9457 problem produced by `platform-gincommon` (`AbortWithProblem`, `ClassifyError`, `BindingError`, `problem.Type` per §17 code); Billing has no problem model, error DTO, recovery middleware or validation mapper. Problems Billing **reads** are parsed by gincommon too: callees' error answers in `httpx.Call` and the captured response in the idempotency middleware go through `problem.Decode`, never a service-owned struct (rev 0.56). Only the §5.1 `Retry-After` header, the §10.4 per-route decode (errors formatted by `gincommon.BindingError`) and the idempotency replay of a stored response are local (rev 0.42). Enforcement: `check-problem-details.sh` fails on hand-written problem bodies, the problem media type, `gin.Recovery`, `AbortWithStatus*`, `c.JSON` / `c.String` / `c.Status` with an error status, service-owned error DTOs or problem parsers (`errorCode` / `validationErrors` JSON tags; `ErrorResponse`, `ApiError`, `ProblemDetails`-style types on the HTTP error path) and `recover()` in the HTTP adapters (rev 0.56). |
 
 ### 5.2 Authorization — permissions and roles
 
@@ -1670,9 +1797,9 @@ Common objects, defined once and reused below:
 | `licensed_seats` 1–`MAX_SEATS_PER_PURCHASE` (1000) and ≥ I-11 `active_users + pending_invitations` | `422 SEATS_BELOW_IN_USE` (extension `seats_in_use`) |
 | Tenant on trial: no non-`ended` subscription other than an `incomplete` one from an earlier checkout; `iam_lifecycle = 'trial'` | `409 SUBSCRIPTION_ALREADY_EXISTS` |
 
-**Side effects.** Transaction 1: upsert `billing_accounts` (provider `stripe`, currency `DEFAULT_CURRENCY`); if an open conversion session exists with the same plan/interval/seats → return it (idempotent by content); otherwise expire the old one and its `incomplete` subscription; insert `incomplete` subscription and seat item, `checkout_sessions` (`purpose = conversion`). Outside the transaction: `EnsureCustomer` (`bsub:<id>:customer`), `CreateHostedCheckout` (`bsub:<id>:checkout`, metadata `tenant_id`, `billing_subscription_id`, `purpose=conversion`, `expires_at = now + CHECKOUT_TTL`). Transaction 2: store `provider_session_id`. **No events.** The upgrade screen warns that the workspace URL changes and users sign in once more (HLD §8.2 step 1); that copy is the UI's.
+**Side effects.** On the tenant's first checkout, outside any transaction: `EnsureCustomer` (`bsub:<id>:customer`) — `chk_ba_customer` requires the customer id when the account row is inserted; later checkouts reuse the account's customer. Transaction 1: upsert `billing_accounts` (provider `stripe`, currency `DEFAULT_CURRENCY`); if an open conversion session exists with the same plan/interval/seats → return it (idempotent by content). A replaced open session is first made unpayable, outside any transaction (`BIL-CONC-2`, rev 0.59): `ExpireCheckout` on the old provider session (key `bsub:<old billing_subscription_id>:expire`); a session the customer already completed answers `409 SUBSCRIPTION_ALREADY_EXISTS` and nothing is replaced. Then transaction 1 marks the old session `expired` and ends its `incomplete` subscription; it inserts the `incomplete` subscription and seat item, `checkout_sessions` (`purpose = conversion`, `provider_session_id = 'pending:<session_id>'` until the provider session exists). An open session another B-P2 created since the first read is expired at the provider in the same way, once, before transaction 1 is retried. Outside the transaction: `CreateHostedCheckout` (`bsub:<id>:checkout`, metadata `tenant_id`, `billing_subscription_id`, `purpose=conversion`, `expires_at = now + CHECKOUT_TTL`). Transaction 2 re-reads the session under the tenant lock and replaces the placeholder with the provider's `provider_session_id`; if a concurrent B-P2 replaced the session meanwhile, the new provider session is expired at the provider (`bsub:<id>:expire`) and the call answers `409 CONCURRENT_UPDATE` (retry). **No events.** The upgrade screen warns that the workspace URL changes and users sign in once more (HLD §8.2 step 1); that copy is the UI's.
 
-**Status codes**: `201`, `200` (replay), `400`, `403`, `409 SUBSCRIPTION_ALREADY_EXISTS`, `422`, `503 PROVIDER_UNAVAILABLE`, `503 IAM_UNAVAILABLE` (I-11 for the seats-in-use check — fail closed: a checkout below seats in use would create an immediate over-cap tenant).
+**Status codes**: `201`, `200` (replay), `400`, `403`, `409 SUBSCRIPTION_ALREADY_EXISTS`, `409 CONCURRENT_UPDATE`, `422`, `503 PROVIDER_UNAVAILABLE`, `503 IAM_UNAVAILABLE` (I-11 for the seats-in-use check — fail closed: a checkout below seats in use would create an immediate over-cap tenant).
 
 ##### (B-P3) `POST /api/v1/tenants/:id/subscription/plan-change/preview`
 
@@ -1710,7 +1837,7 @@ A downgrade preview calls I-18 so the UI can show the blocker before the user co
 
 **Upgrade** (rank higher): no I-18 call (HLD §8.4). Under the tenant lock: insert `plan_change_requests` (`pending_payment`); outside: `ChangePrice` with the preview's `proration_instant` and pending-update semantics; paid synchronously → apply (§8.4) and return `status: "applied"`; requires action → `client_action`; declined → `402 PAYMENT_DECLINED`, request `failed`. **Event on apply**: `TenantPlanChanged`.
 
-**Downgrade**: I-18 first (§18.2). `allowed: false` → `409 PLAN_CHANGE_BLOCKED`, request row `blocked` with `blocker_codes`; I-18 `503` → `503 IAM_UNAVAILABLE` (never proceed); `400 invalid_target_plan` → `500 INTERNAL` (Billing bug; plans are enums on both sides); `404 tenant_not_found` → `409 TENANT_NOT_KNOWN_TO_IAM` and SEV-3. Allowed → `ScheduleAtPeriodEnd(to_price, same quantity, at = current_period_end)`, request `scheduled`. **No event now**; `TenantPlanChanged` when it takes effect (§8.4). **LLD decision (B-2):** downgrades always take effect at period end.
+**Downgrade**: I-18 first (§18.2). `allowed: false` → `409 PLAN_CHANGE_BLOCKED`, request row `blocked` with `blocker_codes`; I-18 `503` → `503 IAM_UNAVAILABLE` (never proceed); `400 invalid_target_plan` → `500 INTERNAL` (Billing bug; plans are enums on both sides; the IAM client maps it so since rev 0.59, before which it answered `503 IAM_UNAVAILABLE`; an I-11 `400` stays `503 IAM_UNAVAILABLE`); `404 tenant_not_found` → `409 TENANT_NOT_KNOWN_TO_IAM` and SEV-3. Allowed → `ScheduleAtPeriodEnd(to_price, same quantity, at = current_period_end)`, request `scheduled`. **No event now**; `TenantPlanChanged` when it takes effect (§8.4). **LLD decision (B-2):** downgrades always take effect at period end.
 
 Other errors: `409 SAME_PLAN`, `409 PLAN_CHANGE_PENDING`, `409 SUBSCRIPTION_NOT_ACTIVE` (`past_due`, `cancelled`), `409 COLLECTION_PAUSED`, `409 PREVIEW_STALE` / `410 PREVIEW_EXPIRED` (upgrade), `409 OPTIMISTIC_LOCK_CONFLICT`, `409 PROVIDER_OPERATION_UNSUPPORTED` (`manual`).
 
@@ -1816,7 +1943,7 @@ Read live from the provider (`ListPaymentMethods`); `id` is the provider ref tru
 
 ##### (B-P16) `POST /api/v1/tenants/:id/payment-methods/setup-session`
 
-`{}` (Idempotency-Key required) → `201 {"setup_url": "https://checkout.stripe.com/c/pay/cs_…", "expires_at": "…"}`. On completion (`checkout.session.completed`, mode `setup`) Billing makes the new method the customer and subscription default and sets `default_pm_set`. If the subscription is `past_due`, the provider's next retry uses it; the UI also offers B-P14. Owner only (`payment_method.manage`).
+`{}` (Idempotency-Key required) → `201 {"setup_url": "https://checkout.stripe.com/c/pay/cs_…", "expires_at": "…"}`. On completion (`checkout.session.completed`, mode `setup`) the handler marks the session `completed`. The lifecycle follow-up worker then reads the session's new payment method from the provider. Outside any transaction (`BIL-CONC-2`), it makes that method the default for the customer and its `active`/`past_due` subscriptions (idempotency key `pmdefault:<session_id>`). Under the tenant lock it then sets `default_pm_set` and `checkout_sessions.default_applied_at`. A provider failure is retried on the next pass. If the subscription is `past_due`, the provider's next retry uses it; the UI also offers B-P14. Owner only (`payment_method.manage`).
 
 ##### (B-P17) `GET /api/v1/tenants/:id/invoices`
 
@@ -1881,7 +2008,7 @@ For a purchase in `requires_action` with `client_action.type = payment_session`,
 
 ##### (B-P24) `GET /api/v1/tenants/:id/subscription/history`
 
-Paginated rows of `subscription_status_history` (`occurred_at`, `from_status`, `to_status`, `from_plan`, `to_plan`, `from_seats`, `to_seats`, `cause` with the provider type stripped to a label, `actor` = `"you"` / `"an administrator"` / `"system"` — no operator identity or free text is shown to tenants).
+Paginated rows of `subscription_status_history` (`occurred_at`, `from_status`, `to_status`, `from_plan`, `to_plan`, `from_seats`, `to_seats`, `cause` with the provider type stripped to a label, `actor` = `"you"` / `"an administrator"` / `"system"` — no operator identity or free text is shown to tenants). The cursor is an opaque offset (limit ≤ 500); keyset paging on (`occurred_at`, id) is planned if history volume grows (rev 0.36).
 
 ##### (B-P25) / (B-P26) Billing contact
 
@@ -1906,7 +2033,7 @@ This **publishes** the contract HLD §10.6 marked indicative and the Signup BFF 
 |---|---|
 | `Idempotency-Key` | Required; must equal `charge:<tenant_id>` (SB-INV-3) — `400 VALIDATION_ERROR` otherwise |
 | `x-tenant-id` | The pre-allocated `tenant_id`; must equal the body (`400 TENANT_MISMATCH`) |
-| `X-Forwarded-Client-Cert` | Set by the Istio sidecar from the verified mTLS client certificate (never by the caller: the sidecar sanitises and sets it). Billing reads the SPIFFE URI of the last element and requires `cluster.local/ns/bff/sa/bff-signup` (`BIL-AUTH-3`); missing or other → `403 INSUFFICIENT_ROLE` |
+| `X-Forwarded-Client-Cert` | The Istio sidecar's inbound listener appends the verified mTLS client certificate as the last element (`APPEND_FORWARD`, the sidecar default); `PeerAuthentication STRICT` keeps a plaintext caller from supplying that element itself (§13.1, rev 0.59). Billing reads the SPIFFE URI of the last element and requires `cluster.local/ns/bff/sa/bff-signup` (`BIL-AUTH-3`); missing or other → `403 INSUFFICIENT_ROLE` |
 
 **Request**
 
@@ -1935,16 +2062,22 @@ Unknown fields are tolerated (forward compatibility with the BFF).
 | `402 PAYMENT_DECLINED` | `{"errorCode": "PAYMENT_DECLINED", "decline_reason": "insufficient_funds"}` — `decline_reason` ∈ `card_declined`, `insufficient_funds`, `expired_card`, `incorrect_cvc`, `processing_error`, `authentication_failed`, `other` | Nothing payable created; the incomplete provider subscription is cancelled; Billing subscription `ended` (`cancel_reason = signup_failed`). BFF maps to `422 PAYMENT_DECLINED` for the browser |
 | `402 PAYMENT_ACTION_REQUIRED` **(adopted)** | `{"errorCode": "PAYMENT_ACTION_REQUIRED", "action": {"type": "3ds", "client_secret": "pi_…_secret_…"}, "billing_subscription_id": "0193…", "expires_at": "2026-11-13T10:35:00Z"}` | The card needs customer authentication. The browser completes it with the provider's JS using `client_secret`; the BFF then **retries with the same `Idempotency-Key` and body**. Billing re-reads the payment and answers `201` (succeeded), `402 PAYMENT_DECLINED` (failed) or `402 PAYMENT_ACTION_REQUIRED` again (still pending) |
 | `410 CHARGE_EXPIRED` | — | 3-D Secure not completed within `SCA_ABANDON_AFTER` (30 min); provider subscription cancelled; Billing subscription `ended`. BFF starts over with a fresh signup |
-| `409 SUBSCRIPTION_ALREADY_EXISTS` | `{"billing_subscription_id": "0193…"}` | Same `tenant_id` with a different key or body. BFF treats the returned id as the result only if its own record matches (SGN-2 behaviour) |
+| `409 SUBSCRIPTION_ALREADY_EXISTS` | `{"billing_subscription_id": "0193…"}` | Same `tenant_id` with a different key or body, or a live subscription that this attempt did not create. The BFF **never provisions with the returned id** (BL-OQ-8 reply, 2026-11-27): it answers the browser `409 INVALID_STATE`, keeps the attempt and does not call RP-2 |
+| `409 REQUEST_IN_PROGRESS` | `Retry-After` | The first call with this key is still running. Retry with the same key and body after `Retry-After` |
+| `409 PROVIDER_OPERATION_UNSUPPORTED` | — | The new-account provider (`NEW_ACCOUNT_PROVIDER`) cannot charge off-session (for example `manual`). A Billing configuration fault, never the user's: the BFF treats it as unexpected (500 to the browser, attempt kept) |
+| `422 CURRENCY_MISMATCH` | — | A billing account already exists for this tenant (from an earlier attempt) in another currency. Not reachable while the BFF sends no `currency` and `DEFAULT_CURRENCY` is unchanged; the BFF treats it as unexpected (500, attempt kept) |
 | `400 VALIDATION_ERROR` / `400 TENANT_MISMATCH` | `validationErrors[]` | Fix the request |
+| `403 INSUFFICIENT_ROLE` | — | Caller is not `cluster.local/ns/bff/sa/bff-signup`, or the sidecar did not forward the client certificate |
 | `422 PRICE_NOT_AVAILABLE` | — | Plan/interval/currency has no price |
 | `503 PROVIDER_UNAVAILABLE` / `503 DB_UNAVAILABLE` | `Retry-After` | Safe to retry with the same key |
+
+The BFF keeps the attempt, and so the key and body, on every reply that is not a definite "nothing was charged" (timeouts, `5xx`, `REQUEST_IN_PROGRESS`, unexpected replies) and drops it only on `PAYMENT_DECLINED`, `CHARGE_EXPIRED` and `PRICE_NOT_AVAILABLE`. Billing can therefore see repeat calls with the same key after an outcome the BFF could not read; the stored-outcome replay answers them. The BFF sends only the four required fields and a W3C `traceparent` header.
 
 **Processing**
 
 1. Claim `idempotency_records (tenant_id, 'B-I1', key)`; `completed` with equal hash → replay; different hash → `409 SUBSCRIPTION_ALREADY_EXISTS` (the HLD's code for this case, not `422`); `in_flight` and lock unexpired → `409 REQUEST_IN_PROGRESS`.
-2. Transaction 1: insert `billing_accounts` (if absent; a present account for this tenant with a live subscription → `409 SUBSCRIPTION_ALREADY_EXISTS`), `subscriptions` (`incomplete`, `origin = direct_signup`, new UUID v7 `billing_subscription_id`), seat item.
-3. Provider calls, each with a deterministic key: `EnsureCustomer` (`bsub:<id>:customer`), `AttachDefaultPaymentMethod` (`bsub:<id>:pm`), `CreateSubscription` (`bsub:<id>:create`, `payment_behavior = default_incomplete`), `ConfirmInitialPayment` (`bsub:<id>:confirm`, off-session).
+2. If the tenant has no account yet: `EnsureCustomer` (`bsub:<id>:customer`) outside any transaction, because `chk_ba_customer` requires the customer id on insert. Transaction 1: insert `billing_accounts` (if absent; a present account for this tenant with a live subscription → `409 SUBSCRIPTION_ALREADY_EXISTS`), `subscriptions` (`incomplete`, `origin = direct_signup`, new UUID v7 `billing_subscription_id`), seat item.
+3. Provider calls, each with a deterministic key: `AttachDefaultPaymentMethod` (`bsub:<id>:pm`), `CreateSubscription` (`bsub:<id>:create`, `payment_behavior = default_incomplete`), `ConfirmInitialPayment` (`bsub:<id>:confirm`, off-session).
 4. Outcome `paid` → Transaction 2: subscription `active`, `payment_confirmed_at`, period from the provider; saga `direct_signup` in `awaiting_tenant_converted` with `payment_confirmed_at = now()`; `invoice_links`; history row; idempotency record `completed` with the `201` body. **No `billing.events`**: the tenant becomes paid in IAM through `TenantConverted(direct_signup=true)`; seats follow on saga confirmation (§8.3).
 5. Outcome `requires_action` → idempotency record stays `in_flight` with `locked_until = now()` (so the retry is processed), purchase data kept; return `402 PAYMENT_ACTION_REQUIRED`.
 
@@ -2036,7 +2169,7 @@ Window ≤ 35 days; one queued/running run per provider (`409 RECONCILIATION_RUN
 { "reversal_status": "reverted", "rp_response": { "realm": "trial" }, "refund_id": "0193…" }
 ```
 
-Preconditions: subscription `active`/`past_due` with `converted_at` ≤ 7 days ago (`409 REVERT_WINDOW_EXPIRED` locally; RP enforces the same rule with `409 revert_window_expired`). Calls RP-4 (§8.2). AL-5 `billing.conversion.reverted` (requested, BL-OQ-10).
+Preconditions: subscription `active`/`past_due` with `converted_at` ≤ 7 days ago (`409 REVERT_WINDOW_EXPIRED` locally; RP enforces the same rule with `409 revert_window_expired`). Calls RP-4 (§8.2). On success the final commit ends the subscription and returns the account to `iam_lifecycle = 'trial'`, so B-P2 accepts a new conversion (rev 0.46). AL-5 `billing.conversion.reverted` (requested, BL-OQ-10).
 
 ##### (B-O9) `POST /api/v1/operator/tenants/:id/conversion-sagas/:saga_id/actions`
 
@@ -2058,7 +2191,7 @@ Preconditions: subscription `active`/`past_due` with `converted_at` ≤ 7 days a
   "reason": "BIZ-1 pack sizes approved" }
 ```
 
-`201` with the row. The current row for the key gets `effective_to = effective_from` of the new one in the same transaction; overlapping ranges fail on the exclusion constraint (`409 PRICE_OVERLAP`). The adapter verifies the provider price exists, is active and has the same amount and currency (`422 PROVIDER_PRICE_MISMATCH`).
+`201` with the row. The current row for the key gets `effective_to = effective_from` of the new one in the same transaction; overlapping ranges fail on the exclusion constraint (`409 PRICE_OVERLAP`). Before the write, `VerifyPrice` (§3.4, outside any transaction) checks that the provider price exists and is active, and that its amount, currency and recurring interval match the row (one-off for a token pack). Otherwise the call fails with `422 PROVIDER_PRICE_MISMATCH`; `manual` rows are not checked. The row and its AL-5 `billing.price_book.changed` entry commit in one `billing_system` transaction (`BIL-AUD-1`).
 
 ##### (B-O13) `POST /api/v1/operator/billing/webhook-events/:provider/:provider_event_id/replay`
 
@@ -2194,7 +2327,7 @@ Core's I-11 reads Postgres on every call (its `om:seat_usage` key is declared bu
 ---
 ## 7. Event Architecture
 
-Billing publishes on one topic (`billing.events` / SNS `billing-events`) and consumes from two queues it owns (`tenant-billing-q`, `usage-billing-q`). Conventions are the platform's (HLD §9.1, §9.3): SNS fan-out to one SQS queue per consumer, `<queue>-dlq` with `maxReceiveCount=5`, SNS filter on the `EventType` message attribute, SQS queue policy restricted to the topic ARN (`aws:SourceArn`). **`membership-billing-q` no longer exists** (CD-54; IAM-1 removed the seat-overage events; SRE-7 removes any provisioned copy).
+Billing publishes on one topic (`billing.events` / SNS `billing-events`) and consumes from two queues it owns (`tenant-billing-q`, `usage-billing-q`). The `usage-billing-q` consumer starts only with `USAGE_BILLING_CONSUMER_ENABLED=true` (default `false`, until BL-OQ-24 closes); `tenant-billing-q` always runs. Conventions are the platform's (HLD §9.1, §9.3): SNS fan-out to one SQS queue per consumer, `<queue>-dlq` with `maxReceiveCount=5`, SNS filter on the `EventType` message attribute, SQS queue policy restricted to the topic ARN (`aws:SourceArn`). **`membership-billing-q` no longer exists** (CD-54; IAM-1 removed the seat-overage events; SRE-7 removes any provisioned copy).
 
 ### 7.1 Inbound — SQS consumers
 
@@ -2413,7 +2546,7 @@ Webhooks arrive at B-W1, are verified and written to `payment_event_ledger`, the
 | Stripe event | Normalised kind | Handler (§8 reference) |
 |---|---|---|
 | `checkout.session.completed` (`mode=subscription`) | `checkout_completed` | Link `provider_subscription_id` to the Billing subscription named in metadata (cross-checked, `BIL-PAY-3`); session `completed`; wait for `invoice_paid` (§8.1) |
-| `checkout.session.completed` (`mode=setup`) | `payment_method_set` | Set default PM on customer and subscription; `default_pm_set = true` (B-P16) |
+| `checkout.session.completed` (`mode=setup`) | `payment_method_set` | Complete the session; the lifecycle follow-up sets the default PM on customer and subscriptions and `default_pm_set = true` (B-P16) |
 | `checkout.session.completed` (`mode=payment`, add-on) | `checkout_completed` | Link the add-on invoice; wait for `invoice_paid` |
 | `checkout.session.expired` | `checkout_expired` | Session `expired`; its `incomplete` subscription `ended` (§8.1.3) |
 | `invoice.created`, `invoice.finalized`, `invoice.updated`, `invoice.voided`, `invoice.marked_uncollectible` | `invoice_updated` | Upsert invoice mirror if `provider_updated_at` is newer |
@@ -2429,7 +2562,7 @@ Webhooks arrive at B-W1, are verified and written to `payment_event_ledger`, the
 | `customer.updated`, `payment_method.attached`, `payment_method.detached` | `customer_updated` | Refresh `default_pm_set` |
 | any other type | `ignored` | Ledger `ignored:unhandled_type` |
 
-The Stripe endpoint is registered with exactly the types above (`scripts/stripe-fixtures.sh` configures it), so unhandled types are rare.
+The Stripe endpoint is registered with exactly the types above, so unhandled types are rare. The script that configures it (`stripe-fixtures.sh`) is not in the repository yet; until it is, the endpoint is set up by hand and `scripts/check-first-deploy.sh` step 4 checks its event types (§19.1).
 
 **Provider-callback invariants:**
 
@@ -2440,6 +2573,8 @@ The Stripe endpoint is registered with exactly the types above (`scripts/stripe-
 | BIL-PAY-3 | The tenant is resolved from Billing's `(provider, provider_customer_id)` mapping. Metadata (`tenant_id`, `billing_subscription_id`) only cross-checks; a mismatch marks the row `failed:metadata_mismatch` and raises SEV-3. |
 | BIL-PAY-4 | **Re-read, don't trust.** For every kind that changes state the processor calls `FetchCurrent` and applies the provider's current object, not the payload snapshot; a transition not allowed from Billing's current state is `ignored:<reason>`. Out-of-order callbacks therefore converge (HLD §4.1). |
 | BIL-PAY-5 | Callbacks for one tenant are processed in `provider_created_at` order (claim query orders per tenant and skips a tenant that has an earlier row in `processing`). |
+| BIL-PAY-6 | One provider invoice settles at most one purchase or plan change. An invoice Billing looked up with `FindInvoice` (§8.5.1) that is already recorded on another seat purchase, plan change or add-on purchase is never voided, deleted or settled for this one; the check is repeated under the tenant lock before the purchase is settled or closed (rev 0.60). |
+| BIL-PAY-7 | A purchase is granted only when the re-read invoice's amount paid (or its total, when part was paid from the customer balance) and currency equal the purchase's. Otherwise it is not granted and the SEV-2 log alert `BillingPaymentParked` fires; from a callback the ledger row is parked `failed:invoice_amount_mismatch` (no retry), from `purchase-expiry` or a decline the purchase is closed as unpaid (expired or failed). The operator refunds or re-bills in the provider (`operator-review.md`) (rev 0.60). **Known limit:** the synchronous paid responses of `ChargeOneOff`, `ChangeQuantity` and `ChangePrice` are not amount-checked (the port results carry no amount); the request built the charge from the purchase's own amount. |
 
 ### 7.5 Event timing and ordering
 
@@ -2468,7 +2603,7 @@ The Stripe endpoint is registered with exactly the types above (`scripts/stripe-
 | `channels` | `billingEvents` (send: the six types of §7.3.2 with the SNS subscribers table as `x-subscribers`); `tenantBilling` (receive: four RP types with the filter); `usageBilling` (receive: `UsagePeriodClosed`) |
 | `components.schemas` | `BillingEnvelopeBase` (required `id`, `type`, `specversion`, `source` const `commercial-billing`, `subject`, `tenant_id`, `time`, `data`); the six produced payloads (§7.3); consumed payloads copied from RP's and Usage & Metering's AsyncAPI, open |
 
-Served at `GET /asyncapi` and `GET /asyncapi.yaml`. CI: `schema-gov validate`, `extract --check`, `diff` (breaking-change gate against the registry), and a contract test that validates Billing's produced payloads against **Core's, RP's and Audit's consumed schemas** taken from their repos (§14.3).
+Served at `GET /asyncapi` and `GET /asyncapi.yaml`. CI: `schema-gov validate`, `extract --check`, `diff` (breaking-change gate against the registry), and a contract test that validates Billing's produced payloads against **Core's, RP's, Audit's and Entitlements' consumed schemas** taken from their repos (§14.3).
 
 ---
 ## 8. Key Request Flows
@@ -2502,8 +2637,8 @@ sequenceDiagram
 
 1. **B-P2** validates (§5.4.1) and creates the `incomplete` subscription and hosted session. Seats must cover current users and invitations (fail closed on I-11 `503`).
 2. Card entry happens only on the provider page; Billing never sees card data (`BIL-PCI-2`).
-3. `checkout.session.completed` links the provider subscription (cross-checked against Billing's customer mapping, `BIL-PAY-3`).
-4. `invoice.paid` for the subscription's first invoice, re-read (`BIL-PAY-4`), confirms payment. Commit: subscription `active`, `payment_confirmed_at`, period from the provider, `licensed_seats` = purchased quantity, history row, saga `trial_conversion` created directly in `rp_convert_pending` with `payment_confirmed_at = now()`, `rp_idempotency_key = convert:<tenant_id>:<billing_subscription_id>`, `next_attempt_at = now()`. **No `billing.events`**: the tenant becomes paid in IAM through RP's `TenantConverted`, not through a Billing event; the seat count follows after confirmation (§8.1.2 step 4).
+3. `checkout.session.completed` links the provider subscription (cross-checked against Billing's customer mapping, `BIL-PAY-3`). If the re-read session's invoice is already `paid`, this callback confirms the payment itself (step 4), whatever the order and fate of `invoice.paid` (§9.4, rev 0.59). A completion of a session Billing expired (superseded by a later B-P2, §5.4.1, or lapsed) is **not** linked. Since rev 0.60 it is parked only when its Billing subscription is `ended` or linked to a different provider subscription; a completion naming the provider subscription already linked (`invoice.paid` was processed first and confirmed the payment) is `ignored:already_linked`. When parked, the ledger row becomes `failed:checkout_superseded` with no retry and the SEV-2 log alert `BillingPaymentParked` is raised; the operator cancels the stray provider subscription and refunds its payment in the provider dashboard (runbook `operator-review.md`).
+4. `invoice.paid` for the subscription's first invoice, re-read (`BIL-PAY-4`), confirms payment. If the provider subscription is not linked yet (`invoice.paid` processed before step 3), Billing resolves its subscription from `billing_subscription_id` in the provider subscription's metadata on the re-read invoice (read under the tenant's RLS; tenant from the customer mapping), links it and confirms (rev 0.59). A resolved subscription that is `ended` (a superseded or expired checkout paid anyway) → `failed:paid_after_end`, SEV-2 `BillingPaymentParked`, as in step 3. No usable metadata (every provider subscription Billing creates carries it, so this is one created outside Billing) → `ignored:unknown_subscription`. A Billing subscription already linked to a different provider subscription (a late payment on a provider subscription a reactivation replaced) → `ignored:superseded_provider_subscription` with a warning, nothing mirrored; the exception is the first invoice (`subscription_create`) of a `cancelled` subscription, which stays retryable until the B-P14 reactivation's checkout completion links it. Any other live subscription without a link (a direct signup not yet committed) is a retryable error, so the callback is applied once step 3 has linked it (rev 0.60). Confirming the payment here also marks the conversion's open checkout session `completed`, so `purchase-expiry` never expires a paid session, whichever of `invoice.paid` and `checkout.session.completed` comes first (rev 0.60). Commit: subscription `active`, `payment_confirmed_at`, period from the provider, `licensed_seats` = purchased quantity, history row, saga `trial_conversion` created directly in `rp_convert_pending` with `payment_confirmed_at = now()`, `rp_idempotency_key = convert:<tenant_id>:<billing_subscription_id>`, `next_attempt_at = now()`. **No `billing.events`**: the tenant becomes paid in IAM through RP's `TenantConverted`, not through a Billing event; the seat count follows after confirmation (§8.1.2 step 4).
 
 | # | Invariant |
 |---|---|
@@ -2525,11 +2660,11 @@ sequenceDiagram
     alt 200
         RP-->>W: {realm, users_migrated, …}
         W->>W: commit: saga awaiting_tenant_converted, rp_accepted_at
-    else 409 operation_in_progress / 502 conversion_failed / 503 / timeout
+    else 409 operation_in_progress / optimistic_lock_conflict, any 5xx, timeout
         W->>W: commit: attempts++, next_attempt_at = backoff
     else 409 realm_already_dedicated
         W->>W: commit: awaiting_tenant_converted (RP converted earlier for this key) — wait for the event
-    else 409 tenant_offboarded / 403 / 400 / 404
+    else 409 tenant_offboarded / other 409 / 400 / 403 / 404
         W->>W: commit: saga failed, SEV-2 (runbook §20.1)
     end
     RP->>Bus: TenantRealmReady, TenantConverted {billing_subscription_id}
@@ -2548,7 +2683,7 @@ sequenceDiagram
 
 #### 8.1.3 Abandoned checkout
 
-`checkout.session.expired` (Billing sets `expires_at = now + CHECKOUT_TTL`, 1 h) or the `purchase-expiry` job for a session past `expires_at` with no callback: session `expired`; its `incomplete` subscription `ended` (`cancel_reason` stays null — never active); history row `incomplete → ended`. Nothing charged, nothing emitted. A new B-P2 starts fresh.
+`checkout.session.expired` (Billing sets `expires_at = now + CHECKOUT_TTL`, 1 h) or the `purchase-expiry` job for a session past `expires_at` with no callback (the job expires it at the provider first and leaves a session the customer completed open for its callbacks, §13.2, rev 0.60): session `expired`; its `incomplete` subscription `ended` (`cancel_reason` stays null — never active); history row `incomplete → ended`. Nothing charged, nothing emitted. A new B-P2 starts fresh.
 
 #### 8.1.4 Phase 1 operator conversion stub (B-O1)
 
@@ -2580,7 +2715,7 @@ sequenceDiagram
     B->>RP: RP-4 POST /api/v1/internal/tenants/:id/revert-conversion (commercial-system, Idempotency-Key revert:<t>:<s>)
     alt 200
         B->>S: CancelNow, then Refund (unless the dispute already reversed funds)
-        B->>B: commit: subscription ended (operator_reversal), saga reverted, dispute reverted, AL-5
+        B->>B: commit: subscription ended (operator_reversal), saga reverted, dispute reverted, account iam_lifecycle trial, AL-5
     else 409 revert_window_expired
         B-->>Op: 409 REVERT_WINDOW_EXPIRED (late reversion is an operator runbook)
     else 5xx / timeout
@@ -2590,7 +2725,7 @@ sequenceDiagram
 
 1. **Signals.** A dispute with reason `fraudulent`, or an early fraud warning, **on the conversion payment** (the subscription's first invoice) **within 7 days of `converted_at`**. Other disputes are recorded and handled in the provider dashboard; they do not trigger a reversal.
 2. **Decision.** Operator-approved in Phase 1 (B-O8); never automatic. `AUTO_REVERT_ON_EFW` (default `false`) can later allow automatic reversal on early fraud warnings only.
-3. **Effect.** RP-4 returns the tenant to the shared trial realm (RP §8.3). Billing then cancels the provider subscription with no proration, refunds the conversion payment unless the dispute already reversed it, sets the subscription `ended` (`cancel_reason = operator_reversal`), the saga `reverted`, the dispute `reverted`. **Billing emits no `billing.events`**: RP-4 is IAM's lifecycle change; Billing has nothing to project (Core's status follows RP's events). The decision `declined` closes the alert; the dispute continues in the provider.
+3. **Effect.** RP-4 returns the tenant to the shared trial realm (RP §8.3). Billing then cancels the provider subscription with no proration, refunds the conversion payment unless the dispute already reversed it, sets the subscription `ended` (`cancel_reason = operator_reversal`), the saga `reverted`, the dispute `reverted`, and the account's `iam_lifecycle` back to `trial` (rev 0.46): Billing does not consume RP's `TrialReactivated`, so it records RP-4's success itself; `iam_last_event_at` advances to the commit time (`BIL-EVT-3`), and an offboarded account is left unchanged. The tenant can then convert again through B-P2. **Billing emits no `billing.events`**: RP-4 is IAM's lifecycle change; Billing has nothing to project (Core's status follows RP's events). **Plan and seats after a reversal (rev 0.45, BL-OQ-27).** Org & Membership resets both when it applies RP's `TrialReactivated{reason: conversion_revert}`: `plan` back to the tenant's pre-conversion trial plan (Org & Membership records it at conversion) and `licensed_seats` to the trial allowance (T-8); members are kept and the cap only blocks new invites. Billing sends neither: it never knew the trial plan, `TenantPlanChanged` has no trial value and needs a plan-change request as `billing_ref`, and the trial allowance is IAM's rule, not a paid count (`BIL-SEAT-3` floors paid counts only). Resetting inside the projection of RP's own event also keeps Core's shared plan/status recency watermark out of the way. RP-4 carries no plan or seats. **No Billing seat event follows a reversal:** the delayed post-conversion event (`BIL-EVT-6`) is cancelled once the subscription is `ended`, and `seat-projection-check` scans `active` and `past_due` subscriptions only. A seat event committed before the reversal may still be in flight; Org & Membership advances its seat watermark to the reversal time so it is skipped. **Add-ons are not undone** (Finance approved the conversion payment only, BL-OQ-7): the operator refunds any add-on invoice paid since conversion through B-O3 (category `fraud`), which emits `TenantQuotaAddOnChanged{reason: refund}` (`BIL-ADD-4`). The decision `declined` closes the alert; the dispute continues in the provider.
 4. Operator decision `declined` → `revert_decision = declined`, alert resolved, AL-5 entry.
 
 ### 8.3 Direct paid signup (HLD §8.3, §10.6)
@@ -2639,7 +2774,7 @@ sequenceDiagram
 | RP-2 never succeeds (BFF gives up) | No `TenantConverted` → `BillingConversionSagaOverdue` at 30 min | Runbook §20.1: coordinate with the BFF team; if the signup cannot complete, B-O9 `refund` (category `signup_failed`; subscription `ended`, `cancel_reason = signup_failed`) |
 | RP-2 succeeded, BFF I-1 and Core's backstop both failed | Billing's saga is **confirmed** (silent). Core raises `IAMParkedTenantEventsStale` (parked 10 min, still parked 15 min later), routed to Billing on-call as well as IAM (SRE-6) | IAM's runbook re-drives I-1 / the backstop event; if IAM cannot complete the signup, Billing refunds through B-O3 (category `signup_failed`) and an operator closes the subscription (B-O9 `resolved_manually` after the refund) |
 | BFF times out on B-I1 | — | Retry with the same key returns the stored `201` or continues the in-flight request; never a second charge |
-| BFF retries with a different key for the same tenant | `409 SUBSCRIPTION_ALREADY_EXISTS {billing_subscription_id}` | BFF handles as built (SGN-2) |
+| BFF retries with a different key for the same tenant | `409 SUBSCRIPTION_ALREADY_EXISTS {billing_subscription_id}` | The BFF never provisions with that id (`409 INVALID_STATE` to the browser); a live subscription it did not create is investigated, not adopted |
 | 3-D Secure abandoned | `410 CHARGE_EXPIRED` after 30 min; `purchase-expiry` cancels the provider subscription and ends the Billing one | BFF restarts the signup |
 
 ### 8.4 Plan change between paid tiers (HLD §8.4)
@@ -2669,7 +2804,7 @@ sequenceDiagram
     end
 ```
 
-On apply: subscription `plan` and the seat item's `price_id` change; history row; emit `TenantPlanChanged {plan, previous_plan, direction: "upgrade", effective_at, billing_ref: change_id}`. Core updates `tenants.plan`, AuthZ evicts, Entitlements re-reads I-17, Usage & Metering re-renders (HLD §8.4 steps 4–5). Seats never change on a tier change (IAM HLD §8.10.5). A `pending_payment` upgrade whose invoice is not paid within `PURCHASE_ABANDON_AFTER` (30 min) is expired by `purchase-expiry`: the provider pending update lapses, the open invoice is voided, the request `failed`.
+On apply: subscription `plan` and the seat item's `price_id` change; history row; emit `TenantPlanChanged {plan, previous_plan, direction: "upgrade", effective_at, billing_ref: change_id}`. Core updates `tenants.plan`, AuthZ evicts, Entitlements re-reads I-17, Usage & Metering re-renders (HLD §8.4 steps 4–5). Seats never change on a tier change (IAM HLD §8.10.5). A `pending_payment` upgrade whose invoice is not paid within `PURCHASE_ABANDON_AFTER` (30 min) is expired by `purchase-expiry`: the provider pending update lapses, the open invoice is voided, the request `failed` (a paid invoice settles it instead, §8.5.1). A provider error on `ChangePrice` (outcome unknown: the provider may have invoiced and charged) leaves the request `pending_payment`; the `invoice.paid` callback (matched as the proration invoice: subscription, `billing_reason = subscription_update`, amount) or `purchase-expiry` (which looks the invoice up with `FindInvoice`) settles it (rev 0.59). A decline voids the invoice outside the transaction (`planchg:<change_id>:void`).
 
 #### 8.4.2 Downgrade
 
@@ -2746,7 +2881,9 @@ stateDiagram-v2
     confirmed --> [*]
 ```
 
-`failed`, `expired`, `cancelled`: the open invoice is voided and the pending update lapses; `licensed_seats` unchanged (`BIL-SUB-5`).
+`failed`, `expired`, `cancelled`: the open invoice is voided (a draft deleted) and the pending update lapses; `licensed_seats` unchanged (`BIL-SUB-5`).
+
+**Closing a purchase's invoice (rev 0.59, 0.60).** `purchase-expiry` and a decline re-read the invoice with `FetchCurrent` and close it only while it is unpaid: an `open` invoice is voided, a `draft` one is deleted (`DeleteDraftInvoice`; the provider voids only finalised invoices, rev 0.60). A **paid** invoice settles the purchase as its callback would (seats, tokens or plan granted, events emitted), but only when its amount paid (or total) and currency equal the purchase's (`BIL-PAY-7`, rev 0.60): a paid purchase is never `expired` or `failed`, and a paid invoice for another amount or currency is never settled (the purchase is closed as unpaid and SEV-2 `BillingPaymentParked` is logged for an operator). A purchase with no recorded invoice id (a provider error after the charge) is first looked up with `FindInvoice`: a token add-on's one-off invoice by its exact metadata `purchase_id` (created since the purchase's creation less 1 min of clock slack), the proration invoice of a seat purchase or upgrade by subscription, `billing_reason = subscription_update`, amount and currency, and a positive (charged) line for `seats_after` (seats) or the target price (upgrades), created at or after the purchase's own creation time with no backward slack (rev 0.60). A looked-up invoice already recorded on another seat purchase, plan change or add-on purchase is never used, and the check is repeated under the tenant lock before the outcome commits (`BIL-PAY-6`, rev 0.60). The `invoice.paid` callback for an invoice Billing did not record applies the same matching. Declines of add-on, seat and upgrade purchases void the invoice outside the transaction (`BIL-CONC-2`), keys `addon:<purchase_id>:void`, `seatpur:<purchase_id>:void`, `planchg:<change_id>:void`; when the void fails the purchase stays open and `purchase-expiry` closes it. `purchase-expiry` uses `addon:|seatpur:|planchg:<id>:expire`.
 
 #### 8.5.2 Adding a member when no seat is free
 
@@ -2811,7 +2948,7 @@ sequenceDiagram
 
 #### 8.6.3 At renewal
 
-On the cycle `invoice.paid` for the new period:
+The cycle `invoice.paid` for the new period rolls the period in its handler's transaction and leaves an `applying` schedule as it is: the steps below make HTTP calls and so run in the next `seat-renewal` run (every 15 min), outside any transaction (`BIL-CONC-2`), under the tenant lock for each commit:
 
 1. Fresh I-11 again. If `seats_in_use_now > renewal_seats` (members added inside the lead window) → **renewal top-up**: a `seat_purchases` row with `reason = renewal_topup`, `seats_added = seats_in_use_now − renewal_seats`, charged as a purchase (prorated over the new period, so almost the full price) through the same flow as §8.5. If the top-up payment fails, the seats are still kept (Core would otherwise be over cap) and the unpaid invoice follows the normal dunning path (§8.8.1) — **Finance approved (BL-OQ-6, 2026-11-23)**. An unpaid renewal is a receivable problem, not an entitlement reduction. Sequence: renewal invoice generated → payment fails → invoice overdue → standard dunning (§8.8.1) → suspension and lockout only by the existing lapse rules (§8.8.2, §8.8.3). Billing never removes seats automatically; the seat count changes only if the tenant schedules a reduction (§8.6.1).
 2. Commit: seat item `quantity = final_seats` (`renewal_seats` or top-up result); schedule `applied` with `final_seats`; history row; emit `TenantSeatsChanged {licensed_seats: final_seats, reason: "renewal"}`. If `final_seats > target_seats`, the owner is told (B-P1 banner, NTF-3 message).
@@ -2850,7 +2987,7 @@ sequenceDiagram
 ```
 
 1. **Eligibility** (`BIL-ADD-1`) as §5.4.1 B-P20; Entitlements read is fresh and fails closed.
-2. **Charge**: one-off, whole packs, not part of the recurring subscription, no proration (HLD §8.6.2). Stripe invoice item + invoice, `charge_automatically`, off-session on the default PM; `metadata {tenant_id, purpose: token_addon, purchase_id}`.
+2. **Charge**: one-off, whole packs, not part of the recurring subscription, no proration (HLD §8.6.2). Stripe invoice item + invoice, `charge_automatically`, off-session on the default PM; `metadata {tenant_id, purpose: token_addon, purchase_id}`. The invoice is created with `auto_advance = false` (rev 0.60), so a draft whose item could not be attached is never finalised by the provider on its own (an empty draft would become a paid 0 invoice an hour later); paying it finalises it, and an unpaid finalised invoice keeps its hosted page (B-P23). A draft whose item fails is deleted at once (best effort); only when that delete fails is its id returned, recorded on the purchase, and deleted by `purchase-expiry` (§8.5.1).
 3. **Confirmation** (synchronous paid or `invoice.paid`): purchase `confirmed`, `confirmed_at`; emit `TenantQuotaAddOnChanged` with `purchased_at = confirmed_at`; `event_id` stored (`BIL-ADD-2`).
 4. Entitlements adds the pack (idempotent on `billing_ref`), sets its expiry to `purchased_at + 12 months`, recomputes, emits `TenantEntitlementsChanged`; Usage & Metering renders the higher limit and emits `TenantQuotaRestored` once the Gateway acknowledges.
 5. **Activation**: the UI shows "activating" until the usage API shows the higher limit (HLD §8.6.3, FE-10). Billing's share ≤ 5 s p99; the 60 s end-to-end alert is §11.5. During a Usage & Metering outage the purchase stays paid and applies on recovery; the tenant is never asked to pay again.
@@ -2882,7 +3019,7 @@ Triggers: dunning exhausted; a customer cancellation (B-P12) reaching period end
 | From | How the customer settles | Billing action |
 |---|---|---|
 | `past_due` | B-P14 returns the provider-hosted page for the open cycle invoice; or the owner updates the card (B-P16) and the provider's next retry succeeds | Cycle `invoice.paid` on a `past_due` subscription → commit `active`, clear `past_due_since`, emit `TenantReactivated {source: "billing", previous_status: "past_due"}` |
-| `cancelled` (incl. IAM `suspended`/`billing_lapse`) | B-P14 → hosted checkout for the same plan and interval and seats ≥ seats in use | The provider subscription is gone (Stripe cannot revive a deleted one). Billing creates a **new provider subscription linked to the same `billing_subscription_id`** (old provider id kept in history; `origin` unchanged). On its first `invoice.paid`: commit `active`, clear `cancelled_at`/`cancel_reason`, new period; if seats changed emit `TenantSeatsChanged {reason: "reactivation"}` **first**, then `TenantReactivated {source: "billing", previous_status: "cancelled"}` (`BIL-EVT-5`) |
+| `cancelled` (incl. IAM `suspended`/`billing_lapse`) | B-P14 → hosted checkout for the same plan and interval and seats ≥ seats in use | The provider subscription is gone (Stripe cannot revive a deleted one). Billing creates a **new provider subscription linked to the same `billing_subscription_id`** (old provider id kept in history; `origin` unchanged). On its first `invoice.paid`: commit `active`, clear `cancelled_at`/`cancel_reason`, new period; if seats changed emit `TenantSeatsChanged {reason: "reactivation"}` **first**, then `TenantReactivated {source: "billing", previous_status: "cancelled"}` (`BIL-EVT-5`). Only that first invoice (`billing_reason = subscription_create`) reactivates a `cancelled` subscription: a late payment of an old cycle invoice of the deleted provider subscription is mirrored into `invoices` only (outcome `applied:invoice_mirrored`), with no transition and nothing emitted (rev 0.59) |
 | `offboarded` | Not possible | `409 ACCOUNT_CLOSED`; a returning customer signs up again (`BIL-SUB-2`) |
 
 Keeping `billing_subscription_id` stable keeps RP's and Core's references valid. Core restores `active` and clears `cancelled_at` and `suspension_source` (no-op if offboarded, PAID-1); AuthZ evicts; RP re-enables a suspended realm from `billing-realm-q`; Entitlements returns to `active`; Workflow resumes (W-1). **Billing never calls RP-10** (`403` by CD-19; HLD §8.9).
@@ -2944,7 +3081,14 @@ Keeping `billing_subscription_id` stable keeps RP's and Core's references valid.
 | Provider object with Billing metadata but no Billing row | `orphan_provider_object` | No |
 | Ledger rows `failed:unknown_customer` in window | `unknown_customer` | No |
 
-3. Status `completed` with `counts`; one AL-5 `commercial.cross_tenant_job.ran` entry under `platform_tenant`; findings not repaired → `BillingReconciliationDrift` after 24 h (§11.5). Phase 2 adds a nightly CronJob with the same code.
+**Auto-repair (rev 0.37; report-only in the Phase 6 build, rev 0.36).**
+- A missing event is ledgered from the provider's event listing, normalised as a delivery would be. The processor then applies it.
+- A `status_mismatch` where the provider has ended the subscription is repaired with a ledger row `recon:<run_id>:<provider_object_id>` (`event_type = reconciliation.reread`, kind `subscription_ended`). The processor re-reads that object and applies it (`BIL-PAY-4`). Other status mismatches are reported; the next callback or a replay (B-O13) applies them.
+- A missing invoice is fetched and mirrored.
+
+A repair failure is noted on the finding (`repair_note`) and never fails the run. `counts.repaired` is the number of findings repaired.
+
+3. Status `completed` with `counts`; one AL-5 `commercial.cross_tenant_job.ran` entry under `platform_tenant`, committed in the same `billing_system` transaction as the run's completion (`BIL-AUD-1`); findings not repaired → `BillingReconciliationDrift` after 24 h (§11.5). Phase 2 adds a nightly CronJob with the same code.
 
 ### 8.14 Subscription state machine
 
@@ -2986,7 +3130,7 @@ RETURNING p.*;
 ```
 
 3. **Process** — bind the tenant on the app pool, `FetchCurrent` (`BIL-PAY-4`), dispatch per §7.4, commit domain change + outbox + ledger outcome (`processed` with `outcome`). A row whose `claimed_until` passes without completion is reclaimable.
-4. **Errors** — transient (provider `5xx`, DB) → `failed`, `next_attempt_at` = backoff (1 s … 5 min); after `WEBHOOK_MAX_ATTEMPTS` (10) stays `failed` with SEV-3 and is replayed by runbook (§20.2, B-O13). `unknown_customer` → `failed` immediately (no retry).
+4. **Errors** — transient (provider `5xx`, DB) → `failed`, `next_attempt_at` = backoff (1 s … 5 min); after `WEBHOOK_MAX_ATTEMPTS` (10) stays `failed` with SEV-3 and is replayed by runbook (§20.2, B-O13). `unknown_customer` → `failed` immediately (no retry). **Parked for an operator (rev 0.59):** `failed:checkout_superseded` (a completion or payment of a checkout session Billing expired) and `failed:paid_after_end` (a first-invoice payment for a subscription already `ended`) are written immediately with no retry, the handler's transaction rolled back, and raise the SEV-2 log alert `BillingPaymentParked` (§8.1.1, `BIL-OPS-6`); a B-O13 replay parks them again while the subscription stays `ended`. **Rev 0.60:** `failed:invoice_amount_mismatch` (an `invoice.paid` for a seat purchase, upgrade or token add-on whose amount paid or currency differs from the purchase's, `BIL-PAY-7`) is parked the same way and nothing is granted. An unlinked `invoice.paid` (§8.1.1 step 4) whose provider subscription carries no usable `billing_subscription_id` metadata is `ignored:unknown_subscription`; one whose Billing subscription is linked to a different provider subscription is `ignored:superseded_provider_subscription` (warning log, nothing mirrored), except the first invoice (`subscription_create`) of a `cancelled` subscription, which stays retryable while a B-P14 reactivation awaits its link. The claim above still skips only tenants with a row in `processing`: `failed` rows (parked or awaiting retry) do not block later callbacks of the tenant, and convergence comes from each handler's re-read (`BIL-PAY-4`), not from strict order.
 5. **Target** — received → processed < 10 s p95.
 
 ### 8.16 Price change for live subscriptions (BL-OQ-16)
@@ -3006,9 +3150,11 @@ RETURNING p.*;
 
 **Mechanism (Commercial Team; acknowledged by Product and Finance 2026-11-23).** A provider subscription stays on its provider Price until Billing changes it, so without a step at renewal every existing customer would be grandfathered indefinitely. No grandfathering field or price override is added; one job moves subscriptions at renewal.
 
+**Phase 6 build (rev 0.36; superseded in Phase 7, rev 0.37).** `renewal-repricing` ships in Phase 7. Until it does, a renewal keeps the committed price: the seat item's current provider price. A new price row affects only new checkouts and upgrades. Before Phase 7 goes live, existing subscriptions are not moved.
+
 1. **`renewal-repricing`** (CronJob, hourly at `:20`) selects live subscriptions (`active`, `past_due`; not `auto_renew = false`) where the seat item's price differs from the **target row**: the `plan_prices` row effective at `R = current_period_end` for the item's plan, interval, currency and provider. Subscriptions with `R − now() < REPRICE_CUTOFF` (1 h) are skipped this period and moved at the following renewal.
 2. **Schedule.** `ScheduleAtPeriodEnd {ToPriceRef: target, ToQuantity: current quantity, At: R}`. The Stripe adapter updates the subscription's existing schedule if one exists, so a scheduled seat reduction (§8.6.2) or downgrade (§8.4.2) is kept. Every `ScheduleAtPeriodEnd` call, from any flow, sets `ToPriceRef` to the row effective at `R` for the plan that will be current at `R` (`BIL-SUB-8`). A downgrade therefore already renews at the target plan's new price, and a released schedule (blocked downgrade, §8.4.2) is re-created by the next run.
-3. **Record.** Commit `subscription_items.scheduled_price_id`, `scheduled_price_at = R`; history row; outbox message for the notice (BL-OQ-12). The job is idempotent: a subscription already scheduled to the target row is skipped; a newer row added before the cutoff replaces the schedule.
+3. **Record.** Commit `subscription_items.scheduled_price_id`, `scheduled_price_at = R`; history row. The notice message waits for BL-OQ-12 (NTF-3): until an event is agreed none is emitted, and B-P1 shows `scheduled_unit_price` (rev 0.37). The job is idempotent: a subscription already scheduled to the target row is skipped; a newer row added before the cutoff replaces the schedule.
 4. **At renewal.** On the cycle `invoice.paid` whose line uses the new price: seat item `price_id = scheduled_price_id`, scheduled columns cleared, history row. **No bus event to IAM**: the plan is unchanged, so there is nothing for Core or Entitlements to project.
 5. **`manual` subscriptions** (operator stub) get the same item change at `R`; they are invoiced outside the product.
 6. **Metric:** `commercial_billing_repricing_scheduled_total{direction}` (`increase`\|`decrease`).
@@ -3045,7 +3191,8 @@ if cmd.RowsAffected() == 0 {
 | Same key, different body | — | — | `422 IDEMPOTENCY_KEY_REUSED`; **B-I1 only**: `409 SUBSCRIPTION_ALREADY_EXISTS` (HLD §10.6) |
 | Key in flight | — | `state = in_flight`, `locked_until` (30 s) | `409 REQUEST_IN_PROGRESS`, `Retry-After: 2`; after `locked_until`, the next request re-runs the operation, which is itself idempotent at the provider |
 | Seat / plan / add-on purchase | `purchase_id` / `change_id` | Row PK + `uq_*_key (tenant_id, idempotency_key)` | One row per key |
-| Provider call | `bsub:<id>:customer`, `…:pm`, `…:create`, `…:confirm`, `…:checkout`, `seatpur:<purchase_id>`, `planchg:<change_id>`, `addon:<purchase_id>`, `refund:<refund_id>`, `adj:<adjustment_id>`, `sched:<schedule_id>`, `cancel:<billing_subscription_id>:<n>` | Provider (Stripe keys valid 24 h) | After 23 h Billing never retries the same key; it re-reads the provider object instead |
+| Add-on purchase, adjustment, refund (B-P20, B-O2, B-O3) | client `Idempotency-Key` on the row (`uq_qap_key`, `uq_adj_key`, `uq_ref_key`) | The row | A retry under the same key (the first attempt's `5xx` released the idempotency record) resumes that row and its provider key (`addon:<purchase_id>`, `adj:<adjustment_id>`, `refund:<refund_id>`); a different body → `422 IDEMPOTENCY_KEY_REUSED`. The resume compares every body field that reaches the provider or the row, since a different one under the same provider key would be a provider idempotency mismatch: add-on `pack_code`, `pack_quantity`; adjustment kind, amount, currency, description, reason; refund invoice, amount, currency, category, reason (rev 0.60); a concurrent insert of the same key → `409 REQUEST_IN_PROGRESS`; a row older than 23 h is not replayed at the provider (the add-on and refund return the row as it stands for the callback, `purchase-expiry` or reconciliation to settle; an adjustment answers `409 REQUEST_IN_PROGRESS`) (rev 0.59) |
+| Provider call | `bsub:<id>:customer`, `…:pm`, `…:create`, `…:confirm`, `…:checkout`, `bsub:<id>:expire` (and `checkout:<session_id>:expire` for a session with no subscription), `seatpur:<purchase_id>`, `planchg:<change_id>`, `addon:<purchase_id>`, `addon:|seatpur:|planchg:<id>:void` (decline) and `…:expire` (`purchase-expiry`), `refund:<refund_id>`, `adj:<adjustment_id>`, `sched:<schedule_id>`, `cancel:<billing_subscription_id>:<n>` | Provider (Stripe keys valid 24 h) | After 23 h Billing never retries the same key; it re-reads the provider object instead |
 | Provider callback | `(provider, provider_event_id)` | Ledger PK | Duplicate insert → `200`, no work |
 | Consumed bus event | envelope `id` × consumer | `processed_events` via `pkg/inbox` | Claim is the first statement of the handler's transaction |
 | RP-3 / RP-4 | `convert:<tenant_id>:<billing_subscription_id>` / `revert:<tenant_id>:<billing_subscription_id>` | RP `provisioning_operations` | RP replays its stored result |
@@ -3069,8 +3216,8 @@ stateDiagram-v2
     [*] --> awaiting_tenant_converted: B-I1 paid (direct signup)
     payment_confirmed --> rp_convert_pending: same commit (next_attempt_at = now)
     rp_convert_pending --> awaiting_tenant_converted: RP-3 200 / 409 realm_already_dedicated
-    rp_convert_pending --> rp_convert_pending: 409 operation_in_progress, 502, 503, timeout (backoff)
-    rp_convert_pending --> failed: 409 tenant_offboarded, 400, 403, 404
+    rp_convert_pending --> rp_convert_pending: 409 operation_in_progress / optimistic_lock_conflict, any 5xx, timeout (backoff)
+    rp_convert_pending --> failed: 409 tenant_offboarded, other 409, 400, 403, 404
     rp_convert_pending --> confirmed: TenantConverted (arrived before the RP response)
     awaiting_tenant_converted --> confirmed: TenantConverted
     failed --> rp_convert_pending: B-O9 retry
@@ -3102,10 +3249,12 @@ stateDiagram-v2
 | `200` | Converted (or replay of a finished conversion for this key) | → `awaiting_tenant_converted` |
 | `409 operation_in_progress` | Conversion still running detached (≤ `CONVERT_TIMEOUT` 10 min) or a concurrent duplicate | Stay; backoff; same key |
 | `502 conversion_failed` / `502 keycloak_unavailable` | Compensated; shared realm still authoritative; retryable | Stay; backoff |
-| `503 db_unavailable` / `request_timeout`, transport error, client timeout | Retryable | Stay; backoff |
+| `409 optimistic_lock_conflict` | RP lost a concurrent write (rev 0.59) | Stay; backoff; same key |
+| Any `5xx` (`503 db_unavailable` / `request_timeout` and others), transport error, client timeout | Retryable (every `5xx` since rev 0.59) | Stay; backoff |
 | `409 realm_already_dedicated` | The tenant is already on a dedicated realm (an earlier attempt converted; a lost response) | → `awaiting_tenant_converted`; if no `TenantConverted` with this `billing_subscription_id` arrives in 30 min the alert fires and the operator checks RP |
 | `409 tenant_offboarded` | Terminal | → `failed`; SEV-2; operator refunds |
 | `400` (incl. `missing_idempotency_key`), `403` (`tenant_mismatch`, CD-19 refusal), `404 tenant_realm_not_found` | Billing bug, admission or data problem | → `failed`; SEV-2 |
+| Any other `409` (e.g. `realm_name_unavailable`, `credential_replay_expired`) or other `4xx` | Unexpected; retrying cannot help | → `failed`; SEV-2; the operator looks at it |
 
 ### 9.4 Provider-webhook ordering and replay
 
@@ -3148,11 +3297,12 @@ stateDiagram-v2
 
 | # | Invariant |
 |---|---|
-| BIL-OPS-5 | A saga not `confirmed` 30 minutes after payment confirmation always pages, once. |
-| BIL-OPS-6 | Every `failed` ledger row is retried to success, set `ignored` by an operator replay with a reason, or listed by the next reconciliation run. |
+| BIL-OPS-5 | A saga not `confirmed` 30 minutes after payment confirmation always pages, once. `saga-sweeper` raises the overdue alerts (each under the tenant lock, `BIL-CONC-1`) **before** it re-runs due sagas, so a hung Realm Provisioner cannot push the page past the job's deadline; the re-runs get at most 80 % of the job's remaining time (rev 0.59). |
+| BIL-OPS-6 | Every `failed` ledger row is retried to success, set `ignored` by an operator replay with a reason, or listed by the next reconciliation run. A row parked for an operator decision (`failed:checkout_superseded`, `failed:paid_after_end`, rev 0.59) is never retried and raises the SEV-2 `BillingPaymentParked` log alert (§8.15). |
 | BIL-OPS-7 | Live and test provider keys never coexist in one environment (`livemode` check, startup check of the key prefix `rk_live_` vs `rk_test_` against `APP_ENV`). |
 | BIL-OPS-8 | A purchase confirmed by payment always produces its event (outbox in the same commit), so "paid but nothing happened" can only be downstream lag, which the 60 s alert covers. |
 | BIL-OPS-9 | No job deletes or minimises a financial record (CD-14, §15.3). The only scheduled data changes are the operational prunes (outbox, processed events, idempotency keys) and `pii-minimisation`, which nulls contact fields on `billing_accounts` and never deletes a row. |
+| BIL-AUD-1 | A global change under `platform_tenant` and its AL-5 entry are written in one `billing_system` transaction: a `plan_prices` or `token_packs` row (B-O11, B-O12), a certification submission, review or revocation (B-O14, B-O17, B-O15), and a reconciliation run's completion (§8.13). A refused change writes no entry, and an entry never exists without its change (rev 0.36; migration `000006` grants `billing_system` `SELECT, INSERT` on `pending_audit_entries`). |
 
 ---
 
@@ -3170,7 +3320,11 @@ stateDiagram-v2
 | Direction | Allowed |
 |---|---|
 | **Ingress** | Ingress Envoy (`envoy-gateway-system`) → tenant routes, operator routes, `/api/v1/webhooks/stripe` on 8080; `bff` namespace pods with `app.kubernetes.io/name: bff-signup` → `/api/v1/internal/subscriptions/authorize-and-charge` on 8080 (NetworkPolicy + Istio AuthorizationPolicy on `cluster.local/ns/bff/sa/bff-signup`, method `POST`, exact path); `monitoring` → 9090 |
-| **Egress** | Provider API via the NAT allowlist (`api.stripe.com:443`); SNS, SQS, Glue endpoints; RDS `billing` (PgBouncer); Core and RP in `iam` (API port, five routes); Entitlements in `commercial` (`GET /api/v1/internal/tenants/*/entitlements`); `iam-audit-log` in `iam` on 8080 (AL-5 `POST /api/v1/internal/audit-entries[:batch]`, `platform-audit` runner); OpenBao via ESO; OTLP collector; DNS |
+| **Egress** | Provider API via the NAT allowlist (`api.stripe.com:443`); SNS, SQS, Glue endpoints; RDS `billing` (PgBouncer); Core and RP in `iam` (API port, five routes); Entitlements in `commercial` (`GET /api/v1/internal/tenants/*/entitlements`); `iam-audit-log` in `iam` on 8080 (AL-5 `POST /api/v1/internal/audit-entries[:batch]`, `platform-audit` runner); OpenBao via ESO; OTLP collector; DNS; istiod on 15012 (sidecar xDS and certificates, rev 0.59) |
+
+**Per-workload NetworkPolicies (rev 0.59).** The rows above are the server's (`app.kubernetes.io/component: server`). CronJob pods (`component: cronjob`) take no ingress and egress only to DNS, istiod, Postgres / PgBouncer, Core and RP (8080), `443` (provider) and the observability namespace (Pushgateway, OTel); no Audit Log (jobs only enqueue audit entries). The migrate Job (`component: migrate`) takes no ingress and egress only to DNS and Postgres `5432`. `networkPolicy.postgresCIDRs` is required in staging and prod (§13.1). The chart's gateway namespace value is `gateway` (`networkPolicy.gatewayNamespace`), while this table names `envoy-gateway-system`: an open inconsistency to settle with platform-edge (rev 0.59), not resolved here.
+
+**HTTPS egress (rev 0.60).** The NetworkPolicy admits `443` to public addresses only (`0.0.0.0/0` minus RFC 1918): Stripe and the public AWS endpoints. When SNS, SQS, Glue or STS resolve to VPC interface endpoints (private addresses), `networkPolicy.awsEndpointCIDRs` (server only; the CronJobs and the migrate Job make no AWS call; `BILLING_AWS_ENDPOINT_CIDRS` in `release.yml`) admits their subnets; otherwise the server cannot resolve its Glue schemas at start-up and crash-loops. `networkPolicy.egressGateway` (namespace and optional pod labels; server and CronJobs) admits a mesh egress gateway when outbound traffic leaves through one. Both are go-live checks (§20.10).
 
 **Billing into IAM as `commercial-system` (CD-19)** — exactly these routes; anything else is `403`:
 
@@ -3184,7 +3338,29 @@ stateDiagram-v2
 
 Identity on every call: mTLS from `billing` / `commercial-billing`; headers `x-user-id: 00000000-0000-0000-0000-0000000000c1`, `x-tenant-roles: commercial-system`, `x-tenant-id: <target>`; `Idempotency-Key` on RP-3/RP-4. Core's Istio rule admits `cluster.local/ns/billing/sa/commercial-billing` on `GET */seat-usage` and `*/plan-change-check` only; RP's on RP-3/RP-4/RP-11; enforced by IAM CI (`TestCD19_CommercialSystem_RouteMatrix`). Istio `PeerAuthentication STRICT` in staging is SRE-1.
 
-**Billing into Entitlements** (LLD addition, BL-OQ-3): mTLS `cluster.local/ns/billing/sa/commercial-billing` on `GET /api/v1/internal/tenants/:id/entitlements`.
+**Billing into Entitlements — identity and header contract** (BL-OQ-3; F-2, approved 2026-11-26). *Proposed text, to be agreed with Entitlements and copied word for word into the Entitlements LLD; the two LLDs must not differ.* One route only: `GET /api/v1/internal/tenants/:id/entitlements`, used by B-P19 (pack list, cached 60 s) and B-P20 (purchase, always fresh), `ENTITLEMENTS_TIMEOUT_MS=1000` (§8.7).
+
+| Part | Contract |
+|---|---|
+| Authentication | Istio mTLS (`PeerAuthentication STRICT`). The caller's identity is the SPIFFE URI of the last element of `X-Forwarded-Client-Cert`, set by Entitlements' sidecar from the verified client certificate. A request without it is refused. Same rule as Billing's own `BIL-AUTH-3` |
+| Billing's principal | `cluster.local/ns/billing/sa/commercial-billing` (`spiffe://cluster.local/ns/billing/sa/commercial-billing`) |
+| Authorization | Entitlements admits that principal on this one route and method only. Every other Entitlements route (including `POST …/entitlements/recompute`, `GET …/plans/current` and all operator routes) answers `403` to it. Enforced in three layers: Istio AuthorizationPolicy (principal, `GET`, path `/api/v1/internal/tenants/*/entitlements`), NetworkPolicy (namespace `billing`, pod label `app.kubernetes.io/name: commercial-billing`), and the application allow-list keyed on the XFCC principal |
+| Not used for identity | No caller-written header decides who the caller is: no `x-service-token`, `x-service-name`, API key or JWT. Entitlements never needs such a header from Billing to authorise the call. Billing never forwards a user's identity headers on this call |
+
+**Request headers Billing sends** (the platform names, as on Billing's calls to IAM, CD-19):
+
+| Header | Required | Value | Trusted by Entitlements as |
+|---|---|---|---|
+| `x-tenant-id` | Required | The path tenant `:id` | Tenant context only. Must equal `:id`, else `403`. Not an identity |
+| `x-user-id` | Required | `commercial-system` (Billing's outbound system actor, `BIL-AUTH-4`) | Actor for logs and audit only. Not an identity: the principal is |
+| `x-tenant-roles` | Required | `commercial-system` | Informational. Authorization uses the principal, not this header |
+| `traceparent` | Required | W3C trace context, injected by Billing's HTTP client | Correlation. Platform standard; no separate correlation-id header |
+| `X-Request-ID` | Optional | Billing's inbound request id, when the call is made while serving a request | Logging only |
+| `Accept` | Required | `application/json` | — |
+
+**Response.** `200` with the effective set, including `addon_eligibility` (`llm_tokens`, `api_requests`, each `{eligible, reason}`) and `llm_token_quota_monthly`. Errors are RFC 9457 problems. A `401`, `403`, `5xx`, timeout or transport error makes Billing fail closed: B-P20 answers `503 ENTITLEMENTS_UNAVAILABLE`; B-P19 shows `eligible: false`.
+
+**Verification.** Integration tests on both sides use exactly the header set above. From a Billing pod in each environment: `200` on the eligibility route; `403` on `POST …/entitlements/recompute` and `GET …/plans/current`. No header outside this table may be required for an eligibility check. Billing's HTTP client forwards `X-Request-ID` (gincommon's request id, through `pkg/requestctx`) on every call made while serving a request (rev 0.59; background workers have none).
 
 **Billing into Audit Log** (AL-5): **admitted** (Audit Log rev 0.34): `cluster.local/ns/billing/sa/commercial-billing` in Audit Log's `internalCallerPrincipals`, and namespace `billing` with pod label `app.kubernetes.io/name: commercial-billing` in its `networkPolicy.internalCallers`. Billing's chart sets `serviceAccount.name: commercial-billing` explicitly and adds the egress rule above. Before go-live, `Client.Probe` from a Billing pod must return `ProbeAdmitted` in every environment (library LLD §19.2).
 
@@ -3196,8 +3372,8 @@ Identity on every call: mTLS from `billing` / `commercial-billing`; headers `x-u
 | Replay window | `WEBHOOK_TOLERANCE` 300 s from `t`; older → `400` |
 | Replay of a valid event | Ledger PK makes it a no-op |
 | Mode | `livemode` must match the environment |
-| Rate limit | Gateway `SecurityPolicy` 50 rps on the route; body ≤ 256 KiB |
-| Source | Provider-published source ranges enforced at the edge where available (defence in depth; signature is the control) |
+| Rate limit | Gateway `BackendTrafficPolicy` 50 rps **per client IP** (`sourceCIDR` `Distinct`, rev 0.59), so one source cannot exhaust the route for the provider; one bucket per IPv4 and per IPv6 client (rules on `0.0.0.0/0` and `::/0`, rev 0.60); body ≤ 256 KiB. The client IP, and so the buckets and the source allow-list, is the real caller's only when the platform `ClientTrafficPolicy` trusts the load balancer's `X-Forwarded-For` hop (`clientIPDetection.xForwardedFor.numTrustedHops`); otherwise every request carries the load balancer's address, one bucket is shared and the allow-list admits all or nothing (go-live check, §20.10) |
+| Source | Optional allow-list `gateway.webhook.allowedSourceCIDRs` (Stripe's published webhook IPs as `/32` entries, set per environment from `BILLING_WEBHOOK_SOURCE_CIDRS`; empty = any) (rev 0.59). Defence in depth; the signature is the control (`BIL-PAY-2`) |
 | Metadata | Never trusted alone (`BIL-PAY-3`) |
 
 ### 10.4 Input validation
@@ -3241,39 +3417,38 @@ OpenBao via External Secrets Operator, never env literals or images (HLD §11.3)
 | Reconciliation drift | No unrepaired finding older than 24 h | LLD |
 | RTO / RPO | 30 min / 5 min | HLD §13.1 |
 
+SLIs and burn-rate alerts are in `deploy/monitoring/slo-rules.yml` (rev 0.43). B-I1's 6 s / 12 s targets are watched as p95 / p99 quantiles (`commercial_billing:signup_charge_seconds:*`), because the platform HTTP buckets have no 6 s or 12 s boundary.
+
 ### 11.2 Prometheus metrics
 
-Three tiers (IAM Platform Observability Standard, HLD §12.2); const labels `domain="commercial"`, `service="commercial-billing"`, `environment`. Never `tenant_id`, `billing_subscription_id` or provider ids as labels; `plan` and `provider` are safe. Registry generated to `docs/observability/metric-registry.md` (`make metrics-inventory`).
+Three tiers (Enterprise Platform Observability Standard, HLD §12.2; rev 0.43): Tier 1 `platform_*` only from the Platform Observability Registry; Tier 2 `commercial_*` only when ratified — **none is** (proposals: `docs/observability/registry-proposals.md`); Tier 3 `commercial_billing_*` for everything Billing owns. Const labels `domain="commercial"`, `service="commercial-billing"`, `environment`. Never `tenant_id`, `billing_subscription_id` or provider ids as labels; `plan` and `provider` are safe. Registry generated to `docs/observability/metric-registry.md` (`make metrics-inventory`).
 
-**Tier 2 — `commercial_*`** (domain-shared concepts; registry status `proposed`, built with `gincommon.NewShared*Vec`):
+**Tier 2 — `commercial_*`:** none (rev 0.43). The four names of earlier revisions (`commercial_purchase_confirmation_to_event_seconds`, `commercial_events_emitted_total`, `commercial_operator_actions_total`, `commercial_cross_tenant_job_runs_total`) were not ratified; they are the Tier 3 series below and are not emitted (rev 0.44: no deployment consumed them, so no compatibility period).
 
-| Metric | Type | Labels | Meaning |
-|---|---|---|---|
-| `commercial_purchase_confirmation_to_event_seconds` | Histogram | `kind` (`seats`\|`token_addon`\|`plan`\|`conversion_seats`) | Payment confirmed → event committed (Billing's share of the 60 s targets) |
-| `commercial_events_emitted_total` | Counter | `event_type` | `billing.events` enqueued |
-| `commercial_operator_actions_total` | Counter | `action`, `outcome` | Operator routes |
-| `commercial_cross_tenant_job_runs_total` | Counter | `job`, `outcome` | Reconciliation and other cross-tenant jobs |
-
-**Tier 3 — `commercial_billing_*`:**
+**Tier 3 — `commercial_billing_*`** (gincommon's validated constructors; generated inventory `docs/observability/metric-registry.md`):
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `commercial_billing_webhooks_total` | Counter | `provider`, `type`, `outcome` (`processed`\|`ignored`\|`failed`\|`duplicate`) | Callbacks |
+| `commercial_billing_purchase_confirmation_to_event_seconds` | Histogram | `kind` (`seats`\|`token_addon`\|`plan`\|`conversion_seats`) | Payment confirmed → event committed (Billing's share of the 60 s targets) |
+| `commercial_billing_events_emitted_total` | Counter | `event_type` | `billing.events` enqueued |
+| `commercial_billing_operator_actions_total` | Counter | `action` (route id), `outcome` (`success`\|`failure`\|`error`) | Operator routes |
+| `commercial_billing_cross_tenant_job_runs_total` | Counter | `job_name`, `result` (`success`\|`partial`\|`failure`) | CronJobs and reconciliation runs |
+| `commercial_billing_webhooks_total` | Counter | `provider`, `type`, `result` (`processed`\|`ignored`\|`failed`\|`duplicate`) | Callbacks |
 | `commercial_billing_webhook_signature_failures_total` | Counter | `provider` | `BIL-PAY-2` rejections |
 | `commercial_billing_webhook_processing_seconds` | Histogram | `provider`, `kind` | Received → processed |
 | `commercial_billing_webhook_backlog` | Gauge | `status` (`received`\|`failed`) | Ledger rows waiting (exporter, 30 s) |
 | `commercial_billing_conversion_saga_duration_seconds` | Histogram | `kind` | Payment confirmed → `TenantConverted` |
-| `commercial_billing_sagas_in_flight` | Gauge | `state` | Open sagas |
+| `commercial_billing_sagas_in_flight` | Gauge | `saga_state` | Open sagas |
 | `commercial_billing_sagas_overdue` | Gauge | — | Past 30 min (alert source) |
-| `commercial_billing_rp_convert_attempts_total` | Counter | `outcome` (`ok`\|`in_progress`\|`retryable`\|`terminal`) | RP-3 calls |
+| `commercial_billing_rp_convert_attempts_total` | Counter | `result` (`ok`\|`in_progress`\|`retryable`\|`terminal`) | RP-3 calls |
 | `commercial_billing_subscriptions` | Gauge | `status`, `plan`, `provider` | Exporter, 60 s |
 | `commercial_billing_downgrades_blocked_total` | Counter | `blocker` | I-18 blockers |
 | `commercial_billing_repricing_scheduled_total` | Counter | `direction` (`increase`\|`decrease`) | §8.16 |
-| `commercial_billing_seat_changes_total` | Counter | `direction` (`purchase`\|`reduction`\|`renewal_topup`), `outcome` | Seats |
+| `commercial_billing_seat_changes_total` | Counter | `direction` (`purchase`\|`reduction`\|`renewal_topup`), `result` | Seats |
 | `commercial_billing_seat_projection_mismatches_total` | Counter | — | §8.6.4 |
 | `commercial_billing_proration_deferred_total` | Counter | `currency`, `reason` (`below_provider_minimum`) | Seat purchases added free until renewal (§8.5.3, BL-OQ-6) |
 | `commercial_billing_proration_deferred_amount_minor_total` | Counter | `currency` | Sum of `deferred_amount_minor` not charged (§8.5.3) |
-| `commercial_billing_addon_purchases_total` | Counter | `pack_code`, `outcome` | Token packs |
+| `commercial_billing_addon_purchases_total` | Counter | `pack_code`, `result` | Token packs |
 | `commercial_billing_payment_failures_total` | Counter | `reason` (mapped decline) | Declines |
 | `commercial_billing_dunning_transitions_total` | Counter | `to` (`past_due`\|`cancelled`\|`active`) | Lapse flow |
 | `commercial_billing_unmatched_conversions_total` | Counter | — | `TenantConverted` with no saga |
@@ -3283,10 +3458,16 @@ Three tiers (IAM Platform Observability Standard, HLD §12.2); const labels `dom
 | `commercial_billing_invoice_dispositions_total` | Counter | `action` (`finalize`\|`void`) | B-O16 decisions |
 | `commercial_billing_scheduled_emissions_pending` | Gauge | `builder` | `BIL-EVT-6` queue |
 | `commercial_billing_provider_certified` | Gauge | `provider`, `adapter_version` | 1 if the loaded adapter version has a valid record (`BIL-PROV-1`), 0 otherwise; refreshed with the registry |
+| `commercial_billing_background_loop_running` | Gauge | `loop` | 1 while a supervised in-pod loop runs, 0 once it stopped unexpectedly, until its in-process restart (rev 0.59; since rev 0.60 the loop is restarted with backoff and liveness does not fail) |
+| `commercial_billing_cron_job_last_success_timestamp_seconds` | Gauge | `job_name` | Unix time of the CronJob's last run that exited 0, pushed by `cmd/jobs` (§13.2, rev 0.59) |
+| `commercial_billing_metrics_snapshot_last_success_timestamp_seconds` | Gauge | — | Unix time of the last successful database snapshot behind the exporter gauges; a failed reading keeps the gauges and the stamp, so staleness is `time() - stamp` (rev 0.59) |
+| `commercial_billing_seat_projection_last_run_mismatches` | Gauge | `repeat` (`true`\|`false`) | Mismatches found by the last `seat-projection-check` run; `repeat="true"` for tenants already resynced in the previous 24 h. Both series always set, 0 included (§8.6.4, rev 0.59) |
 
-**`platform-audit` (library, `service="commercial-billing"`):** `platform_audit_deliveries_total`, `platform_audit_pending_entries`, `platform_audit_failed_entries`, `platform_audit_waiting_entries`, `platform_audit_oldest_pending_age_seconds`, `platform_audit_oldest_failed_age_seconds`, `platform_audit_invalid_entries_total`, `platform_audit_delivery_lag_seconds`, `platform_audit_runner_up` and the rest of the library registry (library LLD §11.2). Alerts from `monitoring/prometheus/platform-audit.rules.yml`, routed to Billing on-call; dashboard `monitoring/grafana/platform-audit.json`. No HPA references a `platform_audit_*` metric.
+**Snapshot gauges (rev 0.59).** The exporter no longer resets its vectors before each reading: it sets every series, deletes only those that disappeared, and always exposes the known statuses at 0 (`webhook_backlog{status="received"|"failed"}`, `sagas_in_flight` for `payment_confirmed`, `rp_convert_pending`, `awaiting_tenant_converted`, `failed`), so a scrape never misses the HPA's `status="received"` series and the HPA can scale down.
 
-**Tier 1 (libraries):** `platform_http_requests_total`, `platform_http_request_duration_seconds`, `platform_dependency_request_seconds{dependency=stripe|core|realm_provisioner|entitlements|audit, operation, outcome}`, `platform_outbox_pending_events`, `platform_outbox_dead_letters`, `platform_messages_{received,processed,failed}_total{queue}`, `platform_queue_depth`, `platform_dlq_depth`, `platform_dlq_messages_total`, `platform_event_propagation_seconds`, `platform_build_info`.
+**`platform-audit` (library, `service="commercial-billing"`):** `platform_audit_deliveries_total`, `platform_audit_pending_entries`, `platform_audit_failed_entries`, `platform_audit_waiting_entries`, `platform_audit_oldest_pending_age_seconds`, `platform_audit_oldest_failed_age_seconds`, `platform_audit_invalid_entries_total`, `platform_audit_delivery_lag_seconds`, `platform_audit_runner_up` and the rest of the library registry (library LLD §11.2). Alerts from `deploy/monitoring/platform-audit.rules.yml` (13 alerts, rendered by the chart's `PrometheusRule` with the service, environment and `outbox_deliver` mode filled in), routed to Billing on-call; dashboard `deploy/monitoring/dashboards/platform-audit.json`. No HPA references a `platform_audit_*` metric.
+
+**Tier 1 (libraries):** `platform_http_requests_total`, `platform_http_request_duration_seconds`, `platform_dependency_request_seconds{dependency=stripe|core|realm_provisioner|entitlements|audit, operation, outcome}`, `platform_outbox_pending_events`, `platform_dlq_messages_total{operation=outbox_publish|consume}` (outbox and queue dead letters), `platform_messages_{received,processed,failed}_total{queue}`, `platform_queue_depth`, `platform_dlq_depth`, `platform_dlq_messages_total`, `platform_outbox_oldest_pending_age_seconds`, `platform_event_propagation_seconds`, `platform_build_info`. **`cmd/server` calls `events.InitMetrics` (rev 0.59)** after `metrics.New`, so the shared `platform_dependency_request_seconds` is reused. Before, platform-events' metrics were no-ops: queue and DLQ depth, outbox pending and age and the dead-letter count were never emitted, so `BillingDLQNotEmpty` and `BillingOutboxDeadLetter` could not fire.
 
 ### 11.3 Tracing
 
@@ -3320,9 +3501,11 @@ billing.http B-P4 (downgrade)
 
 Attributes: `tenant.id`, `billing.subscription_id`, `billing.provider`, `billing.saga_state`; never amounts with card data, never `client_secret`.
 
+**Links across async hops (rev 0.38).** A consumed event's span (`billing.consume <type>`) links to the producer's trace by the envelope's `trace_id`; the envelope has no span id, so the link names the trace only. The ledger keeps no trace context, so `billing.webhook.process` is tied to `billing.webhook.receive` by `billing.provider_event_id`, not by a span link.
+
 ### 11.4 Structured logs
 
-`slog` JSON to Loki with `trace_id`, `span_id`, `tenant_id`, `request_id`, `route_id`, `actor_id` (operator actions), `provider_event_id` (webhook path). Redaction per §10.1. Levels: `INFO` for state transitions (one line per transition with from/to), `WARN` for retryable dependency failures, `ERROR` for terminal failures and invariant breaches.
+JSON from gincommon's logger (production JSON outside `local` / `dev` / `test`; `slog` and other loggers are denied, `BIL-OPS-10`) to Loki with `trace_id`, `span_id`, `tenant_id`, `request_id`, `route_id`, `actor_id` (operator actions), `provider_event_id` (webhook path). Redaction per §10.1. Levels: `INFO` for state transitions (one line per transition with from/to), `WARN` for retryable dependency failures, `ERROR` for terminal failures and invariant breaches.
 
 ### 11.5 Alerts and dashboards
 
@@ -3335,50 +3518,73 @@ Rules in `deploy/monitoring/app-alerts.yml`, routed by Grafana OnCall to **Billi
 | `CommercialPurchaseNotActive` | Composed rule: for a confirmed seat or add-on purchase, Billing confirmation-to-event p99 + `platform_event_propagation_seconds` on `billing-orgm-q` / `billing-entitlements-q` + Usage & Metering `commercial_usage_metering_limit_render_latency_seconds` > 60 s over 10 min | SEV-2 (HLD §8.6.3, §12.4) |
 | `IAMParkedTenantEventsStale` | Core's alert; **also routed to Billing on-call** (SRE-6) | SEV-2 |
 | `BillingWebhookSignatureFailures` | rate > 5/min for 5 min | SEV-2 (HLD §12.4) |
-| `BillingWebhookBacklog` | `commercial_billing_webhook_backlog{status="received"}` older than 5 min, or `failed` > 0 for 30 min | SEV-3 |
-| `BillingOutboxDeadLetter` | `platform_outbox_dead_letters > 0` | SEV-2 |
-| `BillingDLQNotEmpty` | `platform_dlq_depth{queue=~"tenant-billing-q-dlq\|usage-billing-q-dlq"} > 0` | SEV-3 (HLD §12.4) |
+| `BillingWebhookBacklog` | `commercial_billing_webhook_backlog{status="received"}` > 0 for 5 min (the gauge has no age), or `failed` > 0 for 30 min | SEV-3 |
+| `BillingOutboxDeadLetter` | `sum(increase(platform_dlq_messages_total{operation="outbox_publish"}[24h])) > 0` (rev 0.57: `platform_outbox_dead_letters` is not a registry metric and was never emitted) | SEV-2 |
+| `BillingDLQNotEmpty` | `platform_dlq_depth{queue=~"tenant-billing-q\|usage-billing-q"} > 0` (emitted by the consumers' queue-depth sampler, `SQS_QUEUE_DEPTH_INTERVAL`, rev 0.41). The label is the **source** queue's name (registry definition); rev 0.59 fixed the `-dlq` names, which never matched | SEV-3 (HLD §12.4) |
+| `BillingQueueBacklog` | `platform_queue_depth{queue=~"tenant-billing-q\|usage-billing-q"} > 100` for 10 min; runbook `queue-backlog.md` (rev 0.59) | SEV-3 |
+| `BillingQueueStalled` | queue depth > 0 and no `platform_messages_processed_total` increase in 15 min, for 15 min (no registry metric carries the oldest message's age); runbook `queue-backlog.md` (rev 0.59) | SEV-2 |
+| `BillingOutboxLag` | `platform_outbox_oldest_pending_age_seconds > 300` for 10 min; runbook `outbox-lag.md` (rev 0.59). When the gauge's query fails the gauge keeps its last value and `platform_outbox_errors_total{operation="oldest_pending"}` counts the failure (rev 0.60) | SEV-2 |
+| `BillingBackgroundLoopStopped` | `min_over_time(commercial_billing_background_loop_running[10m]) == 0` for any `loop`; runbook `background-loop-stopped.md` (rev 0.59). Since rev 0.60 a stopped loop is restarted in-process with backoff (1 s doubling to 5 min) and liveness is **not** failed; only the platform-audit runner's `Alive` stays in liveness (§13.1) | SEV-3 |
+| `BillingMetricsSnapshotStale` | `time() - commercial_billing_metrics_snapshot_last_success_timestamp_seconds > 300` for 5 min; runbook `metrics-snapshot-stale.md` (rev 0.59) | SEV-3 |
+| `BillingCronJobNotSucceeding` | `time() - commercial_billing_cron_job_last_success_timestamp_seconds{job_name}` above about three schedule intervals: `saga-sweeper` 10 min (SEV-2), `purchase-expiry` 20 min, `seat-renewal` / `downgrade-apply` 45 min, `seat-projection-check` 90 min, `renewal-repricing` 3 h, daily jobs 26 h (SEV-3); runbook `cronjob-not-succeeding.md` (rev 0.59) | SEV-2 / SEV-3 |
+| `BillingCronJobNeverSucceeded` | From kube-state-metrics: a Billing CronJob with `kube_cronjob_status_last_schedule_time` (it was scheduled at least once) and neither `kube_cronjob_status_last_successful_time` nor a pushed `commercial_billing_cron_job_last_success_timestamp_seconds` (mapped to the CronJob name `commercial-billing-<job>`), for 15 min. Covers a job that never succeeded (for example refused for its configuration before it pushed anything), which `BillingCronJobNotSucceeding` cannot see. A fresh deploy does not page before the first schedule. Needs the kube-state-metrics CronJob families for namespace `billing` (go-live check, §20.10); runbook `cronjob-not-succeeding.md` (rev 0.60) | SEV-2 (`saga-sweeper`) / SEV-3 |
 | `BillingI18Unavailable` | I-18 `503` for > 10 min | SEV-3 (HLD §12.4) |
 | `BillingReversalDecisionNeeded` | dispute / EFW within the revert window | SEV-2 |
-| `BillingSuspensionDraftsAwaitingDecision` | a held draft (`held_for_review`, no `disposition`) on a tenant reactivated more than 24 h ago | SEV-3 (Finance / operator queue, §8.10) |
+| `BillingSuspensionDraftsAwaitingDecision` | held drafts (`held_for_review`, no `disposition`) remain for 24 h with no subscription still paused (the gauges carry no tenant) | SEV-3 (Finance / operator queue, §8.10) |
 | `BillingReconciliationDrift` | unrepaired findings > 0 for 24 h | SEV-3 |
-| `BillingSeatProjectionDrift` | same tenant mismatched twice in 24 h | SEV-3 |
+| `BillingSeatProjectionDrift` | the same tenant twice in 24 h: `commercial_billing_seat_projection_last_run_mismatches{repeat="true"} > 0` (rev 0.59: a per-run gauge, because each CronJob run pushes a fresh process and a counter's `increase()` never saw persistent drift; a clean run resolves it). No tenant label; the SEV-3 log line names the tenant that repeats | SEV-3 |
 | `BillingProviderUnavailable` | `platform_dependency_request_seconds{dependency="stripe",outcome="error"}` ratio > 50% for 5 min | SEV-2 |
 | `BillingProviderNotCertified` | `commercial_billing_provider_certified == 0` for any provider in `ENABLED_PAYMENT_PROVIDERS` for 5 min (`BIL-PROV-1` / `BIL-PROV-2`); runbook §20.9 | SEV-2 |
 | `BillingReviewTrigger` | refund / adjustment above threshold, RP-4 request | Review (no page) |
+| `BillingPaymentParked` (SEV-2) | log line `alert=BillingPaymentParked`: a completion or payment of a superseded checkout or after the subscription ended (ledger `failed:checkout_superseded` / `failed:paid_after_end`, §8.1.1), or a provider invoice paid for another amount or currency than its purchase (`failed:invoice_amount_mismatch` from a callback, or `purchase-expiry` / a decline, `BIL-PAY-7`, rev 0.60); runbook `operator-review.md` (rev 0.59). These rows also keep `BillingWebhookBacklog`'s `failed` branch firing until the operator disposes of them | SEV-2 |
 
-Dashboards (Grafana "Commercial / Billing"): conversion funnel (sessions → paid → RP accepted → confirmed); purchases (count, confirmation latency, failures); dunning (past-due, cancellations, reactivations); webhooks (rate, lag, backlog, signature failures); events (emitted, outbox lag, scheduled emissions); dependencies (Stripe, Core, RP, Entitlements, Audit).
+Rules are `deploy/monitoring/app-alerts.yml` (20 alerts in 27 rules: `BillingCronJobNotSucceeding` has six per-schedule rules, `BillingCronJobNeverSucceeded` and `BillingWebhookBacklog` two each), rendered by the chart from its byte copy `deploy/helm/files/app-alerts.yml` (`helm-check` fails on drift); each carries a `runbook_url` into `docs/runbooks/`. `IAMParkedTenantEventsStale` is Core's rule, not in this file. `BillingReviewTrigger`, `BillingReversalDecisionNeeded` and the SEV-2 `BillingPaymentParked` are raised from their log lines (`alert=…`) as Loki rules owned by the observability team (rev 0.38). The parked-payment line logs `alert=BillingPaymentParked` (rev 0.59; rule owed by the observability team), distinct from the review-threshold line (`money.go`, `alert=BillingOperatorReviewNeeded`).
+
+Glue Schema Registry pipeline: `deploy/monitoring/schema-registry-alerts.yml` (`BillingSchemaBreakingChangeBlocked`, `BillingSchemaRegistrationFailed`, `BillingSchemaRegistrationSpike`, `BillingSchemaVersionChurn`, all SEV-3, runbook `schema-registration.md`), from the metrics `schema-gov metrics` pushes at the end of each registration job; without `PUSHGATEWAY_URL` in the workflow's environment they never fire.
+
+SLO rules and recording rules: `deploy/monitoring/slo-rules.yml` (8 recording rules and 2 alerts: availability 99.9 % / 30 d, burn-rate alerts `BillingAvailabilityBudgetBurnFast` SEV-2 and `BillingAvailabilityBudgetBurnSlow` SEV-3, runbook `slo-burn.md`; good-event SLIs for webhook acknowledgement and processing, purchase → event, tenant reads) and `deploy/monitoring/recording-rules.yml` (11 recording rules), both rendered by the chart (rev 0.43). The HPA's external metric is served by the Prometheus Adapter rule in `deploy/monitoring/prometheus-adapter-rule.yaml` (§13.1).
+
+Dashboards (Grafana "Commercial / Billing", `deploy/monitoring/dashboards/commercial-billing.json`, deployed as a sidecar ConfigMap; Tier 1 and Tier 3 series only): conversion funnel (sessions → paid → RP accepted → confirmed); purchases (count, confirmation latency, failures); dunning (past-due, cancellations, reactivations); webhooks (rate, lag, backlog, signature failures); events (emitted, outbox lag, scheduled emissions); dependencies (Stripe, Core, RP, Entitlements, Audit).
 
 ---
 ## 12. Configuration
 
-Values from `deploy/helm/values.yaml` (`env:`) and OpenBao (`secretValues:` via ESO). Startup validates every value against its range and refuses to start on a missing required value, an out-of-range value or a live/test key mismatch with `APP_ENV` (`BIL-OPS-7`).
+Values from `deploy/helm/values.yaml` (`env:`, plus `serverEnv`, `cronjobs.env` and `migrate.env` per workload) and OpenBao (`secretKeys:` via ESO). `internal/config/config.go` reads the Billing keys below (75), each with the default and range of this table, and `LoadFor(<binary>)` reports every problem at once and refuses to start on a missing required value, an out-of-range value or a live/test key mismatch with `APP_ENV` (`BIL-OPS-7`); each binary requires only its own keys. The `PG_*` / `DATABASE_URL`, `SQS_*` / `OUTBOX_*` extras, `AUDIT_*`, `AWS_*` and `OTEL_EXPORTER_OTLP_ENDPOINT` keys are read by pgcommon, platform-events, platform-audit, the AWS SDK and gincommon. Local defaults: `.env-example`.
 
 | Variable | Default | Range / values | Purpose |
 |---|---|---|---|
 | `APP_NAME` | `commercial-billing` | fixed | Service name on metrics, spans, logs |
-| `APP_ENV` | `dev` (Helm `prod`) | `local`\|`dev`\|`test`\|`staging`\|`prod` | One resolved environment |
+| `APP_ENV` | `dev` (Helm `prod`) | `local`\|`dev`\|`test`\|`staging`\|`prod` | One resolved environment (`APP_ENV`, else `ENVIRONMENT`). **Required when `KUBERNETES_SERVICE_HOST` is set** (rev 0.59): inside a cluster every binary (server, jobs, migrate) fails closed instead of falling back to `dev` and its relaxed checks |
 | `BUILD_VERSION` | ldflag | — | `platform_build_info`, spans |
 | `APP_PORT` / `METRICS_PORT` | `8080` / `9090` | 1024–65535 | API / metrics listeners |
 | `REQUEST_TIMEOUT` | `30s` | 5–60 s | gincommon request deadline |
-| `PG_HOST` / `PG_PORT` / `PG_DBNAME` / `PG_SSLMODE` | — / `5432` / `billing` / `require` | — | DSN (pgcommon `ConfigFromEnv`) |
+| `DATABASE_URL` | secret | `postgres://…` | App-pool DSN (`billing_app`) as deployed: the chart mounts it for the server and the CronJobs; pgcommon `ConfigFromEnv` takes `DATABASE_URL` or the `PG_*` keys (rev 0.61) |
+| `PG_HOST` / `PG_PORT` / `PG_DBNAME` / `PG_SSLMODE` | — / `5432` / `billing` / `require` | — | DSN (pgcommon `ConfigFromEnv`), as in `.env-example` |
 | `PG_USER` / `PG_PASSWORD` | `billing_app` / secret | — | App pool |
-| `PG_SYSTEM_USER` / `PG_SYSTEM_PASSWORD` | `billing_system` / secret | — | sysPool |
-| `PG_AUDIT_DRAINER_USER` / `PG_AUDIT_DRAINER_PASSWORD` | `billing_audit_drainer` / secret | — | Audit drainer pool (`auditoutbox.Runner`, §3.3); `NOBYPASSRLS` role with policy `audit_drainer_all` |
+| `PG_SYSTEM_USER` / `PG_SYSTEM_PASSWORD` | `billing_system` / secret | password required outside dev (rev 0.40) | sysPool: pgcommon's environment config with this role |
+| `PG_AUDIT_DRAINER_USER` / `PG_AUDIT_DRAINER_PASSWORD` | `billing_audit_drainer` / secret | password required outside dev (rev 0.40) | Audit drainer pool (`auditoutbox.Runner`, §3.3); `NOBYPASSRLS` role with policy `audit_drainer_all` |
 | `PG_AUDIT_DRAINER_MAX_CONNS` | `2` | 1–5 | Audit drainer pool |
 | `MIGRATION_DATABASE_URL` | secret | **direct RDS endpoint, not PgBouncer** | `cmd/migrate` (`billing_migrator`), incl. `auditoutbox.ApplySchema` (session-scoped advisory lock) |
 | `PG_MAX_CONNS` / `PG_MIN_CONNS` / `PG_SYSTEM_MAX_CONNS` | `10` / `0` / `4` | 2–50 / 0–10 / 1–10 | Pools (HLD §7.1) |
-| `PG_STATEMENT_TIMEOUT` / `PG_LOCK_TIMEOUT` | `5s` / `2s` | 1–30 s / 0.5–10 s | Per transaction |
+| `PG_STATEMENT_TIMEOUT` / `PG_LOCK_TIMEOUT` | `5s` / `2s` | 1–30 s / 0.5–10 s | Per statement / lock wait, applied by `pgcommon.ConfigFromEnv` to every pool (rev 0.40 corrects rev 0.38) |
 | `PG_BOUNCER_MODE` | `true` | bool | PgBouncer transaction pooling |
-| `RUN_MIGRATIONS` / `MIGRATE_TIMEOUT` | `false` (Helm) / `10m` | bool / 1–30 m | Hook Job owns migrations |
+| `RUN_MIGRATIONS` / `MIGRATE_TIMEOUT` | `false` (Helm) / `10m` | bool / 1–30 m | Hook Job owns migrations; with `true` the server also requires `MIGRATION_DATABASE_URL` (rev 0.59). The chart's migrate Job sets `MIGRATE_TIMEOUT=7m` (`migrate.env`), below its `activeDeadlineSeconds: 480` (§13.1) |
+| `SHUTDOWN_DRAIN_DELAY` | `2s` | 0–5 s | Time `/readyz` fails after `SIGTERM` before the listener closes; the chart's `preStop` sleep already covers endpoint propagation (§13.1, rev 0.59) |
+| `AWS_REGION` | Helm `ap-south-1` | AWS region | SNS, SQS, Glue (AWS SDK; `AWS_ENDPOINT_URL` points at floci locally) |
 | `SNS_BILLING_EVENTS_TOPIC_ARN` | — (required) | ARN | Publish target |
 | `GLUE_REGISTRY_NAME` | `billing-events` | — | Producer registry |
-| `SQS_TENANT_BILLING_QUEUE_URL` / `SQS_USAGE_BILLING_QUEUE_URL` | — (required) | URL | Consumers |
+| `SQS_TENANT_BILLING_QUEUE_URL` / `SQS_USAGE_BILLING_QUEUE_URL` | — (required) | URL | Consumers. Server only (jobs only enqueue into the outbox); `SQS_USAGE_BILLING_QUEUE_URL` is required only with `USAGE_BILLING_CONSUMER_ENABLED=true` (rev 0.59) |
+| `USAGE_BILLING_CONSUMER_ENABLED` | `false` | bool | Starts the `usage-billing-q` consumer; off until Usage & Metering ratifies `UsagePeriodClosed` (BL-OQ-24) (rev 0.59) |
 | `SQS_MAX_RECEIVE_COUNT` | `4` | 1–4 (below redrive 5) | DLQ forwarding |
-| `SQS_WAIT_TIME_SECONDS` / `SQS_VISIBILITY_TIMEOUT` | `20` / `60s` | 0–20 / 30–300 s | Long polling |
+| `SQS_WAIT_TIME_SECONDS` / `SQS_VISIBILITY_TIMEOUT` | `20` / `60s` | 0–20 / 30–300 s | Long polling; applied on top of platform-events' `LoadSQS` (rev 0.41) |
+| `SQS_CONCURRENCY` / `SQS_HANDLER_TIMEOUT` / `SQS_DRAIN_TIMEOUT` | `1` / `20s` / `15s` | platform-events; `SQS_DRAIN_TIMEOUT` capped at 15 s (rev 0.59) | Read by platform-events' `LoadSQS`; Billing applies the defaults when unset (rev 0.41) and caps the drain so shutdown fits its budget (§13.1) |
+| `OUTBOX_DRAIN_TIMEOUT` | platform-events (30 s) | capped at 15 s (rev 0.59) | Outbox runner's stop wait for the batch in flight; capped for the shutdown budget (§13.1) |
+| `SQS_QUEUE_DEPTH_INTERVAL` | `60s` | platform-events | `platform_queue_depth` / `platform_dlq_depth` sampler (`BillingDLQNotEmpty`); Billing applies 60 s when unset (rev 0.41) |
+| `OUTBOX_PUBLISH_TIMEOUT` | `10s` | platform-events | Read by `LoadOutbox`; the claim lease is raised to at least batch × timeout + 2 min (floor 10 min) (rev 0.41) |
 | `MAX_LIFECYCLE_EVENT_SKEW_SECONDS` | `300` | 60–900 | Future-time clamp (`BIL-EVT-3`) |
-| `OUTBOX_POLL_INTERVAL` / `OUTBOX_BATCH_SIZE` / `OUTBOX_MAX_ATTEMPTS` / `OUTBOX_RETENTION_DAYS` | `500ms` / `50` / `5` / `8` | 100 ms–5 s / 1–500 / 1–10 / 7–30 | HLD §9.3 |
-| `PROCESSED_EVENTS_TTL_DAYS` | `8` | > SQS retention (4 d) | PE-1 |
+| `OUTBOX_POLL_INTERVAL` / `OUTBOX_BATCH_SIZE` / `OUTBOX_MAX_ATTEMPTS` / `OUTBOX_RETENTION_DAYS` | `500ms` / `50` / `5` / `8` | 100 ms–5 s / 1–500 / 1–10 / 7–30 | HLD §9.3. `OUTBOX_MAX_ATTEMPTS` 5 dead-letters every row in about a minute of SNS or Glue outage; Billing recommends 10 with `OUTBOX_RETRY_BACKOFF` 30 s and `OUTBOX_MAX_RETRY_BACKOFF` 5 m, which needs an HLD §9.3 change (§16.1 BL-OQ-29, rev 0.59) |
+| `PUSHGATEWAY_URL` | empty | URL | CronJob run metric target (§13.2); empty → logged only (rev 0.37) |
+| `PROCESSED_EVENTS_TTL_DAYS` | `8` | 5–365 (> SQS retention, 4 d) | PE-1 |
 | `PII_MINIMISE_OFFBOARDED_DAYS` / `PII_MINIMISE_ABANDONED_DAYS` | `90` / `30` | 30–365 / 7–90 | §15.3 (`pii-minimisation`) |
 | `DEFAULT_PAYMENT_PROVIDER` | `stripe` | must be in `ENABLED_PAYMENT_PROVIDERS` | New accounts (§3.4); if not certified, account creation answers `503 PROVIDER_NOT_ENABLED` |
 | `ENABLED_PAYMENT_PROVIDERS` | `stripe,manual` | comma list of compiled adapters | Providers the service loads. At startup each must satisfy `BIL-PROV-1` to take new accounts; one that does not is loaded for existing accounts only, logged at ERROR and alerted (§3.5). Startup fails only if a listed name has no compiled adapter |
@@ -3390,9 +3596,10 @@ Values from `deploy/helm/values.yaml` (`env:`) and OpenBao (`secretValues:` via 
 | `STRIPE_API_VERSION` | pinned at build | Stripe version string | Fixed per release |
 | `STRIPE_TIMEOUT_MS` | `8000` | 1000–20000 | Per provider call |
 | `STRIPE_MAX_RPS` | `25` | 1–80 | Client-side token bucket per pod (§21.2) |
+| (adapter `Config.TestClock`) | — | not an environment key | Certification only (`cmd/certify`, §14.7): new customers on a Stripe Test Clock; refused with livemode; the server never sets it (rev 0.39) |
 | `STRIPE_MAX_RETRIES` | `2` | 0–3 | SDK retries on network errors (idempotent keys) |
 | `WEBHOOK_TOLERANCE` | `300s` | 60–600 s | Replay window |
-| `WEBHOOK_MAX_BODY_BYTES` | `262144` | — | B-W1 |
+| `WEBHOOK_MAX_BODY_BYTES` | `262144` | 1 KiB–4 MiB | B-W1 |
 | `WEBHOOK_POLL_INTERVAL` / `WEBHOOK_MAX_ATTEMPTS` | `500ms` / `10` | 100 ms–5 s / 3–20 | Processor |
 | `DUNNING_FINAL_ACTION` | `cancel` | `cancel` (only supported value) | Provider setting asserted at startup through the adapter: final retry failure cancels the subscription (§8.8) |
 | `CHECKOUT_TTL` | `1h` | 30 m–24 h | Hosted sessions |
@@ -3408,7 +3615,7 @@ Values from `deploy/helm/values.yaml` (`env:`) and OpenBao (`secretValues:` via 
 | `SEATS_AFTER_CONVERSION_DELAY` | `120s` | 30–600 s | `BIL-EVT-6` |
 | `EMISSION_POLL_INTERVAL` | `5s` | 1–30 s | `scheduled_emissions` worker |
 | `PRORATION_BELOW_MINIMUM` | `free_until_renewal` | `free_until_renewal`\|`charge_minimum` | §8.5.3 (BL-OQ-6, Finance approved `free_until_renewal`; change only with Finance) |
-| `MIN_CHARGE_MINOR` | `200` (per currency map) | ≥ 0 | Provider minimum |
+| `MIN_CHARGE_MINOR` | `200` | ≥ 0 | Provider minimum. As built it is one value for every currency; the per-currency map is not implemented (rev 0.61, decision pending) |
 | `AUTO_PAUSE_ON_OPERATOR_SUSPENSION` | `true` | bool | CD-24 (§8.10); Finance approved `true` (BL-OQ-1); change only with Finance |
 | `AUTO_REVERT_ON_EFW` | `false` | bool | CD-10 (§8.2); Security approved `false` for Phase 1 (BL-OQ-7) |
 | `REVIEW_THRESHOLD_MINOR` | `100000` | ≥ 0 | HLD §11.6 review trigger |
@@ -3424,8 +3631,10 @@ Values from `deploy/helm/values.yaml` (`env:`) and OpenBao (`secretValues:` via 
 | `COMMERCIAL_SYSTEM_PRINCIPAL` | `00000000-0000-0000-0000-0000000000c1` | fixed | Outbound identity |
 | `BFF_CALLER_PRINCIPAL` | `cluster.local/ns/bff/sa/bff-signup` | SPIFFE path | `BIL-AUTH-3`; compared with the SPIFFE URI in `X-Forwarded-Client-Cert` (§13.1) |
 | `OPERATOR_PATH_LIVE` | `false` | bool | `BIL-AUTH-6`: models the availability of IAM's operator path (CD-52, OP-G1 to OP-G4). `false` → every operator route `403 INSUFFICIENT_ROLE` outside dev and test. Set `true` per environment only after OP-G4 passes there |
-| `LOG_LEVEL` / `LOG_HASH_SALT` | `info` / secret | — | Logs |
+| `LOG_LEVEL` / `LOG_HASH_SALT` | `info` / secret | `debug`\|`info`\|`warn`\|`error` / required | Logs |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_TRACES_SAMPLER_ARG` | — / `0.2` | — / 0–1 | Tracing (errors always sampled) |
+
+**Secrets per binary (rev 0.59).** Each binary requires only the secrets it uses, and the chart mounts each workload's own set (§13.1): **server** `DATABASE_URL`, `PG_SYSTEM_PASSWORD`, `PG_AUDIT_DRAINER_PASSWORD`, `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRETS`, `LOG_HASH_SALT`, and `MIGRATION_DATABASE_URL` only with `RUN_MIGRATIONS=true`; **jobs** (`cmd/jobs`) `DATABASE_URL`, `PG_SYSTEM_PASSWORD`, `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRETS` (the Stripe adapter refuses to build without one), `LOG_HASH_SALT`, with no audit drainer, migration DSN, SNS topic or queues; **migrate** (`cmd/migrate`) `MIGRATION_DATABASE_URL` only.
 
 **Feature flags** (env, per environment): `FEATURE_DIRECT_SIGNUP` (B-I1; `false` until SGN-2 go-live order §18.7), `FEATURE_TOKEN_ADDONS` (B-P19–B-P23; `false` until the Gateway hot-reload spike passes on a cluster, HLD §17.2), `FEATURE_SEAT_PURCHASE` (default `true`). A disabled feature answers `404` (route not registered), as the BFF does for `/paid`.
 
@@ -3435,28 +3644,32 @@ Values from `deploy/helm/values.yaml` (`env:`) and OpenBao (`secretValues:` via 
 
 ### 13.1 Kubernetes resources
 
-Namespace `billing`; ServiceAccount and `app.kubernetes.io/name` `commercial-billing` (CD-19). Chart follows the IAM service charts (HLD §15.1):
+Namespace `billing`; ServiceAccount and `app.kubernetes.io/name` `commercial-billing` (CD-19). Chart `deploy/helm` (chart and app version 0.7.0, `kubeVersion >= 1.30.0-0`) follows the IAM service charts (HLD §15.1). Templates: `deployment`, `service`, `serviceaccount`, `hpa`, `pdb`, `cronjobs`, `migrate-job`, `externalsecret`, `httproutes`, `gateway-policies`, `networkpolicy` (with `_networkpolicy.tpl`), `peerauthentication`, `authorizationpolicy`, `servicemonitor`, `prometheusrule`, `dashboard`, `_helpers.tpl`, `NOTES.txt`. Image: distroless `static-debian13:nonroot`, digest-pinned, holding `/commercial-billing` (entrypoint), `/jobs` and `/migrate`; `cmd/certify` is not in the image:
 
 | Resource | Spec |
 |---|---|
-| `Deployment` `commercial-billing` | 2 replicas minimum; `topologySpreadConstraints` across 3 AZs; readiness `/readyz` (DB, sysPool, Glue registry resolution, SNS topic reachable); liveness `/healthz`; `terminationGracePeriodSeconds: 45` (drains workers, outbox, in-flight requests) |
-| In-pod workers | Outbox runner, webhook processor, saga worker, emission worker, `platform-audit` `auditoutbox.Runner` (on the `billing_audit_drainer` pool; not in `/readyz`, `Runner.Alive()` in liveness), `tenant-billing-q` and `usage-billing-q` consumers, reconciliation run executor, metric exporter. All claim rows with `SKIP LOCKED`, so every replica runs them safely without leader election |
-| `HorizontalPodAutoscaler` | min 2, max 4; CPU 70%; external metric `commercial_billing_webhook_backlog{status="received"}` > 200 |
+| `Deployment` `commercial-billing` | 2 replicas minimum; `topologySpreadConstraints` across 3 AZs; readiness `/readyz` (not draining, app pool, sysPool; as built the Glue schema versions are checked once at startup, below, and SNS reachability is not probed, rev 0.61); startup probe on `/healthz` (5 s × 24); liveness `/healthz` (fails only when the audit runner's `Alive()` fails, never while draining; a stopped loop is restarted in-process instead, rev 0.60); probe `timeoutSeconds: 6` (above the app's 5 s dependency-check bound). **Shutdown (rev 0.59):** `terminationGracePeriodSeconds: 60`; a native `preStop` `sleep` of 10 s (Kubernetes ≥ 1.30; the distroless image has no shell) lets endpoint removal reach the gateway and mesh before `SIGTERM`; the app then has 50 s: readiness flips to `503` at once, `SHUTDOWN_DRAIN_DELAY` (≤ 5 s), then the HTTP drain (25 s) in parallel with the consumers (`SQS_DRAIN_TIMEOUT` capped 15 s + 5 s), outbox runner (`OUTBOX_DRAIN_TIMEOUT` capped 15 s), audit runner and webhook processor, then pools (≤ 10 s) and log / trace flush (≤ 5 s): worst case 45 s (`cmd/server/lifecycle.go`, `TestShutdownBudgetFits`). **Rev 0.60 order:** readiness off → `SHUTDOWN_DRAIN_DELAY` (≤ 5 s) → API drain ∥ workers (≤ 25 s) → every pool (app, system, audit drainer) closed once, in parallel, with pgcommon `DrainAndClose` (10 s + 1 s force-close grace, ≤ 11 s) → metrics listener (served until here for a final scrape, ≤ 2 s) → tracer, then logger flush last (≤ 5 s): worst case 48 s within the 50 s. **Startup (rev 0.60):** the deterministic checks run before any listener opens, so a bad deploy fails startup instead of a running pod: configuration, the Glue schema versions, and the `RedrivePolicy` of each enabled queue (outside dev; a transient lookup error is retried up to 3 times) |
+| In-pod workers | Outbox runner, webhook processor, saga worker, emission worker, lifecycle follow-ups, `platform-audit` `auditoutbox.Runner` (on the `billing_audit_drainer` pool; not in `/readyz`, `Runner.Alive()` in liveness), `tenant-billing-q` consumer and, only with `USAGE_BILLING_CONSUMER_ENABLED=true`, the `usage-billing-q` consumer, reconciliation run executor, metric exporter. Each runs supervised: an unexpected stop sets `commercial_billing_background_loop_running{loop}` to 0 (`BillingBackgroundLoopStopped`) and the loop is restarted in-process with backoff, 1 s doubling to 5 min; `/healthz` is not failed, so the pod keeps serving (rev 0.60; rev 0.59 failed liveness). Only the platform-audit runner's `Alive()` stays in liveness. All claim rows with `SKIP LOCKED`, so every replica runs them safely without leader election |
+| `HorizontalPodAutoscaler` | min 2, max 4; CPU 70%; external metric `commercial_billing_webhook_backlog{status="received"}` > 200 (average), served by the Prometheus Adapter rule `deploy/monitoring/prometheus-adapter-rule.yaml` |
 | `PodDisruptionBudget` | `minAvailable: 1` |
-| `Job` `<release>-migrate` | Helm pre-install / pre-upgrade hook, `cmd/migrate`, `activeDeadlineSeconds: 900` |
+| `Job` `<release>-migrate` | Helm pre-install / pre-upgrade hook, `cmd/migrate`, `activeDeadlineSeconds: 480` with `MIGRATE_TIMEOUT` `7m` (rev 0.60: both below `release.yml`'s Helm `--timeout=10m`, so Helm sees the hook fail rather than time out, and `cmd/migrate` exits cleanly first), no Istio sidecar (direct RDS). Runs as its own hook ServiceAccount `commercial-billing-migrate` (no IRSA) and reads its own hook Secret `commercial-billing-migrate-secrets` holding only `MIGRATION_DATABASE_URL`; both are created at hook weight `-10` (the release's ServiceAccount and Secret do not exist yet on a first install) and deleted whether the hook succeeds or fails (rev 0.60; a failed Job is kept for its logs). Deleting them after a failure needs Helm ≥ 3.19; CI and `release.yml` pin Helm 3.21.4 |
+| Workload labels and secrets (rev 0.59) | Pods carry `app.kubernetes.io/component` `server`, `cronjob` or `migrate`; the Service, PDB, ServiceMonitor, server NetworkPolicy and AuthorizationPolicy select `component: server` only. Each workload mounts only the secret keys its binary reads (§12 "Secrets per binary"; `secretKeys.server`, `secretKeys.jobs`, `secretKeys.migrate`). `automountServiceAccountToken: false` everywhere (IRSA and Istio use their own projected tokens). CronJob pools: `PG_MAX_CONNS` 3, `PG_MIN_CONNS` 0, `PG_SYSTEM_MAX_CONNS` 2 |
+| Istio sidecars (rev 0.59) | Server and CronJobs run the sidecar as a Kubernetes native sidecar (`sidecar.istio.io/nativeSidecar`, Istio ≥ 1.24, Kubernetes ≥ 1.30, the chart's `kubeVersion`), so a CronJob's sidecar exits with the job container; the migrate Job has none. `PeerAuthentication` `STRICT` on Billing's workloads. **Metrics scrape (rev 0.60), `metrics.scrapeMode`:** `plaintext` (default; Prometheus outside the mesh): the metrics port is `PERMISSIVE` and serves `/metrics` only; with no peer identity the AuthorizationPolicy admits `GET` on that port from `metrics.monitoringCIDRs` (the Prometheus pod ranges, `BILLING_MONITORING_CIDRS`) when set, otherwise from any source, and the NetworkPolicy admits only the `monitoring` namespace on it. `mesh` (Prometheus has an Istio identity): `STRICT` on every port, authorised by namespace. Go-live check: pick the mode the platform's Prometheus uses, since a wrong one refuses every scrape (§20.10). Chart `kubeVersion >= 1.30` |
+| Render-time guards (rev 0.59) | For `APP_ENV` `staging` / `prod` the chart fails to render with `istio.peerAuthentication.enabled`, `istio.authorizationPolicy.enabled` or `networkPolicy.enabled` off (rev 0.60), the placeholder account `000000000000`, a missing IRSA role ARN (`serviceAccount.annotations[eks.amazonaws.com/role-arn]`), an empty SNS topic or tenant queue URL, or empty `networkPolicy.postgresCIDRs`. `release.yml` passes them from the production environment's GitHub variables (`BILLING_IRSA_ROLE_ARN`, `BILLING_SNS_TOPIC_ARN`, `BILLING_TENANT_BILLING_QUEUE_URL`, `BILLING_USAGE_BILLING_QUEUE_URL` (optional while the usage consumer is off), `BILLING_POSTGRES_CIDRS`, optional `BILLING_WEBHOOK_SOURCE_CIDRS`, `BILLING_AWS_ENDPOINT_CIDRS`, `BILLING_MONITORING_CIDRS`). `release.yml` sets them for the production deploy only; a staging deploy must supply them itself (rev 0.60). Every environment: `metrics.scrapeMode` must be `plaintext` or `mesh` |
 | `HTTPRoute` (tenant) | `PathPrefix /api/v1/tenants/` with path match `…/subscription*`, `…/payment-methods*`, `…/invoices*`, `…/token-packs`, `…/token-addons*`, `…/billing-contact` → 8080; `SecurityPolicy` JWT + `ext_authz`, CORS for `TENANT_APP_BASE_URL`, rate limit 20 rps per tenant |
 | `HTTPRoute` (operator) | `PathPrefix /api/v1/operator/` scoped to Billing's paths; platform-realm `jwt_authn` provider (platform-edge, AuthZ LLD OP-G2). Path matches list every Billing operator route, B-O1 to B-O17 (§5.3); a route missing here is not reachable through the gateway (BL-OQ-9) |
-| `HTTPRoute` (webhook) | Exact `/api/v1/webhooks/stripe`; no JWT; `ext_authz` disabled; 50 rps |
+| `HTTPRoute` (webhook) | Exact `/api/v1/webhooks/stripe`; no JWT; `ext_authz` disabled; 50 rps per client IP; optional source-CIDR allow-list (§10.3, rev 0.59) |
 | `NetworkPolicy` | §10.2 |
-| Istio `AuthorizationPolicy` | B-I1 from `bff/bff-signup` only; tenant and operator routes from the gateway only |
-| Istio sidecar client-certificate forwarding | **Deployment requirement (`BIL-AUTH-3`).** The pod's sidecar must forward the verified client certificate as `X-Forwarded-Client-Cert` with `forwardClientCertDetails: SANITIZE_SET` (pod annotation `proxy.istio.io/config`, or the mesh default if it already is). Billing obtains B-I1's caller identity only from that header; disabling forwarding makes every B-I1 call `403`. The chart sets the annotation explicitly and `helm-check` asserts it |
-| `ServiceMonitor`, `PrometheusRule` | Metrics on 9090 from `monitoring` only; rules of §11.5 |
+| Istio `AuthorizationPolicy` | B-I1 from `bff/bff-signup` only; tenant and operator routes from the gateway only (`istio.gatewayPrincipal`, default `cluster.local/ns/gateway/sa/envoy-gateway`; see the gateway-namespace check in §20.10) |
+| Istio sidecar client-certificate forwarding | **Deployment requirement (`BIL-AUTH-3`).** The sidecar's inbound listener appends the verified client certificate to `X-Forwarded-Client-Cert` (Istio's sidecar default, `APPEND_FORWARD`; `forwardClientCertDetails` in `ProxyConfig` applies to gateways only, so rev 0.59 drops the `proxy.istio.io/config` annotation). B-I1 reads its caller identity from the **last** element of that header only. `PeerAuthentication` `STRICT` on Billing's workloads keeps a plaintext caller from supplying that element itself; `helm-check` asserts it |
+| `ServiceMonitor`, `PrometheusRule` | Metrics on 9090 from `monitoring` only; rules of §11.5. In `mesh` scrape mode the ServiceMonitor's TLS settings (Istio certificates) are platform-specific and not rendered by the chart (rev 0.60) |
 | `ExternalSecret` | §10.5 |
 
 | Container resources | Request | Limit |
 |---|---|---|
 | CPU | 100m | 500m |
 | Memory | 256Mi | 512Mi |
+| CronJob CPU / memory (`jobResources`) | 50m / 128Mi | 500m / 256Mi |
 
 Node class `t3.small` share (HLD §14.2).
 
@@ -3464,25 +3677,37 @@ Node class `t3.small` share (HLD §14.2).
 
 | CronJob | Schedule (UTC) | Purpose |
 |---|---|---|
-| `saga-sweeper` | `* * * * *` | Re-queue due sagas the worker missed; raise the 30-min alert once (`BIL-OPS-5`) |
+| `saga-sweeper` | `* * * * *` | Raise the 30-min alert once (`BIL-OPS-5`), then re-run due sagas the worker missed within 80 % of the job's remaining time (rev 0.59) |
 | `seat-renewal` | `*/15 * * * *` | Apply scheduled reductions within `SEAT_RENEWAL_LEAD` (§8.6.2) |
 | `downgrade-apply` | `*/15 * * * *` | Re-run I-18 for downgrades within `DOWNGRADE_RECHECK_LEAD` (§8.4.2) |
-| `purchase-expiry` | `*/5 * * * *` | Expire abandoned purchases, previews, checkout sessions, upgrades; void their open invoices |
+| `purchase-expiry` | `*/5 * * * *` | Expire abandoned purchases, previews, checkout sessions, upgrades; void their open invoices and delete their draft ones (rev 0.60), look up an unrecorded invoice with `FindInvoice`, and settle a purchase whose invoice is paid for its amount and currency instead of expiring it (§8.5.1, `BIL-PAY-6`, `BIL-PAY-7`, rev 0.59). A checkout session past `expires_at` is first expired at the provider, outside any transaction (`BIL-CONC-2`), with B-P2's keys (`bsub:<billing_subscription_id>:expire`, or `checkout:<session_id>:expire` for a session with no subscription); `ErrCheckoutCompleted` (the customer completed it, its callbacks still queued) leaves the session open for `checkout.session.completed` and `invoice.paid`. The outcome then commits under the tenant lock with a re-read of the session (rev 0.60) |
 | `seat-projection-check` | `7,37 * * * *` | Compare Core's `licensed_seats` with Billing's; resync (§8.6.4) |
 | `pii-minimisation` | `0 5 * * *` | Null the billing-contact name and email (and clear the provider customer email) 90 days after `closed_at`, and 30 days after an abandoned checkout's subscription ended; set `pii_minimised_at`. Never deletes a row and never touches a financial record (`BIL-OPS-9`, §15.3) |
 | `outbox-prune` | `0 3 * * *` | `outbox.Runner.PrunePublished` (8 days) |
 | `processed-events-prune` | `0 4 * * *` | `inbox.Store.Prune` (8 days) |
 | `renewal-repricing` | `20 * * * *` | Schedule the move to a new price at the first renewal on or after its effective date (§8.16, `BIL-SUB-8`) |
-| `idempotency-prune` | `30 4 * * *` | `idempotency_records` past `expires_at` |
+| `idempotency-prune` | `30 4 * * *` | `idempotency_records` past `expires_at`, stored previews included (scope `preview`) |
 
-`concurrencyPolicy: Forbid`, `startingDeadlineSeconds: 120`; each job pushes `commercial_cross_tenant_job_runs_total` to the Pushgateway. Reconciliation is operator-triggered in Phase 1 (B-O5) and runs in the server pods; Phase 2 adds a nightly `reconciliation` CronJob calling the same code.
+`concurrencyPolicy: Forbid`, `startingDeadlineSeconds: 120`; each job pushes `commercial_billing_cross_tenant_job_runs_total{job_name, result}` (`success`, `partial` or `failure`; rev 0.43) to the Pushgateway at `PUSHGATEWAY_URL`, or logs it when the key is empty (rev 0.37). A run that exits 0 also sets `commercial_billing_cron_job_last_success_timestamp_seconds{job_name}` and replaces the job's group (`PUT`); a failed run is `POST`ed, which keeps the previous success stamp, so `BillingCronJobNotSucceeding` measures the time since the last success (rev 0.59). CronJob pods size their pools small (`PG_MAX_CONNS` 3, `PG_MIN_CONNS` 0, `PG_SYSTEM_MAX_CONNS` 2, chart `cronjobs.env`), since ten CronJobs can overlap the server's connections on PgBouncer. A job selects its work across tenants as `billing_system` (read-only on tenant tables, §4.3) and writes in tenant transactions on the app pool under the tenant lock. Reconciliation is operator-triggered in Phase 1 (B-O5) and runs in the server pods; Phase 2 adds a nightly `reconciliation` CronJob calling the same code.
 
 ### 13.3 CI/CD, deploy role and PCI review
 
-- Four-workflow pipeline as IAM (HLD §15.4): validate (lint, `go-arch-lint`, unit, `schema-check`, Swagger drift, `helm-check`, metric names), integration (testcontainers), image build and scan, deploy.
-- **AWS OIDC deploy role** `github-actions-billing-deploy`, trusting only `repo:BCBP-SOLUTIONS-FZC-LLC/commercial-billing:*`; separate from `github-actions-commercial-deploy` (Entitlements, Usage & Metering).
+Seven workflows in `.github/workflows` (rev 0.61):
+
+| Workflow | Trigger | Content |
+|---|---|---|
+| `ci.yml` (CI) | push, pull request, dispatch | Calls `validate-test` and `validate-quality`; `build-image` (Hadolint, `.dockerignore` check, cached amd64 build) → `trivy` (CRITICAL / HIGH) and `smoke`; on `main`, push to GHCR with provenance, SBOM and keyless Cosign signature; `pr-summary` on pull requests |
+| `validate-test.yml` | reusable | `make test` (race, no Docker); every suite with coverage (`make cover-all`, testcontainers); **coverage gate ≥ 96 %** over `internal/` + `pkg/` (`coverage-gate.sh`); `make arch-lint`; OpenAPI drift; AsyncAPI ↔ schema sync and `schema-gov validate` |
+| `validate-quality.yml` | reusable | Format, tidy, vet, `make lint`, `make guards`, `make metrics-lint` (observability standard), `govulncheck`, digest-pinned base images, `make helm-check` (Helm 3.21.4: lint and kubeconform on base, dev, staging and prod values, promtool on the rules, chart contract tests in `test/helm`) |
+| `release.yml` | tag `v*`, dispatch | validate → `build` (tag on `main`, CHANGELOG entry, binaries) → `certify-gate` (§14.6, environment `staging`) → `schema-verify` (production Glue) → `docker` (semver tags, Trivy, SBOM, SLSA provenance, Cosign sign and verify) → `deploy-gate` (Helm to namespace `billing`, environment `production`, deployed digest = published digest, rollout, 5xx < 1 % for 2 min or `helm rollback`) → `publish` (GitHub Release) |
+| `schema-registry.yml` | pull request / push on schema files, release, dispatch | `schema-gov` validate, freeze check, diff, register and verify in Glue `billing-events` (staging on `main`, production on release) |
+| `contract-live.yml` | daily, pull request, dispatch | `test/contract` against consumers' live schemas on their `main` (Entitlements today, §14.3) |
+| `changelog-check.yml` | pull request | Fails a behaviour change (`internal/`, `api/`, `deploy/`, `cmd/`, `pkg/`) without a `CHANGELOG.md` entry |
+
+Local gates in `.githooks` (`make install-hooks`): `pre-commit` runs tidy, format check, lint, guards and OpenAPI staleness; `pre-push` runs the Trivy image scan.
+
 - **Production deploys require a second reviewer from the PCI owner group** (GitHub environment protection on `production`, HLD §15.4).
-- Canary on webhook success rate, saga duration and 5xx rate (HLD §15.4); automatic rollback on breach.
+- **HLD §15.4 targets not built yet (rev 0.61):** the AWS OIDC deploy role `github-actions-billing-deploy` (trusting only this repository; separate from `github-actions-commercial-deploy`) and the canary on webhook success rate, saga duration and 5xx rate. As built, `deploy-gate` reaches the cluster with `KUBECONFIG_B64` and gates only on the 5xx rate before an automatic `helm rollback`; GitHub OIDC is used for the Glue jobs (`AWS_ROLE_ARN`). Open item (§20.10).
 
 ### 13.4 Migration safety
 
@@ -3495,6 +3720,20 @@ Dev and staging use Stripe **test mode** keys and their own webhook endpoints; o
 ---
 
 ## 14. Testing Strategy
+
+**Suites as built (rev 0.61).** About 580 top-level Go test functions. Unit and contract tests sit next to the code and in `test/contract` (`make test`, race, no Docker); the integration suites run with build tag `integration` on testcontainers (`make test-integration`, or one at a time); invariant tests carry the id in their name (`TestBIL_<AREA>_<n>_…`, `docs/invariants-coverage.md`).
+
+| Suite | Content |
+|---|---|
+| `internal/…`, `cmd/…`, `pkg/…` (`_test.go`) | Unit tests of §14.1, adapter tests with fakes, startup, wiring and shutdown-budget tests of the binaries |
+| `test/postgres` | Migrations, constraints, RLS and roles, repositories, ledger claim, idempotency, pools (Postgres 17) |
+| `test/bus` | Outbox → SNS, SQS consumers, Glue framing, DLQ (floci) |
+| `test/stripemock` | Stripe adapter request shapes against stripe-mock |
+| `test/flows`, `test/scenarios/{commerce,jobs,lifecycle}` | Use cases end to end on Postgres with fakes for the provider, IAM and Entitlements: §14.2 scenarios, CronJobs and workers, lifecycle and suspension |
+| `test/e2e` (+ `test/testkit`) | In-process service over HTTP with production roles: route catalogue, RFC 9457 error shape (`BIL-API-6`), security, infrastructure, flows |
+| `test/contract` | Produced events against Billing's and consumers' schemas (§14.3) |
+| `test/certify` | `cert-1.0` suite against stripe-mock (`make certify-rehearsal`, §14.7) |
+| `test/helm` (tag `helm`) | Chart contract on `helm template` output (`make helm-check`) |
 
 ### 14.1 Unit tests
 
@@ -3533,15 +3772,16 @@ Postgres 17 (the version the IAM services use, `postgres:17-alpine`) with the re
 
 | Contract | Method |
 |---|---|
-| B-I1 with the Signup BFF | Consumer-driven contract (Pact) from the BFF adapter: `201`, `200` replay, `402 PAYMENT_DECLINED`, `402 PAYMENT_ACTION_REQUIRED`, `409 SUBSCRIPTION_ALREADY_EXISTS`, `503` |
+| B-I1 with the Signup BFF | Consumer-driven contract (Pact) from the BFF adapter: `201`, `200` replay, `402 PAYMENT_DECLINED`, `402 PAYMENT_ACTION_REQUIRED`, `409 SUBSCRIPTION_ALREADY_EXISTS`, `503`. **Not built yet (rev 0.61):** no Pact broker or provider verification in Billing's CI; B-I1 is covered by `test/scenarios/lifecycle` and `test/e2e` until it is (BL-OQ-8) |
 | Produced events | Each produced payload validated against the **consumers'** schemas fetched in CI: Core `api/asyncapi.yaml` (`TenantPlanChangedPayload`, `TenantSeatsChangedPayload`, envelope base requiring `id`, `type`, `subject`, `source`, `tenant_id`, `time`), RP `BillingTenantReactivatedPayload` (`tenant_id` required), Audit `billingAudit*` messages; `schema-gov diff` against the registry |
+| Produced `TenantQuotaAddOnChanged` → Entitlements (BL-OQ-4, BL-OQ-20; approved 2026-11-26) | Billing's canonical schema (`tenant_quota_add_on_changed.json`) against Entitlements' consumed schema (`inbound_tenant_quota_add_on_changed.json`), both ways: every field Entitlements requires is required by Billing; types, formats and `not` rules match; Billing's `reason` and `resource` values are all ones Entitlements accepts and maps. Every produced purchase and refund payload decodes into Entitlements' inbound structs (mirrored in `test/contract/entitlements_addon_test.go`) and meets its consumer rules (purchase: `delta > 0`, `purchased_at` set; refund: `delta < 0`, `purchase_ref` a UUID). Billing's domain refuses any payload Entitlements could not apply. Runs in CI against the vendored copy and daily against Entitlements' `main` (workflow `Contract (live consumers)`). CI fails on any backward-incompatible change on either side |
 | Consumed events | RP's published `TenantConvertedPayload`, `TenantSuspendedPayload`, `TenantReactivatedPayload`, `TenantOffboardedPayload`; Usage & Metering's `UsagePeriodClosed` once published |
 | IAM routes | I-11, I-18, RP-3, RP-4, RP-11 request and response shapes and error codes from IAM's Swagger |
 | AL-5 | Covered by `platform-audit`'s own contract suite against the pinned Audit Log release; Billing runs `audittypecheck ./...` in CI (warning) |
 
 ### 14.4 E2E (staging)
 
-Stripe test mode with **Test Clocks**: monthly and annual renewal; failed renewal → `past_due` → retries → `cancelled`; operator suspension across a renewal (draft held, no charge, open `past_due` invoice stops retrying and never cancels) → reactivation (retries resume, held draft not finalised) → B-O16 `finalize` and `void`; reactivation from `past_due` and from `cancelled`; scheduled downgrade with I-18 re-check; reduction across a renewal; token add-on with 3-D Secure test cards. CD-19 smoke: Billing calls each admitted route as `commercial-system` and expects `403` on RP-10 and RP-14. Operator paths once OP-G1 to OP-G3 are done: the joint end-to-end test OP-G4 (IAM + Commercial) covers B-O1 to B-O15.
+`test/e2e` (§14 suites) is the in-process end-to-end suite that runs in CI; this section is the staging rehearsal against Stripe test mode. Stripe test mode with **Test Clocks**: monthly and annual renewal; failed renewal → `past_due` → retries → `cancelled`; operator suspension across a renewal (draft held, no charge, open `past_due` invoice stops retrying and never cancels) → reactivation (retries resume, held draft not finalised) → B-O16 `finalize` and `void`; reactivation from `past_due` and from `cancelled`; scheduled downgrade with I-18 re-check; reduction across a renewal; token add-on with 3-D Secure test cards. CD-19 smoke: Billing calls each admitted route as `commercial-system` and expects `403` on RP-10 and RP-14. **Go-live evidence (rev 0.36):** in Phase 7 these Test Clock scenarios run as scripts against Stripe test mode, and their run records (clock ids, event ids, final states) are kept as go-live evidence (§20). **Method (rev 0.38):** `scripts/testclock/run.sh` (`make testclock`). Stripe advances only customers created on a clock, so each scenario converts a trial tenant with a stub (B-O1), creates its Stripe customer on a new clock and a subscription with `trial_end` = the stub's period end, and links them with the §19.3 stub → Stripe switch. The script refuses a live key; runbook `docs/runbooks/test-clock-rehearsal.md`. Operator paths once OP-G1 to OP-G3 are done: the joint end-to-end test OP-G4 (IAM + Commercial) covers B-O1 to B-O15.
 
 ### 14.5 RLS test cases
 
@@ -3549,9 +3789,11 @@ For every tenant-scoped table: insert under tenant A, read under tenant B → 0 
 
 ### 14.6 Coverage and gates
 
-Merged statement coverage ≥ 90% at first release (raised to 95% after Phase 1, as IAM); 100% of the transition tables, the proration calculator and the permission map; `go-arch-lint`, `forbidigo`, `check-outbox-access.sh`, `govulncheck`, metric-name validation, `schema-check`, Swagger drift, `helm-check`.
+Merged statement coverage ≥ 90% at first release (raised to 95% after Phase 1, as IAM); **as built the CI gate is 96 %** over `internal/` + `pkg/` (`.github/scripts/coverage-gate.sh`, `COVERAGE_THRESHOLD`), measured at 98.4 % (97.8 % over every package) at rev 0.61; 100% of the transition tables, the proration calculator and the permission map; `go-arch-lint`, `forbidigo`, `check-outbox-access.sh`, `govulncheck`, metric-name validation, `schema-check`, Swagger drift, `helm-check`.
 
-**Certification gate in CI.** A change under `internal/adapters/provider/<name>/` or a change of the pinned provider API version bumps `AdapterVersion()` and **fails the `release` workflow** until a certification record for the new version is present in staging (`cmd/certify --check <provider> <adapter_version>` queries B-O7-style read access to `provider_certifications`). Pull requests still merge; the image cannot be promoted to production without the record (`BIL-PROV-2`).
+**Certification gate in CI.** A change under `internal/adapters/provider/<name>/` or a change of the pinned provider API version bumps `AdapterVersion()` and **fails the `release` workflow** until a certification record for the new version is present in staging (`certify check <provider> "$(certify adapter-version)"` reads `provider_certifications` with a read-only DSN, `CERTIFY_CHECK_DSN`, rev 0.39). Pull requests still merge; the image cannot be promoted to production without the record (`BIL-PROV-2`).
+
+The Stripe adapter is at `1.1.0` since rev 0.60 (§3.5): the release gate fails until a 1.1.0 record is in staging.
 
 ### 14.7 Provider certification suite
 
@@ -3571,7 +3813,35 @@ Merged statement coverage ≥ 90% at first release (raised to 95% after Phase 1,
 | Disputes and fraud signals | Dispute and early fraud warning test events normalise to `dispute_opened` / `fraud_warning` | No (recorded) |
 | Collection pause | Pause and resume collection | No (recorded; without it, CD-24 handling is manual) |
 
+**`cert-1.0` case ids (rev 0.36).** `results` entries are `{capability, case, passed}`. The required ids are fixed in `domain.CertSuite`. A run missing any of them is `CERTIFICATION_INCOMPLETE`:
+
+| Capability id | Case ids |
+|---|---|
+| `recurring_subscriptions` | `create`, `increase_quantity`, `change_plan_now`, `change_plan_period_end`, `schedule_lower_quantity`, `renew`, `cancel_at_period_end`, `cancel_now` |
+| `webhook_delivery` | `signature_verified`, `tolerance_enforced`, `redelivered`, `out_of_order_converges` |
+| `stable_event_ids` | `same_id_on_redelivery`, `ledger_dedupe` |
+| `proration` | `preview_equals_charge` (declared `native`) or `calculator_charged` (declared `fallback`); the declared mode must match (`BIL-PROV-3`) |
+| `invoice_retrieval` | `by_reference`, `pdf_link`, `listing_paginates` |
+| `payment_method_update` | `hosted_page`, `used_for_renewal`, `no_card_data` |
+| `refunds` | `full`, `partial`, `event_recorded` |
+| `retry_semantics` | `retried`, `exhausted_past_due_cancelled`, `later_success_active` |
+| `one_off_charges` | `off_session`, `three_d_secure`, `decline` |
+
+Results for the optional groups are recorded when present and never fail a run. `cert-1.0` records `collection_pause/pause_and_resume`, and has no disputes case yet. A run passes with **30 required cases**: the 29 above and the proration case of the declared mode (rev 0.39). A new suite version adds a `domain.CertSuite` entry.
+
 Results and evidence references go in `results`; a run with any required case failing is recorded `failed`.
+
+**How a run works (rev 0.39).**
+
+| Aspect | Rule |
+|---|---|
+| App layer | The adapter runs under Billing's use cases, B-W1, the callback processor and the CronJob use cases. Core, Realm Provisioner and Entitlements are stubbed (not under certification) |
+| Database | `certify_<run>` on a scratch Postgres server (`CERTIFY_SERVER_DSN`, superuser of that server only), migrated, used through the five roles, dropped at the end |
+| Time | Test mode: every customer is on a Stripe Test Clock (adapter `TestClock`), advanced for renewals and dunning, and deleted at the end |
+| Events | Read raw from the account's event list, signed with the run's own secret, posted to B-W1 in process; no public endpoint. `webhook_delivery` cases prove Billing's side (signature, tolerance, `503` then one ledger row, dedupe, reordering) |
+| stripe-mock | `make certify-rehearsal`: the real adapter's requests go to stripe-mock. The provider state Billing needs is substituted and listed per case (`mock_substitutions`). `provider_account_ref = "stripe-mock"`; never submittable |
+| Evidence | Written to a local directory as `<provider>/<adapter_version>/<capability>-<case>.json`; `evidence_ref` is the evidence bucket path; uploaded with `aws s3 sync` before submission |
+| Commands | `certify run` → `certify submit` (B-O14) → `certify review` by another PCI owner group member (B-O17). The release gate is `certify check <provider> <adapter_version>`; `certify adapter-version` prints the build's version |
 
 ---
 
@@ -3629,26 +3899,27 @@ Results and evidence references go in `results`; a run with any required case fa
 
 ### 16.1 Billing register
 
-Each item names the default the design runs with until it closes.
+Each item names the default the design runs with until it closes. Per-team detail, actions and "done when" for every item not closed: `billing-open-items.md` (this folder).
 
 | # | Question / decision | HLD ref | Owner | Default until closed | Status |
 |---|---|---|---|---|---|
 | BL-OQ-1 | **CD-24 — invoicing during an operator suspension.** Proposal §8.10: pause collection automatically (`keep_as_draft`), resume on operator reactivation, drafts decided by an operator; B-O10 override | CD-24 | Finance + Billing | Proposal on (`AUTO_PAUSE_ON_OPERATOR_SUSPENSION=true`) | **Closed** (Finance, 2026-11-23): rules 1 to 4 approved, default `true`. Added: scope sentence (no termination, entitlement change or waiver); retries on already-open invoices stopped while paused; mandatory reason on B-O10; new B-O16 for the operator's finalise/void decision on held drafts (`BIL-SUB-7`). IAM follow-up BL-OQ-25 |
-| BL-OQ-25 | **IAM for B-O16** (from BL-OQ-1): (a) AuthZ Enrichment adds B-O16 `POST /api/v1/operator/tenants/:id/invoices/:invoice_id/disposition` to the OP-G4 test list (tenant in path); (b) Audit Log adds AL-5 entry type `billing.invoice.suspension_disposition` (`security_3y`). Billing's operator `HTTPRoute` lists B-O16 | §11.4, §11.6 | IAM (AuthZ Enrichment, Audit Log), requested as action A-9 in `billing-iam-actions.md`; Billing (`HTTPRoute`) | Until (b) ships, AL-5 entries stay in `pending_audit_entries` (as BL-OQ-10); B-O16 reachable only once the operator path is live (BL-OQ-14) | Open (go-live gate, not a design blocker) |
-| BL-OQ-26 | **IAM for B-O17** (from BL-OQ-21): (a) a platform-realm role `pci_owner_reviewer`, assigned only to PCI owner group members, passed by AuthZ Enrichment in `x-tenant-roles` on the operator path; (b) OP-G4 covers B-O17 (allow with both roles, deny without `pci_owner_reviewer`); (c) Audit Log adds AL-5 entry type `billing.provider.certification_reviewed` (`security_3y`). Billing's operator `HTTPRoute` lists B-O17 | §10.7.1, §11.4 | IAM (Realm Provisioner / Keycloak, AuthZ Enrichment, Audit Log), requested as action A-10 in `billing-iam-actions.md`; PCI owner group names the role holders | Until (a), B-O17 answers `403`, so no provider can be certified; until (c), AL-5 entries wait in `pending_audit_entries` | Open (go-live gate for the first provider certification, not a design blocker) |
+| BL-OQ-25 | **IAM for B-O16** (from BL-OQ-1): (a) AuthZ Enrichment adds B-O16 `POST /api/v1/operator/tenants/:id/invoices/:invoice_id/disposition` to the OP-G4 test list (tenant in path); (b) Audit Log adds AL-5 entry type `billing.invoice.suspension_disposition` (`security_3y`). Billing's operator `HTTPRoute` lists B-O16 | §11.4, §11.6 | IAM (AuthZ Enrichment, Audit Log), requested as action A-9 (`billing-open-items.md` §4.2); Billing (`HTTPRoute`) | Until (b) ships, AL-5 entries stay in `pending_audit_entries` (as BL-OQ-10); B-O16 reachable only once the operator path is live (BL-OQ-14) | Open (go-live gate, not a design blocker) |
+| BL-OQ-26 | **IAM for B-O17** (from BL-OQ-21): (a) a platform-realm role `pci_owner_reviewer`, assigned only to PCI owner group members, passed by AuthZ Enrichment in `x-tenant-roles` on the operator path; (b) OP-G4 covers B-O17 (allow with both roles, deny without `pci_owner_reviewer`); (c) Audit Log adds AL-5 entry type `billing.provider.certification_reviewed` (`security_3y`). Billing's operator `HTTPRoute` lists B-O17 | §10.7.1, §11.4 | IAM (Realm Provisioner / Keycloak, AuthZ Enrichment, Audit Log), requested as action A-10 (`billing-open-items.md` §4.2); PCI owner group names the role holders | Until (a), B-O17 answers `403`, so no provider can be certified; until (c), AL-5 entries wait in `pending_audit_entries` | Open (go-live gate for the first provider certification, not a design blocker) |
+| BL-OQ-27 | **After a conversion reversal (§8.2 step 3, rev 0.45):** (a) Org & Membership records the pre-conversion trial plan and, on `TrialReactivated{reason: conversion_revert}`, resets `plan` to it and `licensed_seats` to the trial allowance (T-8), advancing its seat recency watermark to the reversal time; needs RP's `reason` field (Org & Membership asked RP). (b) Entitlements restores trial-profile limits on the same event and decides whether an add-on balance not refunded survives the reversal | CD-10 | IAM (Org & Membership, Realm Provisioner); Entitlements | Reverted tenant keeps the paid plan and seats until (a) ships; operator refunds add-ons by hand (runbook) | Open. (a) **Merged by Org & Membership** (2026-11-25): PRs #69, #70, #71 (`8150ea1`, O&M LLD rev 2.65), not deployed; both seat and plan watermarks raised to the revert time. Direct paid signups are covered: every tenant is created as `trial` with its signup plan (I-1), so `trial_plan` is the signup plan (rev 0.48). RP's `reason` field: RP PR #63, open. (b) **Raised with Entitlements** (`billing-note-to-entitlements-revert-plan.md`, E-1 to E-4): consume `TrialReactivated` on `tenant-entitlements-q`; trial snapshot from I-17; read order against Org & Membership; add-on balance on a trial. Awaiting reply |
 | BL-OQ-2 | **EVT-14 and Billing's events (blocking for direct-signup and conversion go-live).** Core's recency guard runs on `TenantSeatsChanged` too, so a newer Billing seat event applied before an in-flight `TenantConverted` makes Core skip the conversion. Ask: give `licensed_seats` its own recency mark, or do not let `TenantSeatsChanged` advance `tenants.last_event_at`. Also confirm Core's tie rule (`time ==` → skip?) | §9.3, §7.5 | IAM (Core) | `BIL-EVT-5`, `BIL-EVT-6` (120 s delay), `seat-projection-check` | **Closed** (Core, 2026-11-19): `TenantSeatsChanged` has its own watermark `tenants.seats_last_event_at` (migration `000010_seats_last_event_at`); EVT-14 split by event type, so a seat event no longer advances `last_event_at`; tie rule `time ==` → skip confirmed; regression test `TestConsumerEVT14_SeatsChangedDoesNotBlockLifecycle`. `BIL-EVT-5/6` and `seat-projection-check` stay as defence in depth |
 | BL-OQ-3 | **Billing as an Entitlements caller** for `BIL-ADD-1` (finite token quota). Entitlements admits `billing` / `commercial-billing` on `GET /api/v1/internal/tenants/:id/entitlements` (NetworkPolicy + mTLS). Alternative: an `addon_eligible` field in the effective set | §5.2, §8.6.2 | Entitlements LLD | Purchase fails closed (`503`) if not admitted | **Decided** (TL, 2026-11-19): generic `addon_eligible` rejected; Entitlements exposes resource-level eligibility (`llm_tokens`, `api_requests`) on the effective set; Billing → Entitlements **read-only** access approved (`GET /api/v1/internal/tenants/:id/entitlements` only, NetworkPolicy + mTLS for `cluster.local/ns/billing/sa/commercial-billing`). Entitlements to implement |
 | BL-OQ-4 | **`purchased_at` on `TenantQuotaAddOnChanged`** (additive) as the 12-month expiry basis | §8.6.2, §9.4 | Entitlements LLD, Audit | Field emitted; envelope `time` equals it | **Decided** (TL, 2026-11-19): Billing is the only publisher of `TenantQuotaAddOnChanged` on `billing.events`; `purchased_at` stays Billing's (payment confirmation). Entitlements withdraws its `tenant_quota_add_on_changed` |
 | BL-OQ-5 | **Launch currency.** HLD §6.3 lists USD amounts; the capability bar requires AED pricing. Which currency per market; AED and USD both in Phase 1? | §6.3, §10.7.1, CD-56 | Finance | `DEFAULT_CURRENCY=USD`, AED rows added by B-O11 | **Closed** (Finance, 2026-11-23): USD remains the default currency. Market-specific currencies are configured through `plan_prices`; AED pricing can be introduced via B-O11 without application changes. No further design or implementation work is required. |
 | BL-OQ-6 | **Proration rule without a provider engine** (§8.5.3); behaviour below the minimum charge; renewal top-up kept on payment failure (§8.6.3) | CD-54 | Finance | Seconds-based, half-up; `free_until_renewal`; top-up kept | **Closed** (Finance, 2026-11-23): rules 1 to 3 approved unchanged. Added on Finance's request: unrounded amount and inputs stored (`BIL-SEAT-5`); below-minimum deferral recorded with `deferral_reason = below_provider_minimum` in the purchase row, `TenantSeatsChanged` (audit) and metrics; fallback calculator never overrides a provider's own proration |
 | BL-OQ-7 | **CD-10 — conversion-reversal trigger.** Proposal §8.2: fraud dispute or early fraud warning on the conversion payment within 7 days → SEV-2 → operator-approved B-O8 → RP-4 | CD-10, BIZ-7 | Billing + Finance + Security | Operator-approved; `AUTO_REVERT_ON_EFW=false` | **Closed** (Finance and Security, 2026-11-23): approved unchanged. Finance: trigger, conversion-payment scope, 7-day window, refund rule. Security: SEV-2, operator-only B-O8, `AUTO_REVERT_ON_EFW=false` |
-| BL-OQ-8 | **BFF alignment (SGN-2).** Contract published in §5.4.2. BFF: `BILLING_TIMEOUT_MS ≥ 15000`; field mapping `PaymentToken → payment_method_ref`, `Plan → plan_code`, `Seats → licensed_seats`; 3-D Secure (`402 PAYMENT_ACTION_REQUIRED` → browser → same-key retry). Go-live order §18.7 | §10.6 | Web / growth (BFF) | `FEATURE_DIRECT_SIGNUP=false` | Open — contract published |
+| BL-OQ-8 | **BFF alignment (SGN-2).** Contract published in §5.4.2. BFF: `BILLING_TIMEOUT_MS ≥ 15000`; field mapping `PaymentToken → payment_method_ref`, `Plan → plan_code`, `Seats → licensed_seats`; 3-D Secure (`402 PAYMENT_ACTION_REQUIRED` → browser → same-key retry). Go-live order §18.7. **2026-11-27:** BFF alignment done in code: `bff-signup` PR #6 (BFF LLD v1.3 §19) **merged** 2026-11-26 (`c2e9a1d`), not yet promoted to staging. Remaining: Pact consumer contract (needs broker details from Billing), Test-Clock E2E slot, sidecar injection on namespace `bff` (SRE) | §10.6 | Web / growth (BFF) | `FEATURE_DIRECT_SIGNUP=false` | Open — BFF code done, Pact and E2E pending |
 | BL-OQ-9 | **Operator routes B-O6 to B-O15.** (a) Billing's operator `HTTPRoute` lists every operator path, B-O1 to B-O17 (Billing's own chart, §13.1; B-O16 and B-O17 added in rev 0.16 and rev 0.21). (b) IAM extends the end-to-end operator test (AuthZ Enrichment LLD §8.9.1 OP-G4), whose list covers only B-O1 to B-O5, to B-O6 to B-O15. No IAM gateway route list exists: Envoy Gateway is the only ingress, and the platform-realm `jwt_authn` provider and AuthZ Enrichment admit the whole `/api/v1/operator/` prefix | §11.4 | Billing (a); IAM + Commercial (b) | Today's `403` is the operator path being off (OP-G1 to OP-G3, `BIL-AUTH-6`), not a missing route | **Approved; IAM part merged** ([iam-authz-enrichment#43](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-authz-enrichment/pull/43), `f4af854`, 2026-11-19): AuthZ unit and e2e tests cover B-O1–B-O15. **Closed** (2026-11-23): (a) Billing's operator `HTTPRoute` now lists the complete operator surface, B-O1 to B-O17, as specified in §13.1 (Commercial Team, 2026-11-23). Gateway reachability is proven by the OP-G4 joint run once OP-G2 and OP-G3 are live (BL-OQ-14). IAM's OP-G4 coverage of B-O16 and B-O17 is tracked separately (BL-OQ-25, BL-OQ-26) |
 | BL-OQ-10 | **Audit Log:** admit `cluster.local/ns/billing/sa/commercial-billing` to AL-5; add entry types `billing.conversion.stub`, `billing.conversion.reverted`, `billing.saga.resolved`, `billing.collection.paused`, `billing.price_book.changed`, `billing.provider.certified`, `billing.provider.certification_revoked` (tier `security_3y`) | §11.6, CD-21 | Audit Log | Entries held in `pending_audit_entries` | **Closed** (Audit Log rev 0.34: admitted; all seven types added) |
 | BL-OQ-11 | **CD-14 — financial-record retention** per jurisdiction (BIZ-5); also decides Workflow history retention | CD-14 | Finance + Legal + Billing | No financial deletion job; operational prunes only | **Closed** (Finance and Legal, 2026-11-23): financial records and financial workflow history kept indefinitely; no deletion or minimisation job; tenant purge keeps them; `FINANCIAL_RECORD_RETENTION_YEARS` reserved. Added: governance note, `pii-minimisation` for contact data only, `BIL-OPS-9` |
 | BL-OQ-12 | **Notification messages (NTF-3):** seats added; reduction applied (incl. renewal above target); add-on purchased; downgrade blocked at renewal; renewal top-up charged; **renewal price change scheduled** (current and new unit price, effective date; required by Product before a higher price applies, BL-OQ-16). Add-on expiry reminder is Entitlements-driven | §10.5 | Notification + Commercial | Only past-due and cancelled emails (existing filter) | Open |
 | BL-OQ-13 | **Permission list (BIZ-6)** — six permissions in §5.2, two added here | §6.6, CD-54 | Finance + Billing | §5.2 as written | **Closed** (Finance, 2026-11-23): six permissions and role mapping approved unchanged. Added: Finance's overlap rule in §5.2 and invariant `BIL-AUTH-7` |
-| BL-OQ-14 | **CD-52 dependency** — operator path needs OP-G1 (Keycloak platform realm, IAM), **OP-G2** (gateway `jwt_authn` provider, platform-edge), OP-G3 (`OPERATOR_REALM_ISSUER` set and deployed, IAM), then the OP-G4 joint end-to-end test (numbering per AuthZ Enrichment LLD §8.9.1; HLD numbers differ, D-9) | CD-52 | Platform-edge (OP-G2); IAM (OP-G1, OP-G3) | Operator routes `403` outside dev/test | Open (external). **OP-G1 merged** ([iam-realm-provisioner#60](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-realm-provisioner/pull/60), `9e8fcab`): realm `bcbp-platform`, issuer `https://auth.bcbpsolutions.com/realms/bcbp-platform`, created on Realm Provisioner's next deploy; operator users still to be created by hand. **OP-G2** requested from platform edge (`op-g2-platform-edge-request.md`), not started, sole external blocker. OP-G3 after OP-G2. OP-G6 date not set |
+| BL-OQ-14 | **CD-52 dependency** — operator path needs OP-G1 (Keycloak platform realm, IAM), **OP-G2** (gateway `jwt_authn` provider, platform-edge), OP-G3 (`OPERATOR_REALM_ISSUER` set and deployed, IAM), then the OP-G4 joint end-to-end test (numbering per AuthZ Enrichment LLD §8.9.1; HLD numbers differ, D-9) | CD-52 | Platform-edge (OP-G2); IAM (OP-G1, OP-G3) | Operator routes `403` outside dev/test | Open (external). **OP-G1 merged** ([iam-realm-provisioner#60](https://github.com/BCBP-SOLUTIONS-FZC-LLC/iam-realm-provisioner/pull/60), `9e8fcab`): realm `bcbp-platform`, issuer `https://auth.bcbpsolutions.com/realms/bcbp-platform`, created on Realm Provisioner's next deploy; operator users still to be created by hand. **OP-G2** requested from platform edge (`billing-open-items.md` §4.1), not started, sole external blocker. OP-G3 after OP-G2. OP-G6 date not set |
 | BL-OQ-15 | **CD-56 follow-ups** — per-tenant provider selection once a second provider exists; moving saved payment methods and live subscriptions when a provider is removed (design in §19.3) | CD-56 | Billing + Finance | One provider; `billing_accounts.provider` fixed while live | Deferred (Phase 3) |
 | BL-OQ-16 | **Price changes for live subscriptions** — keep until next renewal (default) or grandfather longer | §6.3 | Product + Finance | Next renewal | **Closed** (Product and Finance, 2026-11-23): new price at the first renewal on or after the effective date; no grandfathering; customers notified before a higher price applies. Added: §8.16, `renewal-repricing`, `BIL-SUB-8`, B-P1 `scheduled_unit_price`, BL-OQ-12 message |
 | BL-OQ-17 | **Stripe data location and processor terms** for the UAE account | §13.3 | Finance + Legal | — | **Closed** (Legal, 2026-11-23): Legal reviewed the Stripe UAE data-location and processor terms and accepted them without required amendments. Billing may proceed with the planned Stripe UAE account configuration. No additional design, legal or implementation work remains. |
@@ -3659,6 +3930,8 @@ Each item names the default the design runs with until it closes.
 | BL-OQ-21 | **Who signs a certification run.** A Commercial Team (Billing) engineer submits (B-O14) and a different PCI owner group member approves (B-O17), matching the production deploy rule (HLD §15.4) | §10.7.1, §15.4 | Commercial Team + PCI owner group | As proposed | **Closed** (PCI owner group, 2026-11-23): rule approved; PCI review of §4, §5.4.4 and §10 complete, no blocking findings. Added for PCI's recommendations: B-O17 with role `pci_owner_reviewer`, `trg_pc_guard`, `BIL-PROV-4`; follow-up BL-OQ-26 |
 | BL-OQ-20 | **Operator manual add-on corrections** stay an Entitlements-only action; Billing does not emit the reserved `TenantQuotaAddOnChanged` reasons in v1 (§8.11). Confirm with the Entitlements LLD | §8.6.2, §9.4 | Entitlements LLD | As written | **Decided** (TL, 2026-11-19): Billing owns `purchase` and `refund`; Entitlements owns correction and expiry, as its own operator actions audited through AL-5 with no bus event (BL-OQ-23 c). Refund emission specified (`BIL-ADD-4`) |
 | BL-OQ-24 | **`UsagePeriodClosed` contract unverified.** The Usage & Metering LLD is not written, so the consumed fields (`period_start`, `period_end`, `tokens_total`, `api_requests_total`, `addon_consumed`, `limits`, §7.1) are taken from the HLD only. Ask: Usage & Metering confirms the payload and registers the schema in Glue before Billing's `usage-billing-q` consumer is enabled | §8.7, §9.4 | Usage & Metering | Records are reference-only and nothing is priced from them (§8.12), so a mismatch affects operator / Finance views, not charges | Open (known risk; not a design sign-off blocker) |
+| BL-OQ-28 | **Entitlements findings of 2026-11-27** (contract check against `commercial-entitlements-service` `dc9b654`): (a) **F-5, critical:** the SQS consumer (`internal/adapter/inbound/sqspipeline/consumer.go:76-88`) is built without `events.WithConsumerCodec(events.GlueDecodeCodec{})`; platform-events v2.3.0 rejects any message carrying a `schema_id` when no codec is set, so every Glue-framed Billing event (`TenantQuotaAddOnChanged`, `TenantPlanChanged`, `TenantSubscriptionCancelled`, `TenantReactivated`) would be retried and dead-lettered once Billing publishes Glue-framed events (staging, prod); dev-like environments publish plain JSON (nothing is deployed yet, rev 0.60 wording). One option, as Core and RP do; (b) F-1, F-2 still open (eligibility GET, §10.2); (c) F-6: a `TenantPlanChanged` processed before Core applies the change is never corrected; (d) hygiene (RP): `deploy/iam/sqs.tf.example` names the queue `iam-billing-realm-q`, Billing's AsyncAPI `billing-realm-q` | §7.3, §10.2, §18.4 | Commercial Entitlements (a–c); IAM Realm Provisioner (d) | (a) Billing events would not reach Entitlements outside dev-like environments; (b) every add-on purchase `503 ENTITLEMENTS_UNAVAILABLE` (`FEATURE_TOKEN_ADDONS=false`) | **Open** (rev 0.59). Detail and file references: `billing-open-items.md` §4.4. Billing follow-up: `contract-live` to test Glue-framed delivery |
+| BL-OQ-29 | **Outbox retry budget.** `OUTBOX_MAX_ATTEMPTS` 5 (HLD §9.3) dead-letters every `billing.events` row within about a minute of an SNS or Glue outage. Billing recommends `OUTBOX_MAX_ATTEMPTS=10` with `OUTBOX_RETRY_BACKOFF=30s` and `OUTBOX_MAX_RETRY_BACKOFF=5m` | HLD §9.3 | Commercial HLD owner | `5`, unchanged (HLD §9.3 owns it); `BillingOutboxLag` and `BillingOutboxDeadLetter` page | **Open** (rev 0.59): needs an HLD §9.3 change before Billing's default moves |
 
 **Platform / SRE items Billing depends on:** SRE-1 (Istio `STRICT` in staging), SRE-3 (Core migration `000004` + `parked-events-replay`, deployed before direct signup is enabled in each environment; both confirmed in Core's repo and chart by IAM 2026-11-19; code is in Core's repo, and no service is beyond dev yet), SRE-6 (**done**: `notify_billing: "true"` on `IAMParkedTenantEventsStale`), SRE-7 (remove any `membership-billing-q`), SRE-8 (**closed**: `billing-audit-q` is catch-all, already receives `TenantQuotaAddOnChanged`), and Commercial IaC for `billing-events`, `tenant-billing-q`, `usage-billing-q` (HLD §16 action 2).
 
@@ -3718,7 +3991,7 @@ Each item names the default the design runs with until it closes.
 
 ## 17. Appendix — Error Taxonomy
 
-RFC 9457 problems via `gincommon/v2` (`application/problem+json`). Example:
+RFC 9457 problems via `gincommon/v2` (`application/problem+json`), produced only by gincommon (`BIL-API-6`). Each code below is one `problem.Type` built with `problem.MustType("commercial", <code in kebab-case>, <title from the code>, <HTTP>, <code>)` in `internal/domain/problem.go`; `domain.DomainError` converts to it (`errors.As`). Example:
 
 ```json
 {
@@ -3880,7 +4153,7 @@ B-I1 only (§5.4.2). **Go-live order** (HLD §10.6, SGN-2): (1) SRE-3 deploys Co
 | Reconciliation | List Subscriptions, Invoices, Events (`created[gte]`, `limit=100`) |
 | Certification | Stripe adapter certified with `Proration = native` before Phase 1 go-live; re-certified on any pinned Stripe API version change (`BIL-PROV-2`); suite uses Stripe test mode and Test Clocks |
 
-API version pinned per release; an upgrade is a deliberate change validated with stripe-mock and Test Clocks. Error mapping: `card_error` → `ErrDeclined` (decline code mapped to §5.4.2's `decline_reason`); `authentication_required` / `requires_action` → `ErrActionRequired`; `rate_limit_error`, `api_connection_error`, `5xx` → `ErrProviderUnavailable`; `idempotency_error` → `ErrIdempotencyMismatch` (bug, paged); `invalid_request_error` → `INTERNAL` with the Stripe request id logged.
+API version pinned per release; an upgrade is a deliberate change validated with stripe-mock and Test Clocks. Error mapping: `card_error` → `ErrDeclined` (decline code mapped to §5.4.2's `decline_reason`); `authentication_required` / `requires_action` → `ErrActionRequired`; `rate_limit_error`, `api_connection_error`, `5xx`, and `409` / `idempotency_key_in_use` (a request with the same key still in flight, which stripe-go retries) → `ErrProviderUnavailable`, so the caller retries with the same key (rev 0.58); `idempotency_error` with different parameters → `ErrIdempotencyMismatch` (bug, paged); `invalid_request_error` → `INTERNAL` with the Stripe request id logged.
 
 ### 18.9 Tenant admin UI
 
@@ -3910,12 +4183,14 @@ Calls B-P* through the ingress. Contract notes: show `actions_available`; on `40
 ### 19.1 Initial deployment
 
 1. **Commercial IaC**: SNS topic `billing-events` and Glue registry `billing-events`; SQS `tenant-billing-q` (+ `-dlq`, filter `TenantConverted`, `TenantSuspended`, `TenantReactivated`, `TenantOffboarded` on `iam-tenant-events`) and `usage-billing-q` (+ `-dlq`, filter `UsagePeriodClosed` on `usage-events`), queue policies on the topic ARNs. Subscriptions of the consumer-owned queues to `billing-events` are created by their owners (Core, AuthZ, RP, Audit, Entitlements, Notification) with the filters of §7.3.9.
-2. **Database**: `billing` logical database and the four roles (platform bootstrap); `cmd/migrate` applies `000000`–`000003`.
-3. **Price book**: `price-book-sync.sh` creates Stripe Products and Prices per environment and posts the rows through B-O11 (operator), so `provider_price_id` is set; `manual` rows come from the seed.
+2. **Database**: `billing` logical database and the five roles (platform bootstrap); `cmd/migrate` applies `000001`–`000007` (rev 0.39; `000007` rev 0.59).
+3. **Price book**: `price-book-sync.sh` (not in the repository yet, §4.2.2) creates Stripe Products and Prices per environment and posts the rows through B-O11 (operator), so `provider_price_id` is set; `manual` rows come from the seed.
 4. **Stripe**: webhook endpoint per environment with the types of §7.4; Smart Retries and "cancel subscription after final retry"; Radar on; secrets in OpenBao.
 5. **Deploy** Billing to staging (test mode); CD-19 smoke (§14.4); Test-Clock E2E.
-6. **Operator routes** usable once CD-52 OP-G1 to OP-G3 are is live; the Phase 1 stub becomes available then.
+6. **Operator routes** usable once CD-52 OP-G1 to OP-G3 are live; the Phase 1 stub becomes available then.
 7. **Feature flags**: seat purchase on; direct signup per §18.7; token add-ons after BL-OQ-19 and the Entitlements items BL-OQ-3, 4 and 20 (pack catalogue final, BL-OQ-18 closed).
+
+`scripts/check-first-deploy.sh <env>` (`make check-first-deploy ENV=<env>`) checks these seven steps in order, read-only, and stops at the first one not complete.
 
 ### 19.2 Rolling upgrades
 
@@ -3975,11 +4250,11 @@ App rollbacks leave the schema in place (backward compatible for one release). L
   "run_finished_at": "2026-11-14T08:41:57Z",
   "results": [
     { "capability": "recurring_subscriptions", "case": "create",                   "passed": true,  "evidence_ref": "s3://commercial-cert-evidence/stripe/1.0.0/rs-create.json" },
-    { "capability": "recurring_subscriptions", "case": "increase_quantity_paid_first", "passed": true, "evidence_ref": "…" },
-    { "capability": "webhook_delivery",        "case": "redelivery_after_503",     "passed": true,  "evidence_ref": "…" },
+    { "capability": "recurring_subscriptions", "case": "increase_quantity",              "passed": true, "evidence_ref": "…" },
+    { "capability": "webhook_delivery",        "case": "redelivered",              "passed": true,  "evidence_ref": "…" },
     { "capability": "stable_event_ids",        "case": "same_id_on_redelivery",    "passed": true,  "evidence_ref": "…" },
     { "capability": "proration",               "case": "preview_equals_charge",    "passed": true,  "evidence_ref": "…" },
-    { "capability": "retry_semantics",         "case": "exhausted_to_cancelled",   "passed": true,  "evidence_ref": "…" }
+    { "capability": "retry_semantics",         "case": "exhausted_past_due_cancelled", "passed": true,  "evidence_ref": "…" }
     // … one entry per case of §14.7
   ]
 }
@@ -3996,6 +4271,8 @@ App rollbacks leave the schema in place (backward compatible for one release). L
 
 ## 20. Operational Considerations
 
+**Runbooks (rev 0.61).** The procedures of record are the 27 files in `docs/runbooks/` (index `README.md`); every alert's `runbook_url` points at one of them. §20.1 to §20.9 summarise the main ones. Files: `background-loop-stopped`, `certification`, `certification-lapsed`, `consumer-dlq`, `cronjob-not-succeeding`, `dependency-degradation`, `disaster-recovery`, `i18-unavailable`, `key-rotation`, `metrics-snapshot-stale`, `operator-review`, `outbox-dead-letter`, `outbox-lag`, `provider-outage`, `purchase-not-active`, `queue-backlog`, `reconciliation-drift`, `reversal-decision`, `schema-registration`, `seat-projection-drift`, `slo-burn`, `stuck-conversion-saga`, `suspension-drafts`, `test-clock-rehearsal`, `webhook-backlog`, `webhook-signature-failures` (`.md`).
+
 ### 20.1 Runbook — stuck conversion saga (`BillingConversionSagaOverdue`, `BillingSagaFailed`)
 
 1. B-O7 for the tenant: saga `state`, `attempts`, `last_error_code`, `payment_confirmed_at`.
@@ -4009,7 +4286,7 @@ App rollbacks leave the schema in place (backward compatible for one release). L
 
 1. `commercial_billing_webhook_backlog` by status; `commercial_billing_webhook_processing_seconds`; dependency errors.
 2. `received` growing → processor stuck or DB slow: check pods, `claimed_until` leases, DB locks; scale (HPA reacts to backlog).
-3. `failed` growing → read `outcome` codes: `provider_unavailable` (wait / §20.4), `metadata_mismatch` (investigate, possible misuse), `unknown_customer` (objects created outside Billing — reconcile), DB errors.
+3. `failed` growing → read `outcome` codes: `provider_unavailable` (wait / §20.4), `metadata_mismatch` (investigate, possible misuse), `unknown_customer` (objects created outside Billing — reconcile), `checkout_superseded` / `paid_after_end` (parked for an operator, SEV-2 `BillingPaymentParked`, runbook `operator-review.md`; do not bulk-replay them), `SUBSCRIPTION_NOT_FOUND` while a provider subscription is not linked yet (retried until `checkout.session.completed` links it, rev 0.59), DB errors.
 4. After fixing, B-O13 replays individual rows; for bulk replay an operator SQL script sets `status='received', attempts=0` on the selected rows (same effect, audited in the change ticket).
 5. Provider "resend" for events Billing never received (e.g. endpoint misconfigured) — reconciliation inserts them too.
 
@@ -4067,6 +4344,24 @@ RTO 30 min, RPO 5 min (HLD §13.1). After a restore to time T: (1) start Billing
 **Cause:** an adapter or pinned provider API version change deployed without a certification record, a suite version bump, or a record revoked (B-O15).
 **Effect:** the provider takes no new billing accounts (`503 PROVIDER_NOT_ENABLED` on B-P2, B-I1, B-O1 if it is the default); existing subscriptions, renewals, purchases and webhooks keep working.
 **Action:** (1) confirm the deployed `adapter_version` (`platform_build_info`, metric labels); (2) run `cmd/certify` for that version in test mode; (3) submit through B-O14, and a PCI owner group member approves it through B-O17; (4) the registry enables the provider within `PROVIDER_REGISTRY_REFRESH`; (5) if the run fails, roll back to the last certified adapter version.
+
+### 20.10 Go-live checks (rev 0.60, extended rev 0.61)
+
+Checks on the platform and the environment that the chart cannot make itself. Each must hold in staging and production before the service takes traffic.
+
+1. **Pushgateway scrape uses `honorLabels: true`** (ServiceMonitor or scrape config). Otherwise the pushed `job` and `service` labels become `exported_job` / `exported_service`, and `BillingCronJobNotSucceeding` and `BillingSeatProjectionDrift` never fire (runbook `cronjob-not-succeeding.md`).
+2. **kube-state-metrics exposes the CronJob families** `kube_cronjob_status_last_schedule_time` and `kube_cronjob_status_last_successful_time` for namespace `billing`, with the CronJob name in `cronjob`. Without them `BillingCronJobNeverSucceeded` never fires (§11.5).
+3. **AWS endpoint path.** When SNS, SQS, Glue or STS resolve to VPC interface endpoints, `networkPolicy.awsEndpointCIDRs` holds their subnets (`BILLING_AWS_ENDPOINT_CIDRS`), or `networkPolicy.egressGateway` names the mesh egress gateway; otherwise the server crash-loops on its Glue schema check (§10.2, `deploy/iam/README.md`).
+4. **Client IP trust.** The platform `ClientTrafficPolicy` trusts the load balancer's `X-Forwarded-For` hop (`clientIPDetection.xForwardedFor.numTrustedHops`), so B-W1's per-client rate limit and source allow-list see the real caller (§10.3).
+5. **Metrics scrape mode.** `metrics.scrapeMode` matches how the platform's Prometheus scrapes (`plaintext` or `mesh`, §13.1), with `metrics.monitoringCIDRs` (`BILLING_MONITORING_CIDRS`) set in `plaintext` mode where the Prometheus pod ranges are known.
+6. **Stripe adapter 1.1.0 certified** (`passed` through B-O17, `BIL-PROV-4`, §3.5); until then Stripe takes no new accounts.
+7. **Production environment deployment-branch rules.** The GitHub `production` environment allows only tags `v*` and the `main` branch (Settings → Environments → Deployment branches and tags); otherwise a `workflow_dispatch` from another branch could reach its secrets.
+8. **Log-based alerts loaded (rev 0.61).** The observability team's Loki rules for `BillingPaymentParked` (SEV-2), `BillingReversalDecisionNeeded` (SEV-2) and `BillingReviewTrigger` (`alert=BillingOperatorReviewNeeded`, review, no page) exist and route to Billing on-call (§11.5); they are not in this repository.
+9. **Gateway namespace (rev 0.61).** The chart's `networkPolicy.gatewayNamespace`, `gateway.parentRef.namespace` (`gateway`) and `istio.gatewayPrincipal` (`cluster.local/ns/gateway/sa/envoy-gateway`) match the platform's Envoy Gateway, which §10.2 names `envoy-gateway-system`; settle the name with platform-edge (§10.2).
+10. **Platform versions (rev 0.61).** Kubernetes ≥ 1.30 (native `preStop` sleep, chart `kubeVersion`), Istio ≥ 1.24 (native sidecars), Helm ≥ 3.19 on the deploy runner (`release.yml` pins 3.21.4).
+11. **Provider setup by hand until scripted (rev 0.61).** Stripe Products, Prices and `provider_price_id` rows (§4.2.2) and the webhook endpoint with the §7.4 types are configured per environment (`price-book-sync.sh` and `stripe-fixtures.sh` are not in the repository); `scripts/check-first-deploy.sh` steps 3 and 4 confirm them.
+12. **Release pipeline gaps (rev 0.61).** The HLD §15.4 deploy role and canary are not built (§13.3); decide whether the 5xx gate with automatic rollback suffices for the first release.
+13. **Cross-team gates** that keep a feature off or a route closed are tracked in §16.1 and `billing-open-items.md`: OP-G2 / OP-G3 / OP-G4 (BL-OQ-14), BL-OQ-28 F-5 (Entitlements' Glue decode, before Billing publishes framed events), BL-OQ-29 (outbox retry budget), BL-OQ-19, BL-OQ-8, BL-OQ-24.
 
 ---
 

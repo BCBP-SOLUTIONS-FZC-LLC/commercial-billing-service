@@ -23,6 +23,7 @@ type EmissionWorker struct {
 	BatchSize int // tenants per pass
 	Now       func() time.Time
 	Log       port.Logger
+	Metrics   port.Metrics
 }
 
 // RunOnce emits what is due; it returns the number of tenants handled.
@@ -55,7 +56,9 @@ func (w *EmissionWorker) RunOnce(ctx context.Context) (int, error) {
 	return len(tenants), nil
 }
 
-func (w *EmissionWorker) emit(ctx context.Context, e domain.ScheduledEmission) error {
+func (w *EmissionWorker) emit(ctx context.Context, e domain.ScheduledEmission) (err error) {
+	ctx, end := StartSpan(ctx, "billing.emission "+e.PayloadBuilder, AttrTenant(e.TenantID), AttrSubscription(e.RefID))
+	defer func() { end(err) }()
 	reason, ok := domain.SeatsReasonFor(e.PayloadBuilder)
 	if !ok || e.EventType != domain.EventTenantSeatsChanged {
 		w.cancelled(e, "unknown_builder")
@@ -86,6 +89,10 @@ func (w *EmissionWorker) emit(ctx context.Context, e domain.ScheduledEmission) e
 	}, port.EventMeta{UserAgent: emissionUserAgent})
 	if err != nil {
 		return err
+	}
+	if w.Metrics != nil && e.PayloadBuilder == domain.BuilderSeatsAfterConversion && sub.PaymentConfirmedAt != nil {
+		// Includes the deliberate SEATS_AFTER_CONVERSION_DELAY (BIL-EVT-6).
+		w.Metrics.PurchaseToEvent(port.PurchaseKindConversionSeats, w.now().Sub(*sub.PaymentConfirmedAt))
 	}
 	return w.Emissions.Finish(ctx, e.EmissionID, &id)
 }

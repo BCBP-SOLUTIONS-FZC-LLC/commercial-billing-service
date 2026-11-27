@@ -99,20 +99,20 @@ func TestB_W1(t *testing.T) {
 	// Body over the limit → 413, nothing stored.
 	l = &fakeLedger{}
 	w = serve(newHandler(fakeProvider{webhooks: true, verifyOK: true}, l), "/api/v1/webhooks/stripe", strings.Repeat("x", 65))
-	if w.Code != http.StatusRequestEntityTooLarge || len(l.inserted) != 0 {
-		t.Fatalf("too large: %d", w.Code)
+	if w.Code != http.StatusRequestEntityTooLarge || len(l.inserted) != 0 || !isProblem(w) {
+		t.Fatalf("too large: %d %q", w.Code, w.Header().Get("Content-Type"))
 	}
 
 	// Unknown provider, and manual (no callbacks) → 404.
 	for _, path := range []string{"/api/v1/webhooks/adyen", "/api/v1/webhooks/manual"} {
-		if w := serve(newHandler(fakeProvider{webhooks: true, verifyOK: true}, &fakeLedger{}), path, `{}`); w.Code != http.StatusNotFound {
+		if w := serve(newHandler(fakeProvider{webhooks: true, verifyOK: true}, &fakeLedger{}), path, `{}`); w.Code != http.StatusNotFound || !isProblem(w) {
 			t.Errorf("%s: %d, want 404", path, w.Code)
 		}
 	}
 
 	// DB down → 503 so the provider redelivers.
 	w = serve(newHandler(fakeProvider{webhooks: true, verifyOK: true}, &fakeLedger{err: errors.New("db down")}), "/api/v1/webhooks/stripe", `{}`)
-	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" {
+	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" || !isProblem(w) {
 		t.Fatalf("db down: %d", w.Code)
 	}
 
@@ -123,4 +123,9 @@ func TestB_W1(t *testing.T) {
 	if w := serve(h, "/api/v1/webhooks/stripe", `{}`); w.Code != http.StatusOK || len(l.inserted) != 1 || l.inserted[0].TenantID != nil {
 		t.Fatalf("unknown customer: %d %+v", w.Code, l.inserted)
 	}
+}
+
+// isProblem: every B-W1 error is gincommon's RFC 9457 response.
+func isProblem(w *httptest.ResponseRecorder) bool {
+	return strings.HasPrefix(w.Header().Get("Content-Type"), "application/problem+json") && strings.Contains(w.Body.String(), `"type"`)
 }

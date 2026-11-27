@@ -8,6 +8,8 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events/v2/pkg/events"
+
 	"github.com/aws/aws-sdk-go-v2/service/glue"
 	gluetypes "github.com/aws/aws-sdk-go-v2/service/glue/types"
 	"github.com/google/uuid"
@@ -62,7 +64,7 @@ func TestLoadSchemasFailsClosed(t *testing.T) {
 
 func TestValidatingCodec(t *testing.T) {
 	s, _ := LoadSchemas()
-	c := NewValidatingCodec(NoopCodec{}, s)
+	c := NewValidatingCodec(events.NoopCodec{}, s)
 	if _, _, err := c.Encode(context.Background(), "TenantReactivated", []byte(`{"tenant_id":"x"}`)); err == nil {
 		t.Error("invalid payload encoded")
 	}

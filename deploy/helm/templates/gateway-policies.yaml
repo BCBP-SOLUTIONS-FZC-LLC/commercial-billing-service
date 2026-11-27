@@ -1,0 +1,142 @@
+{{- if .Values.gateway.enabled }}
+{{- $g := .Values.gateway }}
+{{- $fullname := include "commercial-billing.fullname" . }}
+# Tenant route: merged with the Gateway-level SecurityPolicy, so its JWT
+# validation and ext_authz (AuthZ Enrichment identity headers) stay in force;
+# adds CORS for the tenant app (§13.1).
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: {{ $fullname }}-tenant
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: {{ $fullname }}-tenant
+  mergeType: StrategicMerge
+  {{- with $g.tenant.corsOrigins }}
+  cors:
+    allowOrigins:
+      {{- range . }}
+      - type: Exact
+        value: {{ . | quote }}
+      {{- end }}
+    allowMethods: [GET, POST, PUT, DELETE, OPTIONS]
+    allowHeaders: [Authorization, Content-Type, Idempotency-Key, If-Match]
+    maxAge: "86400"
+  {{- end }}
+---
+# Tenant route: 20 rps per tenant (x-tenant-id, set by ext_authz).
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: {{ $fullname }}-tenant
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: {{ $fullname }}-tenant
+  mergeType: StrategicMerge
+  rateLimit:
+    type: Global
+    global:
+      rules:
+        - clientSelectors:
+            - headers:
+                - name: x-tenant-id
+                  type: Distinct
+          limit:
+            requests: {{ int $g.tenant.rateLimitRPS }}
+            unit: Second
+---
+# Operator route: merged with the gateway policy; the platform-realm JWT
+# provider (OP-G2) is added once its issuer is configured.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: {{ $fullname }}-operator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: {{ $fullname }}-operator
+  mergeType: StrategicMerge
+  {{- if and $g.operator.jwt.issuer $g.operator.jwt.jwksURI }}
+  jwt:
+    providers:
+      - name: {{ $g.operator.jwt.provider }}
+        issuer: {{ $g.operator.jwt.issuer | quote }}
+        remoteJWKS:
+          uri: {{ $g.operator.jwt.jwksURI | quote }}
+  {{- end }}
+---
+# Webhook route: NO mergeType — this route-level policy replaces the
+# gateway's, so neither JWT nor ext_authz runs on B-W1; the provider
+# signature is the only authentication (BIL-AUTH-5, BIL-PAY-2). When
+# gateway.webhook.allowedSourceCIDRs is set, only those source ranges reach
+# the route (§10.3 "Source", defence in depth); everything else is 403 at
+# the edge.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: {{ $fullname }}-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: {{ $fullname }}-webhook
+  {{- with $g.webhook.allowedSourceCIDRs }}
+  authorization:
+    defaultAction: Deny
+    rules:
+      - name: provider-source-ranges
+        action: Allow
+        principal:
+          clientCIDRs:
+            {{- toYaml . | nindent 12 }}
+  {{- end }}
+---
+# Webhook route: {{ int $g.webhook.rateLimitRPS }} rps per client IP (sourceCIDR Distinct, one rule
+# for IPv4 and one for IPv6), so one source cannot exhaust a shared bucket
+# and starve the provider's deliveries. Go-live check: the client IP is the
+# one the gateway derives, so its ClientTrafficPolicy must trust the load
+# balancer's X-Forwarded-For hop (numTrustedHops, platform setting);
+# otherwise every request shares the load balancer's bucket.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: {{ $fullname }}-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: {{ $fullname }}-webhook
+  rateLimit:
+    type: Global
+    global:
+      rules:
+        {{- range list "0.0.0.0/0" "::/0" }}
+        - clientSelectors:
+            - sourceCIDR:
+                type: Distinct
+                value: {{ . | quote }}
+          limit:
+            requests: {{ int $g.webhook.rateLimitRPS }}
+            unit: Second
+        {{- end }}
+{{- end }}

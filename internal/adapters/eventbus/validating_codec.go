@@ -8,20 +8,6 @@ import (
 )
 
 // NoopCodec passes payloads through as plain JSON: the wire codec in
-// developer environments without a Glue registry.
-type NoopCodec struct{}
-
-var _ events.Codec = NoopCodec{}
-
-// Encode returns payload unchanged and no schema id.
-func (NoopCodec) Encode(_ context.Context, _ string, payload json.RawMessage) ([]byte, string, error) {
-	return payload, "", nil
-}
-
-// Decode returns encoded unchanged.
-func (NoopCodec) Decode(_ context.Context, _ string, encoded []byte) (json.RawMessage, error) {
-	return encoded, nil
-}
 
 // ValidatingCodec validates a payload against its embedded schema before
 // the inner codec encodes it. Fails closed: a type without a schema is an

@@ -1,0 +1,29 @@
+{{- if .Values.istio.peerAuthentication.enabled }}
+# BIL-AUTH-3, §10.2: mTLS only into every Billing workload with a sidecar
+# (the server and the CronJobs). B-I1 reads its caller from the last
+# X-Forwarded-Client-Cert element, which the sidecar appends from the
+# verified client certificate (APPEND_FORWARD, Istio's sidecar default). A
+# plaintext request would carry no such element, so its own XFCC header would
+# be read as the caller; STRICT refuses plaintext before it reaches the app.
+# metrics.scrapeMode plaintext (a Prometheus outside the mesh): the metrics
+# port alone is PERMISSIVE; it serves /metrics only, and the NetworkPolicy
+# admits only the monitoring namespace to it. mesh: STRICT on every port.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: {{ include "commercial-billing.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "commercial-billing.selectorLabels" . | nindent 6 }}
+  mtls:
+    mode: STRICT
+  {{- if eq .Values.metrics.scrapeMode "plaintext" }}
+  portLevelMtls:
+    "{{ .Values.service.metricsPort }}":
+      mode: PERMISSIVE
+  {{- end }}
+{{- end }}

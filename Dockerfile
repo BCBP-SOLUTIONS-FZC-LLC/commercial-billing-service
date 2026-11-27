@@ -1,7 +1,7 @@
 # commercial-billing: server, jobs and migrate binaries in one distroless,
 # non-root image (LLD §13). Base images follow the IAM services; pin them to
 # digests before the first release (make pin-base-images in the IAM repos).
-FROM golang:1.26.11-alpine AS builder
+FROM golang:1.26.11-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS builder
 WORKDIR /build
 
 ENV GOPRIVATE="github.com/BCBP-SOLUTIONS-FZC-LLC/*"
@@ -26,7 +26,7 @@ RUN CGO_ENABLED=0 GOOS=linux SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
     go build -trimpath -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" -o bin/jobs ./cmd/jobs && \
     go build -trimpath -ldflags="-s -w" -o bin/migrate ./cmd/migrate
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5
 ARG BUILD_VERSION=dev
 ENV BUILD_VERSION=${BUILD_VERSION}
 LABEL org.opencontainers.image.title="commercial-billing" \

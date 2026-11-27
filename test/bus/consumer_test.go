@@ -13,7 +13,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 	snstypes "github.com/aws/aws-sdk-go-v2/service/sns/types"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/consumer"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/eventbus"
@@ -49,7 +48,7 @@ func publishIAM(t *testing.T, topicARN, typ, tenant string, at time.Time, data s
 func lifecycleOf(t *testing.T, tenant string) string {
 	t.Helper()
 	var s string
-	err := pgcommon.RunInTx(context.Background(), superPool, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+	err := pgcommon.RunInTx(context.Background(), superPool, pgcommon.TxOptions{}, func(ctx context.Context, tx pgcommon.Tx) error {
 		return tx.QueryRow(ctx, `SELECT iam_lifecycle::text FROM billing_accounts WHERE tenant_id = $1`, tenant).Scan(&s)
 	})
 	if err != nil {
@@ -155,7 +154,7 @@ func TestConsumersEndToEnd(t *testing.T) {
 		"period_end":"2026-11-01T00:00:00Z","tokens_total":42,"api_requests_total":7,"addon_consumed":0,"limits":{"llm_tokens":500000}}`, true)
 	eventually(t, "usage stored", func() bool {
 		var n int
-		_ = pgcommon.RunInTx(ctx, superPool, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+		_ = pgcommon.RunInTx(ctx, superPool, pgcommon.TxOptions{}, func(ctx context.Context, tx pgcommon.Tx) error {
 			return tx.QueryRow(ctx, `SELECT count(*) FROM usage_period_records WHERE tenant_id = $1 AND tokens_total = 42`, tenant).Scan(&n)
 		})
 		return n == 1

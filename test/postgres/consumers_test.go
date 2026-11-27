@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app"
@@ -24,7 +23,7 @@ type accountRow struct {
 func readAccount(t *testing.T, tenant string) accountRow {
 	t.Helper()
 	var a accountRow
-	err := pgcommon.RunInTx(context.Background(), superPool, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+	err := pgcommon.RunInTx(context.Background(), superPool, pgcommon.TxOptions{}, func(ctx context.Context, tx pgcommon.Tx) error {
 		return tx.QueryRow(ctx, `SELECT iam_lifecycle::text, iam_suspension_source, iam_last_event_at, closed_at FROM billing_accounts WHERE tenant_id = $1`, tenant).
 			Scan(&a.lifecycle, &a.source, &a.lastEvent, &a.closed)
 	})
@@ -122,7 +121,7 @@ func TestUsagePeriodUpsert(t *testing.T) {
 	}
 	var tokens int64
 	var limits string
-	err := pgcommon.RunInTx(ctx, superPool, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+	err := pgcommon.RunInTx(ctx, superPool, pgcommon.TxOptions{}, func(ctx context.Context, tx pgcommon.Tx) error {
 		return tx.QueryRow(ctx, `SELECT tokens_total, limits::text FROM usage_period_records WHERE tenant_id = $1`, tenant).Scan(&tokens, &limits)
 	})
 	if err != nil || tokens != 120 || limits != `{"llm_tokens": 500000}` {
@@ -157,7 +156,7 @@ func TestEmissionWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	var status, emitted string
-	err = pgcommon.RunInTx(ctx, superPool, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+	err = pgcommon.RunInTx(ctx, superPool, pgcommon.TxOptions{}, func(ctx context.Context, tx pgcommon.Tx) error {
 		return tx.QueryRow(ctx, `SELECT status, emitted_event_id::text FROM scheduled_emissions WHERE tenant_id = $1`, s.Tenant).Scan(&status, &emitted)
 	})
 	if err != nil || status != "emitted" {

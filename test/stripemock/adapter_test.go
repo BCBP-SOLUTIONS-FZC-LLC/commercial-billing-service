@@ -93,6 +93,8 @@ func TestCheckoutSessions(t *testing.T) {
 			t.Errorf("%s: session %+v", purpose, s)
 		}
 	}
+	// A superseded B-P2 session is expired at the provider (§8.1.1).
+	ok(t, "ExpireCheckout", adapter.ExpireCheckout(ctx, "cs_123", "bsub:s1:expire"))
 }
 
 func TestSubscriptionLifecycleCalls(t *testing.T) {

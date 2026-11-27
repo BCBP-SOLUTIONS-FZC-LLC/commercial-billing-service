@@ -16,7 +16,6 @@ import (
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/problem"
 )
 
 var taxIDPattern = regexp.MustCompile(`^[A-Z0-9-]+$`)
@@ -35,41 +34,42 @@ func init() {
 func decodeJSON(c *gin.Context, dst any, strict bool) error {
 	raw, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
-			return problem.NewError(problem.TypePayloadTooLarge, "request body too large").WithCode(string(domain.ErrPayloadTooLarge))
-		}
-		return validationError("body", "could not be read")
+		return bindingError(err) // gincommon: 413 over the limit, else 400
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
 		raw = []byte("{}")
 	}
+	// Per-route strictness (§10.4: unknown fields rejected on tenant and
+	// operator routes, tolerated on B-I1) is the one thing gincommon's
+	// binding cannot vary, so the decode is here; every error it produces is
+	// formatted by gincommon.BindingError.
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if strict {
 		dec.DisallowUnknownFields()
 	}
 	if err := dec.Decode(dst); err != nil {
-		var typeErr *json.UnmarshalTypeError
-		switch {
-		case errors.As(err, &typeErr):
-			return validationError(typeErr.Field, "has the wrong type")
-		case strings.HasPrefix(err.Error(), "json: unknown field "):
-			field := strings.Trim(strings.TrimPrefix(err.Error(), "json: unknown field "), `"`)
-			return validationError(field, "is not allowed")
-		default:
-			return validationError("body", "must be a JSON object")
-		}
+		return bindingError(err)
 	}
 	if dec.More() {
-		return validationError("body", "must contain a single JSON object")
+		return bindingError(errors.New("body must contain a single JSON object"))
 	}
 	return validate(dst)
+}
+
+// bindingError is gincommon.BindingError with Billing's §17 code on the
+// validation problems (413 keeps gincommon's).
+func bindingError(err error) error {
+	p := gincommon.BindingError(err)
+	if p.Status() == http.StatusBadRequest {
+		return p.WithCode(string(domain.ErrValidation))
+	}
+	return p
 }
 
 // validate runs the binding tags.
 func validate(dst any) error {
 	if err := binding.Validator.ValidateStruct(dst); err != nil {
-		return gincommon.BindingError(err).WithCode(string(domain.ErrValidation))
+		return bindingError(err)
 	}
 	return nil
 }
@@ -77,7 +77,7 @@ func validate(dst any) error {
 // bindQuery binds and validates query parameters.
 func bindQuery(c *gin.Context, dst any) error {
 	if err := c.ShouldBindQuery(dst); err != nil {
-		return gincommon.BindingError(err).WithCode(string(domain.ErrValidation))
+		return bindingError(err)
 	}
 	return nil
 }

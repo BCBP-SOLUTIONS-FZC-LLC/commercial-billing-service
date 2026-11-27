@@ -1,0 +1,605 @@
+# Release pipeline, triggered by a version tag (v1.0.0, v1.1.0-rc.1) or by
+# hand (VERSIONING.md, maintainer release process).
+#
+#   validate-test + validate-quality
+#     → build          tag = HEAD, CHANGELOG entry, Linux binaries + checksums
+#     → certify-gate   the Stripe adapter version is certified in staging (LLD §14.6, BIL-PROV-2)
+#     → schema-verify  every produced schema registered + AVAILABLE in Glue (the server refuses to start otherwise)
+#     → docker         push semver tags, Trivy (fail on CRITICAL/HIGH), SBOM, SLSA provenance, Cosign sign + verify
+#     → deploy-gate    Helm to namespace billing (environment "production": required reviewers = the PCI owner group, HLD §15.4),
+#                      deployed digest = published digest, rollout, 5xx < 1% for 2 min, else helm rollback
+#     → publish        GitHub Release with the CHANGELOG section, binaries, checksums, SBOM, provenance
+#
+# Required before the first tag (VERSIONING.md, "Supported releases"):
+#   secrets: GO_PRIVATE_TOKEN; CERTIFY_CHECK_DSN (environment staging, a read-only role on the staging database);
+#            KUBECONFIG_B64 (environment production)
+#   vars:    AWS_REGION, AWS_ROLE_ARN (environment production: IAM role with Glue read, assumed through GitHub OIDC),
+#            K8S_NAMESPACE (default billing), PROMETHEUS_URL (environment production),
+#            BILLING_* (environment production, deploy-gate "Deploy with Helm"; optional:
+#            BILLING_USAGE_BILLING_QUEUE_URL, BILLING_WEBHOOK_SOURCE_CIDRS,
+#            BILLING_AWS_ENDPOINT_CIDRS, BILLING_MONITORING_CIDRS)
+name: Release
+
+# The build job refuses a tag whose commit is not on main
+# (verify-release-tag.sh), but that check runs from the tagged commit itself,
+# so it guards against mistakes, not against someone who can push tags. A tag
+# ruleset on v* (restrict creation, update and deletion to the release
+# maintainers) and deployment-tag rules on the staging / production
+# environments must also be enabled in the repository settings.
+#
+# workflow_dispatch runs this file from whatever branch the dispatcher picks,
+# so a modified copy on any branch could reach the environment secrets. The
+# "staging" and "production" environments must therefore have deployment
+# branch and tag rules allowing only tags v* and the main branch
+# (Settings → Environments → Deployment branches and tags); without them,
+# the environment's required reviewers are the only barrier.
+"on":
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+      - 'v[0-9]*.[0-9]*.[0-9]*-*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.0.0)'
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/bcbp-solutions-fzc-llc/commercial-billing
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  GOPRIVATE: github.com/BCBP-SOLUTIONS-FZC-LLC/*
+  GONOSUMDB: github.com/BCBP-SOLUTIONS-FZC-LLC/*
+
+jobs:
+  validate-test:
+    name: Validate / Test
+    uses: ./.github/workflows/validate-test.yml
+    secrets: inherit
+    with:
+      ref: ${{ github.event.inputs.tag || github.ref }}
+
+  validate-quality:
+    name: Validate / Quality
+    uses: ./.github/workflows/validate-quality.yml
+    secrets: inherit
+    with:
+      ref: ${{ github.event.inputs.tag || github.ref }}
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [validate-test, validate-quality]
+    timeout-minutes: 15
+    outputs:
+      adapter_version: ${{ steps.adapter.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      # HEAD is exactly RELEASE_TAG and its commit is on origin/main.
+      - name: Verify release tag matches checkout and is on main
+        env:
+          FETCH_TOKEN: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+        run: bash .github/scripts/verify-release-tag.sh
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            go.mod
+
+      # GO_PRIVATE_TOKEN is used in this step only, before any code from the
+      # checkout runs (go mod download / go list fetch and compile nothing
+      # from the checkout). Git reads the token from a credential helper
+      # defined in this step's environment, so it is never written to disk
+      # and the later steps (go run, the build script) cannot read it. Same
+      # pattern as validate-test.yml / validate-quality.yml.
+      - name: Download modules (private module access)
+        env:
+          GO_PRIVATE_TOKEN: ${{ secrets.GO_PRIVATE_TOKEN }}
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: credential.https://github.com.helper
+          GIT_CONFIG_VALUE_0: '!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=${GO_PRIVATE_TOKEN}"; }; f'
+        run: |
+          set -euo pipefail
+          go mod download
+          go mod verify
+          # Warm the cache for every later build: cmd/certify on the runner and
+          # the three binaries for linux/amd64 and linux/arm64.
+          go list -deps ./cmd/... >/dev/null
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH="${arch}" CGO_ENABLED=0 go list -deps ./cmd/... >/dev/null
+          done
+
+      # From here on code from the checkout runs: no credentials, no module fetch.
+      - name: Drop private module access
+        run: |
+          {
+            echo "GOPROXY=off"
+            echo "GOFLAGS=-mod=readonly"
+            echo "GOTOOLCHAIN=local"
+          } >> "$GITHUB_ENV"
+
+      # The tag's CHANGELOG section must exist before tagging.
+      - name: Verify CHANGELOG entry exists
+        run: bash .github/scripts/verify-changelog-entry.sh
+
+      # The version certification is bound to (VERSIONING.md, "Provider
+      # adapter version"): adapter semver + the pinned Stripe API version.
+      - name: Stripe adapter version
+        id: adapter
+        run: echo "version=$(go run ./cmd/certify adapter-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release binaries (linux/amd64, linux/arm64)
+        run: bash .github/scripts/prepare-release-binary.sh
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: binary-${{ env.RELEASE_TAG }}
+          path: |
+            commercial-billing_*
+            jobs_*
+            migrate_*
+          if-no-files-found: error
+          retention-days: 90
+
+  # LLD §14.6 / BIL-PROV-2: a provider takes new accounts only with a passed
+  # certification for its adapter version. A release that changes the
+  # adapter or the pinned Stripe API version fails here until cmd/certify
+  # has been run, submitted (B-O14) and approved by a second PCI owner group
+  # member (B-O17) in staging. CERTIFY_CHECK_DSN is a read-only role on the
+  # staging database, reachable from the runner.
+  certify-gate:
+    name: Provider certification gate
+    runs-on: ubuntu-latest
+    needs: build
+    environment: staging
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            go.mod
+
+      # Token in this step's environment only (see build); cmd/certify runs
+      # later with CERTIFY_CHECK_DSN but without it.
+      - name: Download modules (private module access)
+        env:
+          GO_PRIVATE_TOKEN: ${{ secrets.GO_PRIVATE_TOKEN }}
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: credential.https://github.com.helper
+          GIT_CONFIG_VALUE_0: '!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=${GO_PRIVATE_TOKEN}"; }; f'
+        run: |
+          set -euo pipefail
+          go mod download
+          go mod verify
+          go list -deps ./cmd/certify >/dev/null
+
+      - name: Drop private module access
+        run: |
+          {
+            echo "GOPROXY=off"
+            echo "GOFLAGS=-mod=readonly"
+            echo "GOTOOLCHAIN=local"
+          } >> "$GITHUB_ENV"
+
+      - name: Certified in staging
+        env:
+          CERTIFY_CHECK_DSN: ${{ secrets.CERTIFY_CHECK_DSN }}
+          ADAPTER_VERSION: ${{ needs.build.outputs.adapter_version }}
+        run: |
+          if [ -z "${CERTIFY_CHECK_DSN}" ]; then
+            echo "::error title=Certification gate::CERTIFY_CHECK_DSN is not set for the staging environment. Without it the release cannot prove adapter ${ADAPTER_VERSION} is certified (LLD §14.6)."
+            exit 1
+          fi
+          go run ./cmd/certify check stripe "${ADAPTER_VERSION}"
+
+  # The server resolves every produced schema's Glue version by definition at
+  # start-up and refuses to run ahead of the registry, so a release whose
+  # schemas are not registered in production must stop here, not in the pods.
+  schema-verify:
+    name: Schema verify (production Glue)
+    runs-on: ubuntu-latest
+    needs: build
+    environment: production
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write  # GitHub OIDC → vars.AWS_ROLE_ARN
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      # GitHub OIDC → IAM role (vars.AWS_ROLE_ARN in environment production;
+      # trust policy: token.actions.githubusercontent.com, aud
+      # sts.amazonaws.com, sub repo:<org>/commercial-billing-service:environment:production;
+      # Glue GetSchemaByDefinition on registry billing-events). No long-lived keys.
+      # Fallback until the role exists: replace role-to-assume with
+      # aws-access-key-id / aws-secret-access-key from the environment secrets
+      # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, and delete them afterwards.
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: commercial-billing-release-schema-verify
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Verify produced schemas registered and AVAILABLE
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: make schema-verify
+
+  docker:
+    name: Docker image → GHCR
+    runs-on: ubuntu-latest
+    needs: [build, certify-gate, schema-verify]
+    timeout-minutes: 30
+    outputs:
+      digest: ${{ steps.pushed.outputs.digest }}
+      version: ${{ steps.meta.outputs.version }}
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+      actions: read
+      attestations: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: Set SOURCE_DATE_EPOCH
+        id: sde
+        run: bash .github/scripts/set-source-date-epoch.sh
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # vMAJOR.MINOR.PATCH, vMAJOR.MINOR, vMAJOR; latest for stable releases only.
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }}
+            type=raw,value=latest,enable=${{ !contains(env.RELEASE_TAG, '-') }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build and push
+        id: pushed
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_VERSION=${{ env.RELEASE_TAG }}
+            SOURCE_DATE_EPOCH=${{ steps.sde.outputs.SOURCE_DATE_EPOCH }}
+          secrets: |
+            go_private_token=${{ secrets.GO_PRIVATE_TOKEN }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Cache Trivy DB
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/trivy-cache
+          key: trivy-db-${{ runner.os }}
+          restore-keys: |
+            trivy-db-${{ runner.os }}-
+
+      # A known-vulnerable image must not be tagged as a release.
+      - name: Scan image for CVEs
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          format: sarif
+          output: trivy-results.sarif
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          trivyignores: .trivyignore
+          cache-dir: /tmp/trivy-cache
+
+      - name: Upload Trivy results to the Security tab
+        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Generate SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          format: cyclonedx
+          output: sbom.cyclonedx.json
+          exit-code: '0'
+          cache-dir: /tmp/trivy-cache
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-${{ env.RELEASE_TAG }}
+          path: sbom.cyclonedx.json
+          retention-days: 90
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Export SLSA provenance
+        env:
+          IMAGE_DIGEST: ${{ steps.pushed.outputs.digest }}
+        run: bash .github/scripts/export-image-provenance.sh
+
+      - name: Upload provenance artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provenance-${{ env.RELEASE_TAG }}
+          path: provenance.slsa.json
+          retention-days: 90
+
+      - name: Sign image with Cosign
+        run: cosign sign --yes "${{ env.IMAGE_NAME }}@${{ steps.pushed.outputs.digest }}"
+
+      # Only this workflow may have signed it: release.yml on a v* tag (or on
+      # main for a manual dispatch, which releases an existing tag).
+      - name: Verify image signature
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "^https://github\.com/${{ github.repository }}/\.github/workflows/release\.yml@refs/(tags/v[0-9][^@]*|heads/main)$" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${{ env.IMAGE_NAME }}@${{ steps.pushed.outputs.digest }}"
+
+  # Deploys the signed image and watches it. The "production" environment
+  # must require reviewers from the PCI owner group (HLD §15.4) — configure
+  # that in Settings → Environments; this job then waits for the approval.
+  # Migrations run in the chart's pre-upgrade hook Job before new replicas.
+  deploy-gate:
+    name: Post-deploy health gate
+    runs-on: ubuntu-latest
+    needs: [build, docker]
+    environment: production
+    timeout-minutes: 20
+    env:
+      NAMESPACE: ${{ vars.K8S_NAMESPACE || 'billing' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      # KUBECONFIG_B64 is a long-lived cluster credential. Recommended: GitHub
+      # OIDC → an IAM role (aws-actions/configure-aws-credentials with
+      # role-to-assume, id-token: write) mapped by an EKS access entry to a
+      # namespace-scoped role in billing, then `aws eks update-kubeconfig`,
+      # and remove the secret.
+      - name: Verify the deployment secrets are configured
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+          PROMETHEUS_URL: ${{ vars.PROMETHEUS_URL }}
+        run: |
+          [ -n "${KUBECONFIG_B64}" ] || { echo "::error::KUBECONFIG_B64 is not set for the production environment."; exit 1; }
+          [ -n "${PROMETHEUS_URL}" ] || { echo "::error::PROMETHEUS_URL is not set for the production environment; the error-rate gate cannot run."; exit 1; }
+
+      - name: Configure kubectl
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+        run: |
+          echo "${KUBECONFIG_B64}" | base64 -d > "$RUNNER_TEMP/kubeconfig"
+          chmod 600 "$RUNNER_TEMP/kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
+
+      # >= 3.19: when the migrate hook Job fails, Helm still deletes the hooks
+      # that ran before it by their hook-succeeded policy, so the hook Secret
+      # holding MIGRATION_DATABASE_URL does not outlive a failed upgrade.
+      - name: Set up Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+        with:
+          version: v3.21.4
+
+      # Pinned by digest, so the cluster runs exactly the signed image.
+      # Account-specific values come from the production environment's
+      # variables, never from values-prod.yaml; the chart refuses to render
+      # prod without them (placeholder account, IRSA role, Postgres CIDRs).
+      # Passed through env, not interpolated into the script, and handed to
+      # Helm as a JSON values file built by jq: a variable can only ever be
+      # one string or one list of CIDRs, never extra keys (--set parses
+      # commas and braces, so "…},env.OPERATOR_PATH_LIVE=true" would inject).
+      - name: Deploy with Helm
+        env:
+          IMAGE_REF: ${{ needs.docker.outputs.version }}@${{ needs.docker.outputs.digest }}
+          IRSA_ROLE_ARN: ${{ vars.BILLING_IRSA_ROLE_ARN }}
+          SNS_TOPIC_ARN: ${{ vars.BILLING_SNS_TOPIC_ARN }}
+          TENANT_QUEUE_URL: ${{ vars.BILLING_TENANT_BILLING_QUEUE_URL }}
+          USAGE_QUEUE_URL: ${{ vars.BILLING_USAGE_BILLING_QUEUE_URL }}
+          POSTGRES_CIDRS: ${{ vars.BILLING_POSTGRES_CIDRS }}
+          WEBHOOK_SOURCE_CIDRS: ${{ vars.BILLING_WEBHOOK_SOURCE_CIDRS }}
+          AWS_ENDPOINT_CIDRS: ${{ vars.BILLING_AWS_ENDPOINT_CIDRS }}
+          MONITORING_CIDRS: ${{ vars.BILLING_MONITORING_CIDRS }}
+        run: |
+          set -euo pipefail
+          missing=0
+          # USAGE_QUEUE_URL is optional while USAGE_BILLING_CONSUMER_ENABLED is false (BL-OQ-24).
+          for v in IRSA_ROLE_ARN SNS_TOPIC_ARN TENANT_QUEUE_URL POSTGRES_CIDRS; do
+            [ -n "${!v}" ] || { echo "::error::${v} is empty: set the BILLING_* variable in the production environment."; missing=1; }
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          # CIDR lists are comma-separated (e.g. 10.0.1.0/24,10.0.2.0/24); each
+          # entry must be a CIDR or the step fails.
+          values="${RUNNER_TEMP}/pipeline-values.json"
+          jq -n \
+            --arg tag "${IMAGE_REF}" \
+            --arg role "${IRSA_ROLE_ARN}" \
+            --arg sns "${SNS_TOPIC_ARN}" \
+            --arg tenantq "${TENANT_QUEUE_URL}" \
+            --arg usageq "${USAGE_QUEUE_URL}" \
+            --arg pg "${POSTGRES_CIDRS}" \
+            --arg webhook "${WEBHOOK_SOURCE_CIDRS}" \
+            --arg aws "${AWS_ENDPOINT_CIDRS}" \
+            --arg mon "${MONITORING_CIDRS}" '
+            def cidrs: [split(",")[] | gsub("\\s"; "") | select(length > 0)
+              | if test("^(([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}|[0-9A-Fa-f:]+/[0-9]{1,3})$") then .
+                else error("not a CIDR: \(.)") end];
+            {
+              image: {tag: $tag},
+              serviceAccount: {annotations: {"eks.amazonaws.com/role-arn": $role}},
+              env: {
+                SNS_BILLING_EVENTS_TOPIC_ARN: $sns,
+                SQS_TENANT_BILLING_QUEUE_URL: $tenantq,
+                SQS_USAGE_BILLING_QUEUE_URL: $usageq
+              },
+              networkPolicy: {postgresCIDRs: ($pg | cidrs), awsEndpointCIDRs: ($aws | cidrs)},
+              metrics: {monitoringCIDRs: ($mon | cidrs)},
+              gateway: {webhook: {allowedSourceCIDRs: ($webhook | cidrs)}}
+            }' > "${values}"
+          helm upgrade commercial-billing ./deploy/helm \
+            --install --atomic --wait --timeout=10m \
+            --namespace="${NAMESPACE}" \
+            -f deploy/helm/values-prod.yaml \
+            -f "${values}"
+
+      - name: Verify deployed image digest
+        run: |
+          EXPECTED="${{ needs.docker.outputs.digest }}"
+          ACTUAL=$(kubectl get deployment commercial-billing --namespace="${NAMESPACE}" \
+            -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "Expected digest: ${EXPECTED}"
+          echo "Deployed image:  ${ACTUAL}"
+          if [ "${ACTUAL#*@}" != "${EXPECTED}" ]; then
+            echo "::error::Deployed image ${ACTUAL} does not carry the published digest ${EXPECTED}."
+            exit 1
+          fi
+
+      - name: Wait for rollout
+        run: kubectl rollout status deployment/commercial-billing --namespace="${NAMESPACE}" --timeout=5m
+
+      # platform_http_requests_total{status_class} comes from platform-gincommon.
+      # Fails closed: a failed query, a non-success answer, no series or a
+      # non-numeric ratio (NaN: no requests in the window) cannot prove the
+      # release healthy, so it rolls back like a rate over 1% does.
+      - name: Health gate — 5xx rate < 1% for 2 minutes
+        env:
+          PROM_URL: ${{ vars.PROMETHEUS_URL }}
+        run: |
+          set -euo pipefail
+          rollback() {
+            echo "::error::$1 — rolling back"
+            helm rollback commercial-billing --namespace="${NAMESPACE}" --wait
+            exit 1
+          }
+          # "or vector(0)": no 5xx series yet is a 0 numerator, not "no data".
+          QUERY='(sum(rate(platform_http_requests_total{service="commercial-billing",status_class="5xx"}[2m])) or vector(0))/sum(rate(platform_http_requests_total{service="commercial-billing"}[2m]))'
+          sleep 120
+          RESP=$(curl -sS --fail --max-time 30 "${PROM_URL}/api/v1/query" --data-urlencode "query=${QUERY}") \
+            || rollback "Prometheus query failed"
+          [ "$(jq -r '.status // empty' <<<"${RESP}" || true)" = "success" ] \
+            || rollback "Prometheus answered without status success"
+          COUNT=$(jq '.data.result | length' <<<"${RESP}") || rollback "unreadable Prometheus answer"
+          [ "${COUNT}" -ge 1 ] || rollback "no platform_http_requests_total data for commercial-billing in the last 2 minutes"
+          RATE=$(jq -r '.data.result[0].value[1]' <<<"${RESP}")
+          echo "5xx rate: ${RATE}"
+          [[ "${RATE}" =~ ^[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?$ ]] || rollback "5xx rate is not a number (${RATE})"
+          if awk -v r="${RATE}" 'BEGIN { exit !(r > 0.01) }'; then
+            rollback "5xx rate ${RATE} is over 1%"
+          fi
+          echo "Health gate passed — 5xx rate ${RATE}."
+
+  publish:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    # Only a release that was deployed and passed the health gate is published.
+    needs: [build, docker, deploy-gate]
+    if: needs.build.result == 'success' && needs.docker.result == 'success' && needs.deploy-gate.result == 'success'
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: Extract release notes from CHANGELOG
+        env:
+          IMAGE_VERSION: ${{ needs.docker.outputs.version }}
+          IMAGE_DIGEST: ${{ needs.docker.outputs.digest }}
+          ADAPTER_VERSION: ${{ needs.build.outputs.adapter_version }}
+        run: bash .github/scripts/extract-release-notes.sh
+
+      - name: Download SBOM
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sbom-${{ env.RELEASE_TAG }}
+
+      - name: Download provenance
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: provenance-${{ env.RELEASE_TAG }}
+
+      - name: Download binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: binary-${{ env.RELEASE_TAG }}
+          path: .
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_DIGEST: ${{ needs.docker.outputs.digest }}
+        run: bash .github/scripts/create-github-release.sh

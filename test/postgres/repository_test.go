@@ -9,6 +9,7 @@ import (
 	"time"
 
 	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 )
 
@@ -46,6 +47,20 @@ func newAccountAndSubscription(t *testing.T) (tenant, subID string) {
 		t.Fatalf("create account and subscription: %v", err)
 	}
 	return tenant, subID
+}
+
+// A second account for a tenant is port.ErrAccountExists, so use cases never
+// inspect SQLSTATEs (BIL-OPS-11).
+func TestBIL_OPS_11_AccountExistsIsAPortError(t *testing.T) {
+	ctx := context.Background()
+	tx, accounts := pgadapter.NewTxRunner(appPool), pgadapter.NewAccountRepository(appPool)
+	tenant, _ := newAccountAndSubscription(t)
+	err := tx.RunInTenantTx(ctx, tenant, func(ctx context.Context) error {
+		return accounts.Create(ctx, domain.BillingAccount{TenantID: tenant, Provider: "manual", Currency: "USD", IAMLifecycle: domain.LifecycleTrial})
+	})
+	if !errors.Is(err, port.ErrAccountExists) {
+		t.Fatalf("second Create: %v, want port.ErrAccountExists", err)
+	}
 }
 
 func TestAccountRepository(t *testing.T) {

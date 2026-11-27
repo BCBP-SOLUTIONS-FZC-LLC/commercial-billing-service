@@ -37,6 +37,10 @@ type Validator func(eventType string, payload []byte) error
 
 // TenantBilling is the tenant-billing-q handler.
 func TenantBilling(uc *app.LifecycleConsumer, validate Validator, log port.Logger) events.Handler {
+	return traced(tenantBilling(uc, validate, log))
+}
+
+func tenantBilling(uc *app.LifecycleConsumer, validate Validator, log port.Logger) events.Handler {
 	return func(ctx context.Context, env events.Envelope[json.RawMessage]) error {
 		switch env.Type {
 		case app.EventTenantConverted, app.EventTenantSuspended, app.EventTenantReactivated, app.EventTenantOffboarded:
@@ -76,6 +80,10 @@ func TenantBilling(uc *app.LifecycleConsumer, validate Validator, log port.Logge
 
 // UsageBilling is the usage-billing-q handler.
 func UsageBilling(uc *app.UsageConsumer, validate Validator, log port.Logger) events.Handler {
+	return traced(usageBilling(uc, validate, log))
+}
+
+func usageBilling(uc *app.UsageConsumer, validate Validator, log port.Logger) events.Handler {
 	return func(ctx context.Context, env events.Envelope[json.RawMessage]) error {
 		if env.Type != "UsagePeriodClosed" {
 			ignored(log, "usage-billing-q", env)
@@ -158,5 +166,17 @@ func RouteRejectsToDLQ(h events.Handler, dlq events.DLQPublisher, log port.Logge
 				"event_id": env.ID, "event_type": env.Type, "reason": reason, "error": err.Error()})
 		}
 		return nil
+	}
+}
+
+// traced runs a handler in a "billing.consume <type>" span linked to the
+// producer's trace through the envelope's trace_id (§11.3).
+func traced(h events.Handler) events.Handler {
+	return func(ctx context.Context, env events.Envelope[json.RawMessage]) error {
+		ctx, end := app.StartLinkedSpan(ctx, "billing.consume "+env.Type, port.TraceLink{TraceID: env.TraceID, MessageID: env.ID},
+			app.AttrTenant(env.TenantID), port.Attr{Key: "messaging.message.id", Value: env.ID})
+		err := h(ctx, env)
+		end(err)
+		return err
 	}
 }

@@ -9,14 +9,13 @@
 // failure.
 //
 // Order (§4.4): platform-events outbox and inbox schemas, platform-audit
-// pending_audit_entries, then Billing's 000001 to 000005.
+// pending_audit_entries, then Billing's 000001 to 000007.
 package main
 
 import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
@@ -32,12 +31,11 @@ const defaultMigrateTimeout = 10 * time.Minute
 func main() { os.Exit(run()) }
 
 func run() int {
-	env := "dev"
-	for _, key := range []string{"APP_ENV", "ENVIRONMENT"} {
-		if v := strings.ToLower(strings.TrimSpace(os.Getenv(key))); v != "" {
-			env = v
-			break
-		}
+	// Fail closed in Kubernetes with APP_ENV unset (config.ResolveEnv).
+	env, envErr := config.ResolveEnv(os.Getenv)
+	if envErr != nil {
+		fmt.Fprintf(os.Stderr, "migrate: APP_ENV: %v\n", envErr)
+		return 1
 	}
 	logEnv := env
 	if config.IsDevLike(env) {
@@ -50,7 +48,7 @@ func run() int {
 	}
 	defer func() { _ = gincommon.Shutdown(log) }()
 
-	dsn := pgadapter.MigrationDSNFromEnv()
+	dsn := pgadapter.MigrationDSN()
 	if dsn == "" {
 		log.Error("migrate: no database DSN; set MIGRATION_DATABASE_URL (direct to Postgres, not PgBouncer)", nil)
 		return 1

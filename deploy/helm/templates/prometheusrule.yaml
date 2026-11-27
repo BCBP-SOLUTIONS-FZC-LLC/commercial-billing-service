@@ -1,0 +1,61 @@
+{{- /* §11.5 rules: files/app-alerts.yml is a byte copy of
+       deploy/monitoring/app-alerts.yml (helm-check fails on drift). Rendered
+       verbatim (not templated), so the alert annotation templates reach
+       Prometheus unchanged. */ -}}
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "commercial-billing.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- .Files.Get "files/app-alerts.yml" | nindent 2 }}
+---
+{{- /* §11.1 SLIs and SLOs: recording rules and the burn-rate alerts. */}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "commercial-billing.fullname" . }}-recording
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- .Files.Get "files/recording-rules.yml" | nindent 2 }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "commercial-billing.fullname" . }}-slo
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- .Files.Get "files/slo-rules.yml" | nindent 2 }}
+---
+{{- /* platform-audit's reference rules (library LLD §11.4), vendored
+       verbatim; only <service>, <environment> and <mode> are filled. */}}
+{{- $rules := .Files.Get "files/platform-audit.rules.yml" | replace "<service>" .Values.env.APP_NAME | replace "<environment>" .Values.env.APP_ENV | replace "<mode>" "outbox_deliver" }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "commercial-billing.fullname" . }}-platform-audit
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- $rules | nindent 2 }}
+{{- end }}

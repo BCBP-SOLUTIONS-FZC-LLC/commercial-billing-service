@@ -1,48 +1,210 @@
-# Component boundaries, LLD §3.2. Run with .github/scripts/arch-lint.sh.
+# Component boundaries, LLD §3.2 (hexagonal: domain ← port ← app ← adapters,
+# wired only in bootstrap and cmd/*). Run with `make arch-lint`
+# (.github/scripts/arch-lint.sh, go-arch-lint v1.15.0).
 #
-# depOnAnyVendor stays true (as in the IAM services); the one vendor rule of
-# §3.2, that only adapters/provider/stripe imports github.com/stripe/*
-# (BIL-PCI-1), is enforced by .github/scripts/check-stripe-imports.sh.
+# Vendor rules are enforced elsewhere: only adapters/provider/stripe imports
+# github.com/stripe/* (BIL-PCI-1, .github/scripts/check-stripe-imports.sh);
+# database drivers, platform libraries and logging/metrics/tracing packages
+# are confined by depguard in .golangci.yml (BIL-OPS-1/2/10/11).
 version: 3
-workdir: internal
+workdir: .
 
 allow:
   depOnAnyVendor: true
+  # Deep-scan follows method calls through the composition root and flags every
+  # DI wire (e.g. bootstrap passing an outbound adapter to a use case) as a
+  # cross-layer dependency. That's how the composition root is supposed to
+  # work — keep import-level checks only.
   deepScan: false
+
+# Tests, dev scripts, deploy manifests and docs are not part of the runtime
+# architecture. Excluding them keeps the linter focused on production code.
+# test/ holds the integration, e2e, scenario, contract and Helm suites and the
+# shared test/testkit harness; scripts/testclock is the Test Clock rehearsal.
+exclude:
+  - test
+  - scripts
+  - deploy
+  - docs
 
 excludeFiles:
   - '.*_test\.go$'
 
 components:
-  domain:    { in: domain/** }
-  app:       { in: app }
-  port:      { in: app/port/** }
-  config:    { in: config/** }
-  http:      { in: adapters/http/** }
-  webhook:   { in: adapters/webhook/** }
-  consumer:  { in: adapters/consumer/** }
-  postgres:  { in: adapters/postgres/** }
-  eventbus:  { in: adapters/eventbus/** }
-  registry:  { in: adapters/provider }
-  stripe:    { in: adapters/provider/stripe/** }
-  manual:    { in: adapters/provider/manual/** }
-  iamclient: { in: adapters/iamclient/** }
-  entclient: { in: adapters/entitlementsclient/** }
-  httpx:     { in: adapters/httpx/** }
-  metrics:   { in: adapters/metrics/** }
+  # ── Core ────────────────────────────────────────────────────────────────
+  # Entities, value objects, state machines, money, errors.
+  domain:
+    in: internal/domain/**
 
-# Components without an entry (domain, config, httpx, metrics) may depend on
-# no other project component.
+  # Ports: repository, provider, IAM/Entitlements, event and audit interfaces.
+  port:
+    in: internal/app/port/**
+
+  # Use cases (internal/app, not its port sub-package).
+  app:
+    in: internal/app
+
+  # Configuration loading and validation (§12), per binary (LoadFor).
+  config:
+    in: internal/config/**
+
+  # Request context: the caller identity type and the X-Request-ID carried
+  # from the router to outbound calls.
+  requestctx:
+    in: pkg/requestctx/**
+
+  # Embedded AsyncAPI contract (api/asyncapi.yaml, api/embed.go), served at
+  # /asyncapi.yaml by cmd/server (§7.6).
+  apispec:
+    in: api
+
+  # ── Inbound adapters ────────────────────────────────────────────────────
+  # Tenant (B-P*), internal (B-I1) and operator (B-O*) routes.
+  http:
+    in: internal/adapters/http/**
+
+  # B-W1: provider signature, ledger-first (BIL-PAY-1..3).
+  webhook:
+    in: internal/adapters/webhook/**
+
+  # tenant-billing-q and usage-billing-q handlers.
+  consumer:
+    in: internal/adapters/consumer/**
+
+  # ── Outbound adapters ───────────────────────────────────────────────────
+  postgres:
+    in: internal/adapters/postgres/**
+
+  # Outbox enqueue, Glue codec, embedded event schemas.
+  eventbus:
+    in: internal/adapters/eventbus/**
+
+  # Provider registry: the only adapter allowed to import other adapters
+  # (stripe, manual), to pick one per account.
+  registry:
+    in: internal/adapters/provider
+
+  stripe:
+    in: internal/adapters/provider/stripe/**
+
+  manual:
+    in: internal/adapters/provider/manual/**
+
+  # IAM Core (I-11, I-18) and Realm Provisioner (RP-3, RP-4, RP-11).
+  iamclient:
+    in: internal/adapters/iamclient/**
+
+  # Entitlements eligibility GET.
+  entclient:
+    in: internal/adapters/entitlementsclient/**
+
+  # Shared outbound HTTP call: CD-19 identity headers, timeouts, RFC 9457
+  # problem decoding, X-Request-ID forwarding.
+  httpx:
+    in: internal/adapters/httpx/**
+
+  # Tier 3 commercial_billing_* metrics through platform-gincommon, and the
+  # CronJob Pushgateway push.
+  metrics:
+    in: internal/adapters/metrics/**
+
+  # Tracing setup (the only package allowed to import OpenTelemetry).
+  observability:
+    in: internal/adapters/observability/**
+
+  # ── Composition ─────────────────────────────────────────────────────────
+  # Wiring shared by cmd/server and cmd/jobs: pools, adapters, use cases.
+  bootstrap:
+    in: internal/bootstrap/**
+
+  # Provider certification suite (§14.7), run by cmd/certify.
+  certify:
+    in: internal/certify/**
+
+  # Composition roots: commercial-billing (server), jobs (the ten CronJobs),
+  # migrate, certify (not shipped in the image).
+  cmd:
+    in:
+      - cmd/server
+      - cmd/jobs
+      - cmd/migrate
+      - cmd/certify
+
+# A component without an entry here (domain, config, requestctx, apispec)
+# may depend on no other project component.
 deps:
-  port:      { mayDependOn: [domain] }
-  app:       { mayDependOn: [domain, port] }
-  http:      { mayDependOn: [domain, port, app, metrics] }
-  webhook:   { mayDependOn: [domain, port, app, metrics] }
-  consumer:  { mayDependOn: [domain, port, app, metrics] }
-  postgres:  { mayDependOn: [domain, port] }
-  eventbus:  { mayDependOn: [domain, port] }
-  stripe:    { mayDependOn: [domain, port, httpx] }
-  manual:    { mayDependOn: [domain, port] }
-  registry:  { mayDependOn: [port, stripe, manual] }
-  iamclient: { mayDependOn: [domain, port, httpx] }
-  entclient: { mayDependOn: [domain, port, httpx] }
+  # port: only domain.
+  port:
+    mayDependOn: [domain]
+
+  # app: domain + port. Adapters reach the app only through ports.
+  app:
+    mayDependOn: [domain, port]
+
+  # inbound adapters: the app and its ports; metrics for instrumentation;
+  # http also reads/writes the request context.
+  http:
+    mayDependOn: [domain, port, app, metrics, requestctx]
+  webhook:
+    mayDependOn: [domain, port, app, metrics]
+  consumer:
+    mayDependOn: [domain, port, app, metrics]
+
+  # outbound adapters: domain + port; HTTP clients also the shared httpx.
+  # Adapters never import each other (except registry → stripe, manual).
+  postgres:
+    mayDependOn: [domain, port]
+  eventbus:
+    mayDependOn: [domain, port]
+  stripe:
+    mayDependOn: [domain, port, httpx]
+  manual:
+    mayDependOn: [domain, port]
+  registry:
+    mayDependOn: [port, stripe, manual]
+  iamclient:
+    mayDependOn: [domain, port, httpx]
+  entclient:
+    mayDependOn: [domain, port, httpx]
+  metrics:
+    mayDependOn: [domain, port]
+  observability:
+    mayDependOn: [port]
+
+  # httpx: requestctx only, for the X-Request-ID it forwards.
+  httpx:
+    mayDependOn: [requestctx]
+
+  # Composition shared by cmd/server and cmd/jobs: wires every adapter.
+  bootstrap:
+    mayDependOn: [domain, port, app, config, postgres, eventbus, registry, stripe, manual, iamclient, entclient, httpx, metrics, observability]
+
+  # Certification suite: drives the real app layer through the Stripe adapter
+  # and B-W1 against a throwaway database.
+  certify:
+    mayDependOn: [domain, port, app, config, bootstrap, postgres, stripe, webhook]
+
+  # Composition roots: wire everything.
+  cmd:
+    mayDependOn:
+      - domain
+      - port
+      - app
+      - config
+      - requestctx
+      - apispec
+      - http
+      - webhook
+      - consumer
+      - postgres
+      - eventbus
+      - registry
+      - stripe
+      - manual
+      - iamclient
+      - entclient
+      - httpx
+      - metrics
+      - observability
+      - bootstrap
+      - certify

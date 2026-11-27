@@ -36,3 +36,20 @@ func (rc RequestContext) HasRole(role string) bool {
 	}
 	return false
 }
+
+type requestIDKey struct{}
+
+// WithRequestID returns ctx carrying the inbound correlation request ID
+// (x-request-id), so outbound calls can forward it.
+func WithRequestID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, requestIDKey{}, id)
+}
+
+// RequestID returns the request ID in ctx, or "".
+func RequestID(ctx context.Context) string {
+	id, _ := ctx.Value(requestIDKey{}).(string)
+	return id
+}

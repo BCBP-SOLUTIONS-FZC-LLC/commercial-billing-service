@@ -2,6 +2,8 @@ package stripe
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -22,6 +24,7 @@ func (a *Adapter) EnsureCustomer(ctx context.Context, in port.CustomerInput, ide
 	p.Metadata = map[string]string{"tenant_id": in.TenantID}
 	setIf(&p.Name, in.Name)
 	setIf(&p.Email, in.Email)
+	setIf(&p.TestClock, a.cfg.TestClock)
 	c, err := call(ctx, a, func() (*stripego.Customer, error) { return a.sc.V1Customers.Create(ctx, p) })
 	if err != nil {
 		return port.CustomerRef{}, err
@@ -61,6 +64,32 @@ func (a *Adapter) CreateHostedCheckout(ctx context.Context, in port.CheckoutInpu
 		return port.HostedSession{}, err
 	}
 	return port.HostedSession{ProviderSessionID: s.ID, URL: s.URL, ExpiresAt: time.Unix(s.ExpiresAt, 0).UTC()}, nil
+}
+
+// ExpireCheckout expires an open Checkout Session so it can no longer be
+// paid (a superseded B-P2, LLD §8.1.1). Stripe refuses to expire a session
+// that is not open, so on any refusal the session is re-read: expired is
+// success, complete is port.ErrCheckoutCompleted.
+func (a *Adapter) ExpireCheckout(ctx context.Context, providerSessionID string, idemKey string) error {
+	p := &stripego.CheckoutSessionExpireParams{Params: idem(idemKey)}
+	_, err := call(ctx, a, func() (*stripego.CheckoutSession, error) {
+		return a.sc.V1CheckoutSessions.Expire(ctx, providerSessionID, p)
+	})
+	if err == nil || errors.Is(err, port.ErrProviderUnavailable) {
+		return err
+	}
+	s, rerr := call(ctx, a, func() (*stripego.CheckoutSession, error) {
+		return a.sc.V1CheckoutSessions.Retrieve(ctx, providerSessionID, nil)
+	})
+	switch {
+	case rerr != nil:
+		return rerr
+	case s.Status == stripego.CheckoutSessionStatusExpired:
+		return nil
+	case s.Status == stripego.CheckoutSessionStatusComplete:
+		return port.ErrCheckoutCompleted
+	}
+	return err
 }
 
 // CreatePaymentMethodSetup starts a Checkout Session in setup mode (B-P16);
@@ -122,8 +151,27 @@ func (a *Adapter) AttachDefaultPaymentMethod(ctx context.Context, ref port.Custo
 	}
 	up := &stripego.CustomerUpdateParams{Params: idem(idemKey + ":default")}
 	up.InvoiceSettings = &stripego.CustomerUpdateInvoiceSettingsParams{DefaultPaymentMethod: stripego.String(pmRef)}
-	_, err := call(ctx, a, func() (*stripego.Customer, error) { return a.sc.V1Customers.Update(ctx, ref.ProviderCustomerID, up) })
-	return err
+	if _, err := call(ctx, a, func() (*stripego.Customer, error) { return a.sc.V1Customers.Update(ctx, ref.ProviderCustomerID, up) }); err != nil {
+		return err
+	}
+	// A subscription's own default (set by hosted checkout) overrides the
+	// customer's, so the live subscriptions get the new method too (B-P16:
+	// "the provider's next retry uses it").
+	lp := &stripego.SubscriptionListParams{Customer: stripego.String(ref.ProviderCustomerID)}
+	for sub, err := range a.sc.V1Subscriptions.List(ctx, lp).All(ctx) {
+		if err != nil {
+			return mapErr(err)
+		}
+		if sub.Status != stripego.SubscriptionStatusActive && sub.Status != stripego.SubscriptionStatusPastDue {
+			continue
+		}
+		sp := &stripego.SubscriptionUpdateParams{Params: idem(idemKey + ":" + sub.ID)}
+		sp.DefaultPaymentMethod = stripego.String(pmRef)
+		if _, err := call(ctx, a, func() (*stripego.Subscription, error) { return a.sc.V1Subscriptions.Update(ctx, sub.ID, sp) }); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ── Recurring subscription ─────────────────────────────────────────────
@@ -187,6 +235,10 @@ func (a *Adapter) ChangeQuantity(ctx context.Context, in port.QuantityChange, id
 	}
 	p := &stripego.SubscriptionUpdateParams{Params: idem(idemKey)}
 	p.Items = []*stripego.SubscriptionUpdateItemParams{{ID: stripego.String(itemID), Quantity: stripego.Int64(int64(in.To))}}
+	if in.KeepIfUnpaid {
+		// Renewal top-up: the seats stay even if the charge fails (§8.6.3).
+		p.PaymentBehavior = stripego.String("allow_incomplete")
+	}
 	return a.immediateChange(ctx, in.Sub, p, in.ProrationInstant)
 }
 
@@ -203,7 +255,9 @@ func (a *Adapter) ChangePrice(ctx context.Context, in port.PriceChange, idemKey 
 
 func (a *Adapter) immediateChange(ctx context.Context, sub port.SubscriptionRef, p *stripego.SubscriptionUpdateParams, at time.Time) (port.ChangeResult, error) {
 	p.ProrationBehavior = stripego.String("always_invoice")
-	p.PaymentBehavior = stripego.String("pending_if_incomplete")
+	if p.PaymentBehavior == nil {
+		p.PaymentBehavior = stripego.String("pending_if_incomplete")
+	}
 	if !at.IsZero() {
 		p.ProrationDate = stripego.Int64(at.Unix())
 	}
@@ -388,12 +442,18 @@ func (a *Adapter) preview(ctx context.Context, sub port.SubscriptionRef, items [
 }
 
 // ChargeOneOff charges a token add-on: invoice item + invoice
-// (charge_automatically, auto_advance), paid off-session (§8.7).
+// (charge_automatically), paid off-session (§8.7). The invoice is created
+// with auto_advance off, so a draft whose item could not be attached is
+// never finalised by the provider on its own (an empty draft would become
+// a paid 0 invoice an hour later); paying it finalises it, and an unpaid
+// finalised invoice keeps its hosted page (B-P23). A draft left without
+// its item is deleted at once (best effort); when that fails its id is
+// returned so purchase-expiry deletes it.
 func (a *Adapter) ChargeOneOff(ctx context.Context, in port.OneOffCharge, idemKey string) (port.ChargeResult, error) {
 	ip := &stripego.InvoiceCreateParams{Params: idem(idemKey + ":invoice")}
 	ip.Customer = stripego.String(in.Customer.ProviderCustomerID)
 	ip.CollectionMethod = stripego.String("charge_automatically")
-	ip.AutoAdvance = stripego.Bool(true)
+	ip.AutoAdvance = stripego.Bool(false)
 	ip.Description = stringOrNil(in.Description)
 	ip.Metadata = in.Metadata
 	inv, err := call(ctx, a, func() (*stripego.Invoice, error) { return a.sc.V1Invoices.Create(ctx, ip) })
@@ -411,7 +471,11 @@ func (a *Adapter) ChargeOneOff(ctx context.Context, in port.OneOffCharge, idemKe
 		ii.Currency = stripego.String(strings.ToLower(in.Amount.Currency))
 	}
 	if _, err := call(ctx, a, func() (*stripego.InvoiceItem, error) { return a.sc.V1InvoiceItems.Create(ctx, ii) }); err != nil {
-		return port.ChargeResult{}, err
+		if a.DeleteDraftInvoice(ctx, port.InvoiceRef{ProviderInvoiceID: inv.ID}) == nil {
+			return port.ChargeResult{}, err
+		}
+		// The draft still exists: return it so purchase-expiry deletes it (§8.7).
+		return port.ChargeResult{Invoice: port.InvoiceRef{ProviderInvoiceID: inv.ID}}, err
 	}
 	pp := &stripego.InvoicePayParams{Params: idem(idemKey + ":pay")}
 	pp.OffSession = stripego.Bool(true)
@@ -420,6 +484,75 @@ func (a *Adapter) ChargeOneOff(ctx context.Context, in port.OneOffCharge, idemKe
 		return port.ChargeResult{Invoice: port.InvoiceRef{ProviderInvoiceID: inv.ID}}, err
 	}
 	return port.ChargeResult{Invoice: port.InvoiceRef{ProviderInvoiceID: paid.ID}, Outcome: invoiceOutcome(paid)}, nil
+}
+
+// FindInvoice looks up the invoice of a purchase whose id Billing did not
+// record (a provider error after the charge, §8.5.1, §8.7): the customer's
+// or subscription's invoices created since q.CreatedSince, matched on
+// metadata purchase_id (one-off) or on billing_reason subscription_update
+// and the amount (the proration invoice of an immediate change).
+func (a *Adapter) FindInvoice(ctx context.Context, q port.InvoiceQuery) (port.InvoiceRef, bool, error) {
+	lp := &stripego.InvoiceListParams{CreatedRange: &stripego.RangeQueryParams{GreaterThanOrEqual: q.CreatedSince.Unix()}}
+	switch {
+	case q.Subscription.ProviderSubscriptionID != "":
+		lp.Subscription = stripego.String(q.Subscription.ProviderSubscriptionID)
+	case q.Customer.ProviderCustomerID != "":
+		lp.Customer = stripego.String(q.Customer.ProviderCustomerID)
+	default:
+		return port.InvoiceRef{}, false, nil
+	}
+	if err := a.limiter.wait(ctx); err != nil {
+		return port.InvoiceRef{}, false, err
+	}
+	lp.Limit = stripego.Int64(100)
+	for inv, err := range a.sc.V1Invoices.List(ctx, lp).All(ctx) {
+		if err != nil {
+			return port.InvoiceRef{}, false, mapErr(err)
+		}
+		if invoiceMatches(inv, q) {
+			return port.InvoiceRef{ProviderInvoiceID: inv.ID}, true, nil
+		}
+	}
+	return port.InvoiceRef{}, false, nil
+}
+
+func invoiceMatches(inv *stripego.Invoice, q port.InvoiceQuery) bool {
+	if q.PurchaseID != "" {
+		return inv.Metadata["purchase_id"] == q.PurchaseID
+	}
+	return q.Amount != nil && inv.BillingReason == stripego.InvoiceBillingReasonSubscriptionUpdate &&
+		strings.EqualFold(string(inv.Currency), q.Amount.Currency) && (inv.AmountDue == q.Amount.AmountMinor || inv.Total == q.Amount.AmountMinor) &&
+		chargedLineMatches(inv, q.Quantity, q.PriceRef)
+}
+
+// chargedLineMatches reports whether the invoice charges for the change a
+// query names: a positive (charged) line for quantity (a seat purchase's
+// seats after) and/or price (an upgrade's target price). Nothing to match
+// (0, "") matches any invoice; an invoice without lines matches nothing.
+func chargedLineMatches(inv *stripego.Invoice, quantity int, priceRef string) bool {
+	if quantity == 0 && priceRef == "" {
+		return true
+	}
+	if inv.Lines == nil {
+		return false
+	}
+	for _, l := range inv.Lines.Data {
+		if l.Amount <= 0 {
+			continue
+		}
+		if (quantity == 0 || l.Quantity == int64(quantity)) && (priceRef == "" || linePrice(l) == priceRef) {
+			return true
+		}
+	}
+	return false
+}
+
+// linePrice is the id of the price a line bills ("" when none).
+func linePrice(l *stripego.InvoiceLineItem) string {
+	if l.Pricing != nil && l.Pricing.PriceDetails != nil && l.Pricing.PriceDetails.Price != nil {
+		return l.Pricing.PriceDetails.Price.ID
+	}
+	return ""
 }
 
 // ── Invoices and refunds ───────────────────────────────────────────────
@@ -464,6 +597,17 @@ func (a *Adapter) PayOpenInvoiceLink(ctx context.Context, ref port.InvoiceRef) (
 func (a *Adapter) VoidInvoice(ctx context.Context, ref port.InvoiceRef, idemKey string) error {
 	p := &stripego.InvoiceVoidInvoiceParams{Params: idem(idemKey)}
 	_, err := call(ctx, a, func() (*stripego.Invoice, error) { return a.sc.V1Invoices.VoidInvoice(ctx, ref.ProviderInvoiceID, p) })
+	return err
+}
+
+// DeleteDraftInvoice deletes a draft invoice (a purchase's invoice that was
+// never finalised: Stripe voids only finalised invoices). An invoice that
+// no longer exists is already gone: nil.
+func (a *Adapter) DeleteDraftInvoice(ctx context.Context, ref port.InvoiceRef) error {
+	_, err := call(ctx, a, func() (*stripego.Invoice, error) { return a.sc.V1Invoices.Delete(ctx, ref.ProviderInvoiceID, nil) })
+	if errors.Is(err, port.ErrNotFound) {
+		return nil
+	}
 	return err
 }
 
@@ -557,23 +701,113 @@ func (a *Adapter) FetchCurrent(ctx context.Context, obj domain.ProviderObjectRef
 		st.Status, st.Metadata = v.Status, v.Metadata
 		st.Fields["amount_due_minor"], st.Fields["amount_paid_minor"] = inv.AmountDue, inv.AmountPaid
 		st.Fields["currency"] = strings.ToUpper(string(inv.Currency))
+		st.Fields["total_minor"] = inv.Total
+		// The charged (positive) lines' quantities and prices, so a callback
+		// matching a proration invoice to a purchase checks what it bills.
+		qs, prices := chargedLines(inv)
+		st.Fields["charged_line_quantities"], st.Fields["charged_line_prices"] = qs, prices
 		st.Fields["billing_reason"] = string(inv.BillingReason)
 		st.Fields["subscription"] = subscriptionOf(inv)
+		// The Billing subscription named in the metadata Billing set on the
+		// provider subscription (§8.1.1), so invoice.paid resolves it even
+		// before checkout.session.completed links the provider id.
+		if id := billingSubscriptionOf(inv); id != "" {
+			st.Fields["billing_subscription_id"] = id
+		}
 		st.Fields["kind"] = string(v.Kind)
+		st.Fields["attempt_count"] = inv.AttemptCount
+		if inv.NextPaymentAttempt > 0 {
+			st.Fields["next_payment_attempt"] = time.Unix(inv.NextPaymentAttempt, 0).UTC()
+		}
+		// The subscription period this invoice covers (first line), so a
+		// handler can apply it without another provider call inside its
+		// transaction (BIL-CONC-2).
+		lineFields(st.Fields, "", inv)
 	case domain.ObjectCheckoutSession:
-		s, err := a.sc.V1CheckoutSessions.Retrieve(ctx, obj.ID, nil)
+		sp := &stripego.CheckoutSessionRetrieveParams{}
+		sp.AddExpand("setup_intent")
+		sp.AddExpand("invoice")
+		s, err := a.sc.V1CheckoutSessions.Retrieve(ctx, obj.ID, sp)
 		if err != nil {
 			return st, mapErr(err)
 		}
 		st.Status, st.Metadata = string(s.Status), s.Metadata
 		st.Fields["mode"] = string(s.Mode)
+		// The payment method a setup session saved (an opaque reference; no
+		// card data), made the default by the lifecycle follow-up (B-P16).
+		if s.SetupIntent != nil && s.SetupIntent.PaymentMethod != nil {
+			st.Fields["setup_payment_method"] = s.SetupIntent.PaymentMethod.ID
+		}
+		// The first invoice of a subscription session, so the completion
+		// handler sees a payment that is already settled (§9.4).
+		if s.Invoice != nil && s.Invoice.Status != "" {
+			st.Fields["invoice"], st.Fields["invoice_status"] = s.Invoice.ID, string(s.Invoice.Status)
+			lineFields(st.Fields, "invoice_", s.Invoice)
+		}
 		if s.Subscription != nil {
 			st.Fields["subscription"] = s.Subscription.ID
+		}
+	case domain.ObjectRefund:
+		r, err := a.sc.V1Refunds.Retrieve(ctx, obj.ID, nil)
+		if err != nil {
+			return st, mapErr(err)
+		}
+		st.Status, st.Metadata = string(r.Status), r.Metadata
+		st.Fields["amount_minor"], st.Fields["currency"] = r.Amount, strings.ToUpper(string(r.Currency))
+	case domain.ObjectDispute:
+		d, err := a.sc.V1Disputes.Retrieve(ctx, obj.ID, nil)
+		if err != nil {
+			return st, mapErr(err)
+		}
+		st.Status = string(d.Status)
+		st.Fields["reason"], st.Fields["amount_minor"], st.Fields["created"] = string(d.Reason), d.Amount, time.Unix(d.Created, 0).UTC()
+		if err := a.paymentFields(ctx, st.Fields, d.Charge, d.PaymentIntent); err != nil {
+			return st, err
+		}
+	case domain.ObjectEarlyFraudWarning:
+		w, err := a.sc.V1RadarEarlyFraudWarnings.Retrieve(ctx, obj.ID, nil)
+		if err != nil {
+			return st, mapErr(err)
+		}
+		st.Status, st.Fields["reason"], st.Fields["created"] = "open", string(w.FraudType), time.Unix(w.Created, 0).UTC()
+		if err := a.paymentFields(ctx, st.Fields, w.Charge, w.PaymentIntent); err != nil {
+			return st, err
 		}
 	default:
 		return st, port.ErrUnsupported
 	}
 	return st, nil
+}
+
+// paymentFields records the disputed payment and the invoice it paid (via
+// the invoice payments of its PaymentIntent), so the dispute handler can
+// tell a conversion payment without another provider call (CD-10). A
+// failed lookup is returned (mapped), so the callback is retried rather than
+// applied without its invoice; no invoice payment at all is not an error.
+func (a *Adapter) paymentFields(ctx context.Context, f map[string]any, ch *stripego.Charge, pi *stripego.PaymentIntent) error {
+	if ch != nil {
+		f["payment_ref"] = ch.ID
+	}
+	if pi == nil {
+		return nil
+	}
+	f["payment_intent"] = pi.ID
+	if f["payment_ref"] == nil {
+		f["payment_ref"] = pi.ID
+	}
+	lp := &stripego.InvoicePaymentListParams{Payment: &stripego.InvoicePaymentListPaymentParams{Type: stripego.String("payment_intent"),
+		PaymentIntent: stripego.String(pi.ID)}}
+	lp.Limit = stripego.Int64(1)
+	for ip, err := range a.sc.V1InvoicePayments.List(ctx, lp).All(ctx) {
+		if err != nil {
+			return mapErr(err)
+		}
+		if ip.Invoice != nil {
+			f["invoice"] = ip.Invoice.ID
+		}
+		break
+	}
+	return nil
 }
 
 // ListSince lists subscriptions, invoices or events created since a time,
@@ -628,7 +862,14 @@ func (a *Adapter) ListSince(ctx context.Context, kind port.ReconKind, since time
 			if err != nil {
 				return page, mapErr(err)
 			}
-			page.Items = append(page.Items, domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: "event", ID: ev.ID}, Status: string(ev.Type)})
+			st := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: "event", ID: ev.ID}, Status: string(ev.Type)}
+			if ev.Data != nil && ev.Livemode == a.cfg.Livemode {
+				// Normalised as a delivery would be, so a repair can ledger it (§8.13).
+				if pe, err := normalise(ev.ID, string(ev.Type), ev.Created, ev.Livemode, ev.Data.Raw); err == nil {
+					st.Fields = map[string]any{"event": pe}
+				}
+			}
+			page.Items = append(page.Items, st)
 			if len(page.Items) == limit {
 				page.NextCursor = ev.ID
 				break
@@ -743,6 +984,49 @@ func subscriptionOf(inv *stripego.Invoice) string {
 	return ""
 }
 
+// lineFields records the subscription period and quantity of the invoice's
+// first line under prefix+line_period_start, _end and _quantity, so a
+// handler can apply them without another provider call inside its
+// transaction (BIL-CONC-2).
+func lineFields(f map[string]any, prefix string, inv *stripego.Invoice) {
+	if inv.Lines == nil || len(inv.Lines.Data) == 0 {
+		return
+	}
+	l := inv.Lines.Data[0]
+	if l.Period != nil {
+		f[prefix+"line_period_start"] = time.Unix(l.Period.Start, 0).UTC()
+		f[prefix+"line_period_end"] = time.Unix(l.Period.End, 0).UTC()
+	}
+	if l.Quantity > 0 {
+		f[prefix+"line_quantity"] = l.Quantity
+	}
+}
+
+// chargedLines lists the quantity and price id of each positive line.
+func chargedLines(inv *stripego.Invoice) ([]int64, []string) {
+	qs, prices := []int64{}, []string{}
+	if inv.Lines == nil {
+		return qs, prices
+	}
+	for _, l := range inv.Lines.Data {
+		if l.Amount > 0 {
+			qs, prices = append(qs, l.Quantity), append(prices, linePrice(l))
+		}
+	}
+	return qs, prices
+}
+
+// billingSubscriptionOf reads billing_subscription_id from the snapshot of
+// the provider subscription's metadata on the invoice, else the invoice's own.
+func billingSubscriptionOf(inv *stripego.Invoice) string {
+	if inv.Parent != nil && inv.Parent.SubscriptionDetails != nil {
+		if id := inv.Parent.SubscriptionDetails.Metadata["billing_subscription_id"]; id != "" {
+			return id
+		}
+	}
+	return inv.Metadata["billing_subscription_id"]
+}
+
 func paymentIntentOf(inv *stripego.Invoice) string {
 	if inv.Payments == nil {
 		return ""
@@ -766,4 +1050,36 @@ func stringOrNil(v string) *string {
 		return nil
 	}
 	return stripego.String(v)
+}
+
+// VerifyPrice checks a Stripe Price for B-O11 / B-O12: active, same unit
+// amount and currency, recurring with the same interval and an interval
+// count of 1 (Billing's month / year mean one month / one year), or one-off.
+func (a *Adapter) VerifyPrice(ctx context.Context, priceRef string, want port.PriceExpectation) error {
+	p, err := call(ctx, a, func() (*stripego.Price, error) { return a.sc.V1Prices.Retrieve(ctx, priceRef, nil) })
+	if err != nil {
+		return err
+	}
+	var problems []string
+	if !p.Active {
+		problems = append(problems, "inactive")
+	}
+	if p.UnitAmount != want.Amount.AmountMinor {
+		problems = append(problems, fmt.Sprintf("amount %d ≠ %d", p.UnitAmount, want.Amount.AmountMinor))
+	}
+	if !strings.EqualFold(string(p.Currency), want.Amount.Currency) {
+		problems = append(problems, "currency "+strings.ToUpper(string(p.Currency))+" ≠ "+want.Amount.Currency)
+	}
+	switch {
+	case want.Interval == "" && p.Recurring != nil:
+		problems = append(problems, "recurring price for a one-off pack")
+	case want.Interval != "" && (p.Recurring == nil || string(p.Recurring.Interval) != want.Interval):
+		problems = append(problems, "interval differs")
+	case want.Interval != "" && p.Recurring.IntervalCount != 1:
+		problems = append(problems, fmt.Sprintf("interval count %d ≠ 1", p.Recurring.IntervalCount))
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("%w: %s", port.ErrPriceMismatch, strings.Join(problems, "; "))
+	}
+	return nil
 }

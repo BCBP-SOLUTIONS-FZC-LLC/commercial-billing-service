@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -107,7 +106,7 @@ func asTenant(ctx context.Context, tenantID string) context.Context {
 
 // exec runs one statement in its own transaction on pool.
 func exec(ctx context.Context, pool *pgcommon.Pool, sql string, args ...any) error {
-	return pgcommon.RunInTx(ctx, pool, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+	return pgcommon.RunInTx(ctx, pool, pgcommon.TxOptions{}, func(ctx context.Context, tx pgcommon.Tx) error {
 		_, err := tx.Exec(ctx, sql, args...)
 		return err
 	})
@@ -116,7 +115,7 @@ func exec(ctx context.Context, pool *pgcommon.Pool, sql string, args ...any) err
 // count returns SELECT count(*) on pool.
 func count(ctx context.Context, pool *pgcommon.Pool, sql string, args ...any) (int, error) {
 	var n int
-	err := pgcommon.RunInTx(ctx, pool, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(ctx context.Context, tx pgx.Tx) error {
+	err := pgcommon.RunInTx(ctx, pool, pgcommon.TxOptions{AccessMode: "read only"}, func(ctx context.Context, tx pgcommon.Tx) error {
 		return tx.QueryRow(ctx, sql, args...).Scan(&n)
 	})
 	return n, err

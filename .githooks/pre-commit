@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Local commit gates, the fast subset of CI's validate-quality and
+# validate-test jobs: no secrets staged, tidy, formatting, lint, the
+# invariant guard scripts and OpenAPI staleness. Installed by `make setup` /
+# `make install-hooks`. Skip once with `git commit --no-verify`.
+set -euo pipefail
+
+# .env holds secrets and is never committed (CLAUDE.md; change .env-example).
+if git diff --cached --name-only --diff-filter=ACMR | grep -Eq '(^|/)\.env$'; then
+  echo "[pre-commit] .env is staged: it holds secrets and is never committed (unstage it: git restore --staged .env)" >&2
+  exit 1
+fi
+
+# go mod tidy -diff reports what tidy would change without touching the
+# files, so unrelated unstaged edits to go.mod / go.sum don't fail the hook.
+echo "[pre-commit] checking go mod tidy..."
+if ! go mod tidy -diff >/dev/null; then
+  echo "[pre-commit] go.mod / go.sum are not tidy: run make tidy, review, stage, then commit again" >&2
+  exit 1
+fi
+
+echo "[pre-commit] running fmt-check..."
+make fmt-check
+
+echo "[pre-commit] running lint..."
+make lint
+
+echo "[pre-commit] running guards (BIL-PCI-1, BIL-OPS-2, RFC 9457, BIL-OPS-11)..."
+make guards
+
+echo "[pre-commit] checking OpenAPI staleness (docs/swagger/openapi.json)..."
+make openapi-check

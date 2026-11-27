@@ -7,12 +7,15 @@ package webhook
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/problem"
+
 	"github.com/gin-gonic/gin"
 
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 )
@@ -26,7 +29,10 @@ type Handler struct {
 	// OnSignatureFailure increments
 	// commercial_billing_webhook_signature_failures_total{provider} (BIL-PAY-2).
 	OnSignatureFailure func(provider string)
-	Log                port.Logger
+	// OnDuplicate counts a redelivery already in the ledger
+	// (commercial_billing_webhooks_total{outcome="duplicate"}).
+	OnDuplicate func(provider, kind string)
+	Log         port.Logger
 }
 
 // Route is the B-W1 path.
@@ -37,10 +43,13 @@ func (h *Handler) Register(r gin.IRouter) { r.POST(Route, h.receive) }
 
 func (h *Handler) receive(c *gin.Context) {
 	name := c.Param("provider")
+	ctx, end := app.StartSpan(c.Request.Context(), "billing.webhook.receive", app.AttrProvider(name))
+	defer end(nil)
+	c.Request = c.Request.WithContext(ctx)
 	provider, ok := h.Providers.Loaded(name)
 	if !ok || !provider.Capabilities().WebhookRedelivery {
 		// Unknown provider, or one that sends no callbacks (manual): 404.
-		c.Status(http.StatusNotFound)
+		gincommon.AbortWithProblem(c, problem.NewNotFoundError("no webhook endpoint for this provider"))
 		return
 	}
 	limit := h.MaxBodyBytes
@@ -49,14 +58,14 @@ func (h *Handler) receive(c *gin.Context) {
 	}
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, limit+1))
 	if err != nil {
-		c.Status(http.StatusBadRequest)
+		gincommon.AbortWithProblem(c, gincommon.BindingError(err))
 		return
 	}
 	if int64(len(body)) > limit {
-		problem(c, http.StatusRequestEntityTooLarge, domain.ErrPayloadTooLarge, "webhook body exceeds the limit")
+		gincommon.AbortWithProblem(c, domain.NewError(domain.ErrPayloadTooLarge, "webhook body exceeds the limit"))
 		return
 	}
-	ctx := c.Request.Context()
+	ctx = c.Request.Context()
 	ev, err := provider.VerifyAndNormalise(ctx, c.Request.Header, body)
 	if err != nil {
 		// BIL-PAY-2: refused, nothing stored. The reason is logged, never returned.
@@ -66,15 +75,18 @@ func (h *Handler) receive(c *gin.Context) {
 		if h.Log != nil {
 			h.Log.Warn("webhook refused", map[string]any{"provider": name, "reason": err.Error()})
 		}
-		problem(c, http.StatusBadRequest, domain.ErrInvalidSignature, "invalid webhook signature")
+		gincommon.AbortWithProblem(c, domain.NewError(domain.ErrInvalidSignature, "invalid webhook signature"))
 		return
 	}
-	if err := h.store(ctx, ev); err != nil {
+	insertCtx, endInsert := app.StartSpan(ctx, "billing.ledger.insert", app.AttrEventID(ev.ProviderEventID))
+	err = h.store(insertCtx, ev)
+	endInsert(err)
+	if err != nil {
 		if h.Log != nil {
 			h.Log.Error("webhook not stored; provider will redeliver", map[string]any{"provider": name, "provider_event_id": ev.ProviderEventID, "error": err.Error()})
 		}
 		c.Header("Retry-After", "30")
-		problem(c, http.StatusServiceUnavailable, domain.ErrDBUnavailable, "temporarily unavailable")
+		gincommon.AbortWithProblem(c, domain.NewError(domain.ErrDBUnavailable, "temporarily unavailable"))
 		return
 	}
 	// New or duplicate: both 200 (the ledger primary key makes a redelivery a no-op).
@@ -98,17 +110,13 @@ func (h *Handler) store(ctx context.Context, ev domain.PaymentEvent) error {
 		id := ev.Object.ID
 		objRef = &id
 	}
-	_, err := h.Ledger.Insert(ctx, domain.LedgerEntry{
+	inserted, err := h.Ledger.Insert(ctx, domain.LedgerEntry{
 		Provider: ev.Provider, ProviderEventID: ev.ProviderEventID, EventType: ev.EventType,
 		NormalisedKind: string(ev.Kind), TenantID: tenantID, ProviderObjectRef: objRef, Livemode: ev.Livemode,
 		ProviderCreatedAt: ev.ProviderCreatedAt, Payload: ev.Payload,
 	})
+	if err == nil && !inserted && h.OnDuplicate != nil {
+		h.OnDuplicate(ev.Provider, string(ev.Kind))
+	}
 	return err
-}
-
-// problem writes a minimal RFC 9457 body. The full gincommon problem
-// renderer is wired with the API routes (Phase 5).
-func problem(c *gin.Context, status int, code domain.ErrorCode, detail string) {
-	body, _ := json.Marshal(gin.H{"status": status, "title": http.StatusText(status), "detail": detail, "errorCode": string(code)})
-	c.Data(status, "application/problem+json", body)
 }

@@ -15,6 +15,9 @@ type Caller struct {
 	Principal string   // mTLS SPIFFE principal (internal route)
 	ClientIP  string
 	UserAgent string
+	// IdempotencyKey is the request's Idempotency-Key, stored on purchase
+	// and change rows (uq_*_key, §9.2).
+	IdempotencyKey string
 }
 
 // PlatformTenantID is the tenant id cross-tenant operator work is recorded

@@ -30,6 +30,8 @@ func validProd() map[string]string {
 		"CORE_BASE_URL":                "http://iam-org-membership.iam.svc.cluster.local:8080",
 		"RP_BASE_URL":                  "http://iam-realm-provisioner.iam.svc.cluster.local:8080",
 		"ENTITLEMENTS_BASE_URL":        "http://commercial-entitlements.commercial.svc.cluster.local:8080",
+		"PG_SYSTEM_PASSWORD":           "system-secret",
+		"PG_AUDIT_DRAINER_PASSWORD":    "drainer-secret",
 		"STRIPE_API_KEY":               "rk_live_abc",
 		"STRIPE_WEBHOOK_SECRETS":       "whsec_a,whsec_b",
 		"LOG_HASH_SALT":                "salt",
@@ -79,7 +81,7 @@ func TestDefaultsMatchLLD(t *testing.T) {
 func TestProdRequiresDependencies(t *testing.T) {
 	_, ps := LoadFrom(envMap(map[string]string{"APP_ENV": "prod"}))
 	for _, key := range []string{
-		"SNS_BILLING_EVENTS_TOPIC_ARN", "SQS_TENANT_BILLING_QUEUE_URL", "SQS_USAGE_BILLING_QUEUE_URL",
+		"SNS_BILLING_EVENTS_TOPIC_ARN", "SQS_TENANT_BILLING_QUEUE_URL",
 		"TENANT_APP_BASE_URL", "CORE_BASE_URL", "RP_BASE_URL", "ENTITLEMENTS_BASE_URL",
 		"STRIPE_API_KEY", "STRIPE_WEBHOOK_SECRETS", "LOG_HASH_SALT",
 	} {
@@ -170,5 +172,16 @@ func TestRedactedHidesSecrets(t *testing.T) {
 	}
 	if c.StripeAPIKey != "rk_live_abc" {
 		t.Error("Redacted must not modify the original")
+	}
+}
+
+// Outside dev the system and drainer pools must have their own role.
+func TestProdRequiresRolePasswords(t *testing.T) {
+	for _, key := range []string{"PG_SYSTEM_PASSWORD", "PG_AUDIT_DRAINER_PASSWORD"} {
+		env := validProd()
+		delete(env, key)
+		if _, problems := LoadFrom(envMap(env)); !hasProblem(problems, key) {
+			t.Errorf("%s missing in prod not refused", key)
+		}
 	}
 }

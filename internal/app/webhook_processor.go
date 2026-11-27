@@ -33,6 +33,7 @@ type WebhookProcessor struct {
 	ClaimFor    time.Duration // a claim older than this is reclaimable (60 s)
 	Now         func() time.Time
 	Log         port.Logger
+	Metrics     port.Metrics // commercial_billing_webhooks_total, _processing_seconds
 }
 
 // Outcomes recorded in the ledger.
@@ -75,7 +76,16 @@ func (p *WebhookProcessor) Run(ctx context.Context, interval time.Duration) {
 }
 
 func (p *WebhookProcessor) processOne(ctx context.Context, row domain.LedgerEntry) {
+	attrs := []port.Attr{AttrProvider(row.Provider), AttrEventID(row.ProviderEventID)}
+	if row.TenantID != nil {
+		attrs = append(attrs, AttrTenant(*row.TenantID))
+	}
+	ctx, end := StartSpan(ctx, "billing.webhook.process "+row.NormalisedKind, attrs...)
+	defer end(nil)
 	finish := func(status domain.LedgerStatus, outcome string, next *time.Time) {
+		if p.Metrics != nil {
+			p.Metrics.WebhookProcessed(row.Provider, row.NormalisedKind, string(status), p.now().Sub(row.ReceivedAt))
+		}
 		if err := p.Ledger.Finish(ctx, row.Provider, row.ProviderEventID, status, outcome, next); err != nil && p.Log != nil {
 			p.Log.Error("ledger outcome not recorded; the row will be reclaimed", map[string]any{
 				"provider": row.Provider, "provider_event_id": row.ProviderEventID, "error": err.Error()})
@@ -122,6 +132,7 @@ func (p *WebhookProcessor) processOne(ctx context.Context, row domain.LedgerEntr
 		return herr
 	})
 	var ignored *port.IgnoredEvent
+	var parked *port.ParkedEvent
 	switch {
 	case err == nil:
 		if outcome == "" {
@@ -130,6 +141,10 @@ func (p *WebhookProcessor) processOne(ctx context.Context, row domain.LedgerEntr
 		finish(domain.LedgerProcessed, outcome, nil)
 	case errors.As(err, &ignored):
 		finish(domain.LedgerIgnored, "ignored:"+ignored.Reason, nil)
+	case errors.As(err, &parked):
+		// An operator decides (BIL-OPS-6): failed, no retry; the handler
+		// raised its own alert.
+		finish(domain.LedgerFailed, "failed:"+parked.Reason, nil)
 	default:
 		p.retryOrPark(row, err, finish)
 	}

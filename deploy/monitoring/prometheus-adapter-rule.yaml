@@ -1,0 +1,42 @@
+# Prometheus Adapter rule: exposes commercial_billing_webhook_backlog on the
+# External Metrics API, which the HPA's second metric reads
+# (deploy/helm/templates/hpa.yaml, autoscaling.webhookBacklog; LLD §13.1).
+# Without this rule the External metric is missing and the HPA scales on CPU
+# only (it reports the metric as unavailable in `kubectl describe hpa`).
+#
+# The gauge is the payment_event_ledger backlog by status, set on every
+# server pod by the 30 s metrics exporter from the same query, so every pod
+# reports the same value: the rule takes max, not sum, which would multiply
+# the backlog by the replica count and over-scale.
+#
+# Deploy into the namespace where prometheus-adapter runs (typically
+# observability or kube-system) and merge `externalRules` into the existing
+# adapter configuration rather than replacing it.
+#
+# Reference: https://github.com/kubernetes-sigs/prometheus-adapter/blob/master/docs/externalmetrics.md
+#
+# Verify after applying:
+#   kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/billing/commercial_billing_webhook_backlog?labelSelector=status%3Dreceived,service%3Dcommercial-billing" | jq '.items'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-adapter-config
+  namespace: observability   # adjust to the prometheus-adapter namespace
+  labels:
+    app.kubernetes.io/name: prometheus-adapter
+    app.kubernetes.io/component: metrics
+data:
+  config.yaml: |
+    externalRules:
+      # HPA selector: status=received, service=commercial-billing. The
+      # adapter turns the selector into <<.LabelMatchers>>; the namespace
+      # override scopes the metric to the HPA's namespace (billing).
+      - seriesQuery: 'commercial_billing_webhook_backlog{namespace!="",service="commercial-billing"}'
+        resources:
+          overrides:
+            namespace:
+              resource: namespace
+        name:
+          matches: "^commercial_billing_webhook_backlog$"
+          as: "commercial_billing_webhook_backlog"
+        metricsQuery: 'max(<<.Series>>{<<.LabelMatchers>>}) by (status, service)'

@@ -1,0 +1,13 @@
+apiVersion: v2
+name: commercial-billing
+description: Commercial Billing Service — subscriptions, conversion, seats, token add-ons and the payment provider (LLD §13.1)
+type: application
+version: 0.7.0
+appVersion: "0.7.0"
+kubeVersion: ">=1.30.0-0"
+keywords:
+  - commercial
+  - billing
+  - subscriptions
+maintainers:
+  - name: BCBP Solutions — Commercial Team

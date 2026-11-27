@@ -1,0 +1,106 @@
+{{- if .Values.migrate.enabled }}
+{{- $fullname := include "commercial-billing.fullname" . }}
+{{- $hookPre := "pre-install,pre-upgrade" }}
+# §13.1, §19.1: schema migrations run once per release, before new replicas
+# (pre-install / pre-upgrade hook); replicas run with RUN_MIGRATIONS=false.
+#
+# Hooks run before the release's ordinary resources exist, so on the first
+# install neither the ServiceAccount commercial-billing nor the service
+# Secret is there yet. The Job therefore brings its own, as hooks with a
+# lower weight: a ServiceAccount (Postgres only: no AWS role, no mesh
+# identity) and a Secret holding only the schema-owner
+# MIGRATION_DATABASE_URL. Both are deleted after the hooks run, whether the
+# Job succeeds or fails, so the migration credential does not stay in the
+# namespace; a failed Job itself is kept for its logs (it references the
+# Secret, it does not hold the value). The failure case needs Helm >= 3.19,
+# which deletes the hooks that ran before a failed one by their
+# hook-succeeded policy (release.yml pins it); hook-failed covers a failure
+# of the ServiceAccount or ExternalSecret hook itself, and
+# before-hook-creation clears any leftover on the next attempt.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fullname }}-migrate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    helm.sh/hook: {{ $hookPre }}
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+automountServiceAccountToken: false
+{{- if .Values.externalSecret.enabled }}
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: {{ $fullname }}-migrate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    helm.sh/hook: {{ $hookPre }}
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+spec:
+  refreshInterval: {{ .Values.externalSecret.refreshInterval }}
+  secretStoreRef:
+    name: {{ .Values.externalSecret.secretStoreName }}
+    kind: {{ .Values.externalSecret.secretStoreKind }}
+  target:
+    name: {{ include "commercial-billing.migrateSecretName" . }}
+    creationPolicy: Owner   # the Secret goes with the ExternalSecret
+  data:
+    {{- range .Values.secretKeys.migrate }}
+    - secretKey: {{ . }}
+      remoteRef:
+        key: {{ $.Values.externalSecret.secretPath }}
+        property: {{ . }}
+    {{- end }}
+{{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-migrate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    helm.sh/hook: {{ $hookPre }}
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrate.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrate.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        # component=migrate: never selected by the server's Service, PDB,
+        # ServiceMonitor, NetworkPolicy or AuthorizationPolicy.
+        {{- include "commercial-billing.componentSelectorLabels" (dict "ctx" . "component" "migrate") | nindent 8 }}
+      annotations:
+        # Postgres only (direct RDS, not a mesh service), and a hook runs
+        # before the mesh policies of a first install exist: no sidecar.
+        sidecar.istio.io/inject: "false"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $fullname }}-migrate
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "commercial-billing.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "commercial-billing.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/migrate"]
+          env:
+            {{- include "commercial-billing.env" (dict "ctx" . "overrides" .Values.migrate.env "secretKeys" .Values.secretKeys.migrate "secretName" (include "commercial-billing.migrateSecretName" .)) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.jobResources | nindent 12 }}
+          securityContext:
+            {{- include "commercial-billing.containerSecurityContext" . | nindent 12 }}
+{{- end }}

@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-
 	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
 )
@@ -17,8 +15,8 @@ import (
 func TestMigrationsAppliedAndIdempotent(t *testing.T) {
 	ctx := context.Background()
 	v, dirty, err := pgadapter.DomainVersion(ctx, migrateDSN)
-	if err != nil || dirty || v != 5 {
-		t.Fatalf("domain version %d dirty=%v err=%v, want 5 clean", v, dirty, err)
+	if err != nil || dirty || v != 7 {
+		t.Fatalf("domain version %d dirty=%v err=%v, want 7 clean", v, dirty, err)
 	}
 	if err := pgadapter.MigrateSchema(ctx, migrateDSN, nil); err != nil {
 		t.Fatalf("re-run must be a no-op: %v", err)
@@ -36,7 +34,7 @@ func TestBIL_RLS_1_EveryTenantTableForcesRLS(t *testing.T) {
 	ctx := context.Background()
 	var missing []string
 	checked := 0
-	err := pgcommon.RunInTx(ctx, superPool, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+	err := pgcommon.RunInTx(ctx, superPool, pgcommon.TxOptions{}, func(ctx context.Context, tx pgcommon.Tx) error {
 		rows, err := tx.Query(ctx, `
 			SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity,
 			       EXISTS (SELECT 1 FROM pg_policies p WHERE p.tablename = c.relname AND p.policyname = 'tenant_isolation')
@@ -113,7 +111,7 @@ func TestRLSWithCheck(t *testing.T) {
 		t.Fatalf("moving a row to another tenant must fail, got %v", err)
 	}
 	var affected int64
-	err = pgcommon.RunInTx(asTenant(ctx, b.Tenant), appPool, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+	err = pgcommon.RunInTx(asTenant(ctx, b.Tenant), appPool, pgcommon.TxOptions{}, func(ctx context.Context, tx pgcommon.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE billing_accounts SET company_name = 'hijack' WHERE tenant_id = $1`, a.Tenant)
 		affected = tag.RowsAffected()
 		return err
@@ -171,5 +169,62 @@ func TestViewRespectsRLS(t *testing.T) {
 	}
 	if n, _ := count(asTenant(ctx, b.Tenant), appPool, `SELECT count(*) FROM v_subscription_summary WHERE tenant_id = $1`, a.Tenant); n != 0 {
 		t.Errorf("security_invoker view leaked %d rows to tenant B", n)
+	}
+}
+
+// 000007: the SECURITY DEFINER RLS helpers are not executable by PUBLIC;
+// only the NOBYPASSRLS roles whose queries evaluate tenant_isolation may call
+// rls_check_tenant, and app_tenant_id / log_rls_violation are reachable only
+// through it. Every role still queries the tenant tables it is granted.
+func TestRLSHelperFunctionGrants(t *testing.T) {
+	ctx := context.Background()
+	fns := map[string]string{
+		"rls_check_tenant":  "rls_check_tenant(uuid, text)",
+		"app_tenant_id":     "app_tenant_id()",
+		"log_rls_violation": "log_rls_violation(text, uuid, text)",
+	}
+	want := map[string]map[string]bool{
+		"billing_app":           {"rls_check_tenant": true},
+		"admin_readonly":        {"rls_check_tenant": true},
+		"billing_audit_drainer": {"rls_check_tenant": true},
+		"billing_system":        {},
+	}
+	for role, allowed := range want {
+		for name, sig := range fns {
+			n, err := count(ctx, superPool, `SELECT count(*) FROM pg_proc WHERE oid = $1::regprocedure AND has_function_privilege($2, oid, 'EXECUTE')`, sig, role)
+			if err != nil {
+				t.Fatalf("%s on %s: %v", role, sig, err)
+			}
+			if got := n == 1; got != allowed[name] {
+				t.Errorf("%s EXECUTE on %s = %v, want %v", role, sig, got, allowed[name])
+			}
+		}
+	}
+	for name, sig := range fns {
+		n, err := count(ctx, superPool, `SELECT count(*) FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+			WHERE p.oid = $1::regprocedure AND a.grantee = 0 AND a.privilege_type = 'EXECUTE'`, sig)
+		if err != nil || n != 0 {
+			t.Errorf("PUBLIC has EXECUTE on %s (%d, %v)", name, n, err)
+		}
+	}
+
+	// The policies still evaluate for every role that queries tenant tables.
+	s := seedTenant(t)
+	if n, err := count(asTenant(ctx, s.Tenant), appPool, `SELECT count(*) FROM subscriptions WHERE tenant_id = $1`, s.Tenant); err != nil || n == 0 {
+		t.Errorf("billing_app reads its tenant's subscriptions: %d %v", n, err)
+	}
+	if _, err := count(ctx, readPool, `SELECT count(*) FROM subscriptions`); err != nil {
+		t.Errorf("admin_readonly reads subscriptions: %v", err)
+	}
+	if n, err := count(ctx, systemPool, `SELECT count(*) FROM subscriptions WHERE tenant_id = $1`, s.Tenant); err != nil || n == 0 {
+		t.Errorf("billing_system (BYPASSRLS) reads subscriptions: %d %v", n, err)
+	}
+	drainer, err := pgcommon.NewPool(ctx, pgcommon.Config{DSN: withUser(migrateDSN, "billing_audit_drainer", "devpassword"), PoolName: "drainer", MaxConns: 2, PGBouncerMode: true})
+	if err != nil {
+		t.Fatalf("drainer pool: %v", err)
+	}
+	defer drainer.Close()
+	if _, err := count(ctx, drainer, `SELECT count(*) FROM pending_audit_entries`); err != nil {
+		t.Errorf("billing_audit_drainer reads pending_audit_entries: %v", err)
 	}
 }

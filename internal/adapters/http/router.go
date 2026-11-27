@@ -10,7 +10,11 @@ import (
 	"time"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/logger"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/problem"
 	"github.com/gin-gonic/gin"
+
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/pkg/requestctx"
 )
 
 // defaultRequestTimeout is the gincommon request deadline when the config
@@ -20,6 +24,15 @@ const defaultRequestTimeout = 30 * time.Second
 // maxBodyBytes caps JSON request bodies. The webhook route sets its own limit
 // from WEBHOOK_MAX_BODY_BYTES (§8.15).
 const maxBodyBytes = 1 << 20
+
+// forwardRequestID puts gincommon's request ID on the request context, so
+// outbound calls made for this request (httpx.Call) send it as X-Request-ID.
+func forwardRequestID(c *gin.Context) {
+	if id := gincommon.RequestIDFromContext(c); id != "" {
+		c.Request = c.Request.WithContext(requestctx.WithRequestID(c.Request.Context(), id))
+	}
+	c.Next()
+}
 
 // Pinger is any dependency a probe checks.
 type Pinger interface {
@@ -73,17 +86,24 @@ func NewRouter(cfg RouterConfig) *Router {
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBodyBytes)
 		c.Next()
 	})
-	if cfg.GinConfig.Logger != nil {
-		ginCfg := cfg.GinConfig
-		if ginCfg.RequestTimeout <= 0 {
-			ginCfg.RequestTimeout = defaultRequestTimeout
-		}
-		// Panic recovery → request ID → tracing → correlation → metrics →
-		// logging → request deadline (innermost), §3.3.
-		r.Use(gincommon.ObservabilityMiddlewares(ginCfg)...)
-	} else {
-		r.Use(gin.Recovery())
+	ginCfg := cfg.GinConfig
+	if ginCfg.RequestTimeout <= 0 {
+		ginCfg.RequestTimeout = defaultRequestTimeout
 	}
+	if ginCfg.Logger == nil {
+		ginCfg.Logger, _ = logger.Default()
+	}
+	// platform-gincommon is the only error boundary (RFC 9457): panic
+	// recovery → request ID → tracing → correlation → metrics → logging →
+	// request deadline (innermost), §3.3. Every error response, a recovered
+	// panic included, is its application/problem+json.
+	r.Use(gincommon.ObservabilityMiddlewares(ginCfg)...)
+	r.Use(forwardRequestID)
+	// Unmatched paths and methods answer gincommon problems, not gin's text.
+	r.NoRoute(func(c *gin.Context) { gincommon.AbortWithProblem(c, problem.NewNotFoundError("no such route")) })
+	r.NoMethod(func(c *gin.Context) {
+		gincommon.AbortWithProblem(c, problem.NewError(problem.TypeMethodNotAllowed, "method not allowed on this route"))
+	})
 
 	h := &probes{readiness: cfg.Readiness, liveness: cfg.Liveness}
 	r.GET("/healthz", h.healthz)
@@ -113,7 +133,7 @@ func (p *probes) healthz(c *gin.Context) {
 			continue
 		}
 		if err := chk.Pinger.Health(ctx); err != nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy", "failed": chk.Name})
+			gincommon.AbortWithProblem(c, problem.NewServiceUnavailableError("a background loop is not alive").WithExtension("failed_check", chk.Name))
 			return
 		}
 	}
@@ -138,9 +158,9 @@ func (p *probes) readyz(c *gin.Context) {
 		}
 		checks[chk.Name] = "ok"
 	}
-	status, overall := http.StatusOK, "ready"
 	if !ready {
-		status, overall = http.StatusServiceUnavailable, "not ready"
+		gincommon.AbortWithProblem(c, problem.NewServiceUnavailableError("a required dependency is not ready").WithExtension("checks", checks))
+		return
 	}
-	c.JSON(status, gin.H{"status": overall, "checks": checks})
+	c.JSON(http.StatusOK, gin.H{"status": "ready", "checks": checks})
 }

@@ -24,7 +24,7 @@ import (
 const Name = "stripe"
 
 // adapterSemver is this adapter's own version; bump it with any mapping change.
-const adapterSemver = "1.0.0"
+const adapterSemver = "1.1.0"
 
 // AdapterVersion is "<adapter semver>+stripeapi.<pinned Stripe API version>" (§3.5).
 var AdapterVersion = adapterSemver + "+stripeapi." + stripego.APIVersion
@@ -44,6 +44,10 @@ type Config struct {
 	// HTTPClient is the otelhttp client from adapters/httpx; nil uses a plain client.
 	HTTPClient *http.Client
 	Now        func() time.Time
+	// TestClock attaches every new customer to a Stripe Test Clock, so the
+	// certification suite can advance time (§14.7, cmd/certify). Test mode
+	// only: New refuses it with Livemode. Never set by the server.
+	TestClock string
 }
 
 // Adapter implements port.PaymentProvider for Stripe.
@@ -63,6 +67,9 @@ func New(cfg Config) (*Adapter, error) {
 	}
 	if len(cfg.WebhookSecrets) == 0 {
 		return nil, errors.New("stripe: at least one webhook secret is required")
+	}
+	if cfg.TestClock != "" && cfg.Livemode {
+		return nil, errors.New("stripe: a test clock is test mode only")
 	}
 	if cfg.Tolerance <= 0 {
 		cfg.Tolerance = 300 * time.Second
@@ -111,7 +118,10 @@ func (a *Adapter) Capabilities() port.ProviderCapabilities {
 // mapErr maps a Stripe error to the port's adapter errors (§18.8):
 // card_error → ErrDeclined (decline code); authentication_required /
 // requires_action → ErrActionRequired; rate limit, connection and 5xx →
-// ErrProviderUnavailable; idempotency_error → ErrIdempotencyMismatch;
+// ErrProviderUnavailable; 409 Conflict / idempotency_key_in_use (a request
+// with the same key still in flight, retryable per stripe-go) →
+// ErrProviderUnavailable, so the caller retries with the same key;
+// idempotency_error (same key, different parameters) → ErrIdempotencyMismatch;
 // resource_missing → ErrNotFound; other invalid_request_error → an internal
 // error carrying only the request log URL, never the request body.
 func mapErr(err error) error {
@@ -139,6 +149,9 @@ func mapErr(err error) error {
 			code = string(se.Code)
 		}
 		return port.ErrDeclined{Code: code}
+	case se.HTTPStatusCode == http.StatusConflict || se.Code == stripego.ErrorCodeIdempotencyKeyInUse:
+		// Same key still being processed: transient, never "parameters differ".
+		return fmt.Errorf("%w: stripe %d %s", port.ErrProviderUnavailable, se.HTTPStatusCode, se.Code)
 	case se.Type == stripego.ErrorTypeIdempotency:
 		return port.ErrIdempotencyMismatch
 	case se.HTTPStatusCode == http.StatusTooManyRequests || se.HTTPStatusCode >= 500 || se.HTTPStatusCode == 0:

@@ -1,0 +1,22 @@
+# Dev (Stripe test mode, §13.5). Secrets come from OpenBao path commercial/billing.
+env:
+  APP_ENV: dev
+  LOG_LEVEL: debug
+  TENANT_APP_BASE_URL: https://app.dev.bcbpsolutions.com
+  SNS_BILLING_EVENTS_TOPIC_ARN: arn:aws:sns:ap-south-1:000000000000:billing-events
+  SQS_TENANT_BILLING_QUEUE_URL: https://sqs.ap-south-1.amazonaws.com/000000000000/tenant-billing-q
+  SQS_USAGE_BILLING_QUEUE_URL: https://sqs.ap-south-1.amazonaws.com/000000000000/usage-billing-q
+  OTEL_TRACES_SAMPLER_ARG: "1"
+replicaCount: 1
+autoscaling:
+  enabled: false
+podDisruptionBudget:
+  minAvailable: 0
+topologySpread:
+  enabled: false
+externalSecret:
+  secretPath: commercial/dev/billing
+gateway:
+  hostnames: [api.dev.bcbpsolutions.com]
+  tenant:
+    corsOrigins: [https://app.dev.bcbpsolutions.com]

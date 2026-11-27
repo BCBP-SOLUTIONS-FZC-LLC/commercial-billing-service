@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
 )
 
@@ -43,7 +41,7 @@ func seedTenant(t *testing.T) seeded {
 	ctx := context.Background()
 	s := seeded{Tenant: newID(), Sub: newID(), Invoice: newID(), AddonPurchase: newID()}
 	actor := "00000000-0000-0000-0000-0000000000c1"
-	err := pgcommon.RunInTx(ctx, superPool, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+	err := pgcommon.RunInTx(ctx, superPool, pgcommon.TxOptions{}, func(ctx context.Context, tx pgcommon.Tx) error {
 		var priceID string
 		if err := tx.QueryRow(ctx, `SELECT price_id FROM plan_prices WHERE provider='manual' AND plan='pro' AND interval='month'`).Scan(&priceID); err != nil {
 			return fmt.Errorf("seed price: %w", err)

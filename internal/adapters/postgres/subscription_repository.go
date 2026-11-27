@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
@@ -27,7 +25,7 @@ const subscriptionColumns = `billing_subscription_id, tenant_id, provider, provi
   payment_confirmed_at, converted_at, past_due_since, cancelled_at, cancel_reason, ended_at, record_version,
   created_at, updated_at`
 
-func scanSubscription(row pgx.Row) (domain.Subscription, error) {
+func scanSubscription(row pgcommon.Row) (domain.Subscription, error) {
 	var s domain.Subscription
 	err := row.Scan(&s.BillingSubscriptionID, &s.TenantID, &s.Provider, &s.ProviderSubscriptionID, &s.Origin, &s.Plan,
 		&s.Interval, &s.Status, &s.AutoRenew, &s.CurrentPeriodStart, &s.CurrentPeriodEnd, &s.CollectionPaused,
@@ -58,7 +56,7 @@ func (r *SubscriptionRepository) Create(ctx context.Context, s domain.Subscripti
 			s.TenantID, s.BillingSubscriptionID, item.PriceID, item.Quantity, item.ProviderItemID)
 		return err
 	})
-	if sqlState(err) == "23505" {
+	if pgcommon.IsUniqueViolation(err) {
 		return domain.NewError(domain.ErrSubscriptionAlreadyExists, "tenant already has a live subscription")
 	}
 	return err
@@ -72,7 +70,7 @@ func (r *SubscriptionRepository) Get(ctx context.Context, id string) (domain.Sub
 		s, err = scanSubscription(q.QueryRow(ctx, `SELECT `+subscriptionColumns+` FROM subscriptions WHERE billing_subscription_id = $1::uuid`, id))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return s, subscriptionNotFound("subscription", id)
 	}
 	return s, err
@@ -86,7 +84,7 @@ func (r *SubscriptionRepository) Live(ctx context.Context, tenantID string) (dom
 		s, err = scanSubscription(q.QueryRow(ctx, `SELECT `+subscriptionColumns+` FROM subscriptions WHERE tenant_id = $1::uuid AND status <> 'ended'`, tenantID))
 		return err
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return s, false, nil
 	}
 	return s, err == nil, err
@@ -103,7 +101,7 @@ func (r *SubscriptionRepository) Item(ctx context.Context, id string) (domain.Su
 			Scan(&it.ItemID, &it.TenantID, &it.BillingSubscriptionID, &it.Kind, &it.PriceID, &it.Quantity, &it.ProviderItemID,
 				&it.ScheduledPriceID, &it.ScheduledPriceAt, &it.RecordVersion, &it.UpdatedAt)
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgcommon.ErrNoRows) {
 		return it, subscriptionNotFound("seat item of subscription", id)
 	}
 	return it, err
@@ -118,13 +116,13 @@ func (r *SubscriptionRepository) Transition(ctx context.Context, id string, expe
 	var out domain.Subscription
 	err := inTx(ctx, r.pool, func(q querier) error {
 		cur, err := scanSubscription(q.QueryRow(ctx, `SELECT `+subscriptionColumns+` FROM subscriptions WHERE billing_subscription_id = $1::uuid FOR UPDATE`, id))
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, pgcommon.ErrNoRows) {
 			return subscriptionNotFound("subscription", id)
 		}
 		if err != nil {
 			return err
 		}
-		if cur.RecordVersion != expectedVersion {
+		if expectedVersion != 0 && cur.RecordVersion != expectedVersion { // 0: background writer under the tenant lock (BIL-CONC-3)
 			return domain.NewError(domain.ErrOptimisticLockConflict, "subscription changed since it was read").With("record_version", cur.RecordVersion)
 		}
 		if !domain.CanTransition(cur.Status, to) {
@@ -135,18 +133,94 @@ func (r *SubscriptionRepository) Transition(ctx context.Context, id string, expe
 		if mutate != nil {
 			mutate(&next)
 		}
-		out, err = scanSubscription(q.QueryRow(ctx, `
-			UPDATE subscriptions SET status = $2, auto_renew = $3, current_period_start = $4, current_period_end = $5,
-			  collection_paused = $6, collection_paused_by = $7, payment_confirmed_at = $8, converted_at = $9,
-			  past_due_since = $10, cancelled_at = $11, cancel_reason = $12, ended_at = $13, provider_subscription_id = $14
-			WHERE billing_subscription_id = $1::uuid
-			RETURNING `+subscriptionColumns,
-			id, next.Status, next.AutoRenew, next.CurrentPeriodStart, next.CurrentPeriodEnd, next.CollectionPaused,
-			next.CollectionPausedBy, next.PaymentConfirmedAt, next.ConvertedAt, next.PastDueSince, next.CancelledAt,
-			next.CancelReason, next.EndedAt, next.ProviderSubscriptionID))
+		out, err = writeSubscription(ctx, q, next)
 		return err
 	})
 	return out, err
+}
+
+func writeSubscription(ctx context.Context, q querier, next domain.Subscription) (domain.Subscription, error) {
+	return scanSubscription(q.QueryRow(ctx, `
+		UPDATE subscriptions SET status = $2, auto_renew = $3, current_period_start = $4, current_period_end = $5,
+		  collection_paused = $6, collection_paused_by = $7, payment_confirmed_at = $8, converted_at = $9,
+		  past_due_since = $10, cancelled_at = $11, cancel_reason = $12, ended_at = $13, provider_subscription_id = $14,
+		  plan = $15, interval = $16
+		WHERE billing_subscription_id = $1::uuid
+		RETURNING `+subscriptionColumns,
+		next.BillingSubscriptionID, next.Status, next.AutoRenew, next.CurrentPeriodStart, next.CurrentPeriodEnd, next.CollectionPaused,
+		next.CollectionPausedBy, next.PaymentConfirmedAt, next.ConvertedAt, next.PastDueSince, next.CancelledAt,
+		next.CancelReason, next.EndedAt, next.ProviderSubscriptionID, next.Plan, next.Interval))
+}
+
+// Update changes fields other than status (period, provider id, pause,
+// plan, converted_at …) under the tenant lock; expectedVersion 0 skips the
+// version check (background writers, BIL-CONC-3).
+func (r *SubscriptionRepository) Update(ctx context.Context, id string, expectedVersion int64, mutate func(*domain.Subscription)) (domain.Subscription, error) {
+	var out domain.Subscription
+	err := inTx(ctx, r.pool, func(q querier) error {
+		cur, err := scanSubscription(q.QueryRow(ctx, `SELECT `+subscriptionColumns+` FROM subscriptions WHERE billing_subscription_id = $1::uuid FOR UPDATE`, id))
+		if errors.Is(err, pgcommon.ErrNoRows) {
+			return subscriptionNotFound("subscription", id)
+		}
+		if err != nil {
+			return err
+		}
+		if expectedVersion != 0 && cur.RecordVersion != expectedVersion {
+			return domain.NewError(domain.ErrOptimisticLockConflict, "subscription changed since it was read").With("record_version", cur.RecordVersion)
+		}
+		next := cur
+		mutate(&next)
+		next.Status = cur.Status
+		out, err = writeSubscription(ctx, q, next)
+		return err
+	})
+	return out, err
+}
+
+// ByProvider returns the subscription with this provider subscription id.
+func (r *SubscriptionRepository) ByProvider(ctx context.Context, provider, providerSubscriptionID string) (domain.Subscription, bool, error) {
+	var s domain.Subscription
+	err := inTx(ctx, r.pool, func(q querier) error {
+		var err error
+		s, err = scanSubscription(q.QueryRow(ctx, `SELECT `+subscriptionColumns+` FROM subscriptions WHERE provider = $1 AND provider_subscription_id = $2`,
+			provider, providerSubscriptionID))
+		return err
+	})
+	if errors.Is(err, pgcommon.ErrNoRows) {
+		return s, false, nil
+	}
+	return s, err == nil, err
+}
+
+// Latest returns the tenant's live subscription, else its most recent ended
+// one (B-P1 shows an ended subscription rather than 404).
+func (r *SubscriptionRepository) Latest(ctx context.Context, tenantID string) (domain.Subscription, bool, error) {
+	var s domain.Subscription
+	err := inTx(ctx, r.pool, func(q querier) error {
+		var err error
+		s, err = scanSubscription(q.QueryRow(ctx, `SELECT `+subscriptionColumns+` FROM subscriptions WHERE tenant_id = $1::uuid
+			ORDER BY (status <> 'ended') DESC, created_at DESC LIMIT 1`, tenantID))
+		return err
+	})
+	if errors.Is(err, pgcommon.ErrNoRows) {
+		return s, false, nil
+	}
+	return s, err == nil, err
+}
+
+// SetItem updates the seat item's quantity, price and provider item id.
+func (r *SubscriptionRepository) SetItem(ctx context.Context, it domain.SubscriptionItem) error {
+	return inTx(ctx, r.pool, func(q querier) error {
+		tag, err := q.Exec(ctx, `
+			UPDATE subscription_items SET quantity = $2, price_id = $3::uuid, provider_item_id = $4,
+			  scheduled_price_id = $5::uuid, scheduled_price_at = $6
+			WHERE billing_subscription_id = $1::uuid AND kind = 'seats'`,
+			it.BillingSubscriptionID, it.Quantity, it.PriceID, it.ProviderItemID, it.ScheduledPriceID, it.ScheduledPriceAt)
+		if err == nil && tag.RowsAffected() != 1 {
+			return subscriptionNotFound("seat item of subscription", it.BillingSubscriptionID)
+		}
+		return err
+	})
 }
 
 // AppendHistory writes one §4.2.6 row in the caller's transaction.
@@ -164,9 +238,10 @@ func (r *SubscriptionRepository) AppendHistory(ctx context.Context, h domain.Sta
 
 // History returns the newest entries first.
 func (r *SubscriptionRepository) History(ctx context.Context, id string, limit int) ([]domain.StatusHistoryEntry, error) {
-	if limit <= 0 || limit > 100 {
+	if limit <= 0 {
 		limit = 20
 	}
+	limit = min(limit, 500)
 	var out []domain.StatusHistoryEntry
 	err := inTx(ctx, r.pool, func(q querier) error {
 		rows, err := q.Query(ctx, `

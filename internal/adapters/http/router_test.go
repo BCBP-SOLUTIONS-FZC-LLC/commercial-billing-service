@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/pkg/requestctx"
 )
 
 func init() { gin.SetMode(gin.TestMode) }
@@ -31,7 +33,7 @@ func get(t *testing.T, r *Router, path string) (int, map[string]any) {
 }
 
 func TestReadyzAllHealthy(t *testing.T) {
-	r := NewRouter(RouterConfig{Readiness: []Check{{"database", ok()}, {"sys_database", ok()}}})
+	r := NewRouter(RouterConfig{GinConfig: testGin(), Readiness: []Check{{"database", ok()}, {"sys_database", ok()}}})
 	code, body := get(t, r, "/readyz")
 	if code != http.StatusOK || body["status"] != "ready" {
 		t.Fatalf("got %d %v", code, body)
@@ -39,7 +41,7 @@ func TestReadyzAllHealthy(t *testing.T) {
 }
 
 func TestReadyzDependencyDown(t *testing.T) {
-	r := NewRouter(RouterConfig{Readiness: []Check{{"database", ok()}, {"sys_database", down()}}})
+	r := NewRouter(RouterConfig{GinConfig: testGin(), Readiness: []Check{{"database", ok()}, {"sys_database", down()}}})
 	w := httptest.NewRecorder()
 	r.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if w.Code != http.StatusServiceUnavailable {
@@ -54,21 +56,37 @@ func TestReadyzDependencyDown(t *testing.T) {
 }
 
 func TestHealthzIgnoresDependencies(t *testing.T) {
-	r := NewRouter(RouterConfig{Readiness: []Check{{"database", down()}}})
+	r := NewRouter(RouterConfig{GinConfig: testGin(), Readiness: []Check{{"database", down()}}})
 	if code, _ := get(t, r, "/healthz"); code != http.StatusOK {
 		t.Fatalf("liveness must not check readiness dependencies; got %d", code)
 	}
 }
 
 func TestHealthzFailsOnDeadLoop(t *testing.T) {
-	r := NewRouter(RouterConfig{Liveness: []Check{{"audit_runner", down()}}})
+	r := NewRouter(RouterConfig{GinConfig: testGin(), Liveness: []Check{{"audit_runner", down()}}})
 	if code, _ := get(t, r, "/healthz"); code != http.StatusServiceUnavailable {
 		t.Fatalf("want 503, got %d", code)
 	}
 }
 
+// gincommon's request ID reaches the request context, where httpx.Call
+// forwards it as X-Request-ID.
+func TestRequestIDOnRequestContext(t *testing.T) {
+	var seen string
+	r := NewRouter(RouterConfig{GinConfig: testGin(), Liveness: []Check{{"probe", PingerFunc(func(ctx context.Context) error {
+		seen = requestctx.RequestID(ctx)
+		return nil
+	})}}})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.Header.Set("X-Request-ID", "req-7")
+	r.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	if seen != "req-7" {
+		t.Fatalf("request ID on the context %q", seen)
+	}
+}
+
 func TestMethodNotAllowed(t *testing.T) {
-	r := NewRouter(RouterConfig{})
+	r := NewRouter(RouterConfig{GinConfig: testGin()})
 	w := httptest.NewRecorder()
 	r.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/healthz", nil))
 	if w.Code != http.StatusMethodNotAllowed {

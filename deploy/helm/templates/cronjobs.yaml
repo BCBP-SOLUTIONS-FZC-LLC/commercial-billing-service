@@ -1,0 +1,54 @@
+{{- /* §13.2: one CronJob per job; the jobs binary runs --job=<name> once. */ -}}
+{{- range $name, $schedule := .Values.cronjobs.jobs }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "commercial-billing.fullname" $ }}-{{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: cronjob
+    commercial.bcbp/job: {{ $name }}
+spec:
+  schedule: {{ $schedule | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: {{ $.Values.cronjobs.concurrencyPolicy }}
+  startingDeadlineSeconds: {{ $.Values.cronjobs.startingDeadlineSeconds }}
+  successfulJobsHistoryLimit: {{ $.Values.cronjobs.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ $.Values.cronjobs.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ $.Values.cronjobs.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            # component=cronjob: never selected by the server's Service, PDB,
+            # ServiceMonitor, NetworkPolicy or AuthorizationPolicy.
+            {{- include "commercial-billing.componentSelectorLabels" (dict "ctx" $ "component" "cronjob") | nindent 12 }}
+            commercial.bcbp/job: {{ $name }}
+          annotations:
+            # seat-renewal, seat-projection-check and downgrade-apply call Core
+            # (I-11, I-18) and saga-sweeper RP (RP-3), which admit only the
+            # mTLS identity cluster.local/ns/billing/sa/commercial-billing
+            # (CD-19). The native sidecar exits with the job container.
+            {{- include "commercial-billing.istioAnnotations" $ | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "commercial-billing.serviceAccountName" $ }}
+          automountServiceAccountToken: false   # IRSA and Istio use their own projected tokens
+          securityContext:
+            {{- include "commercial-billing.podSecurityContext" $ | nindent 12 }}
+          containers:
+            - name: job
+              image: {{ include "commercial-billing.image" $ }}
+              imagePullPolicy: {{ $.Values.image.pullPolicy }}
+              command: ["/jobs", "--job={{ $name }}"]
+              env:
+                {{- include "commercial-billing.env" (dict "ctx" $ "overrides" $.Values.cronjobs.env "secretKeys" $.Values.secretKeys.jobs "secretName" (include "commercial-billing.secretName" $)) | nindent 16 }}
+              resources:
+                {{- toYaml $.Values.jobResources | nindent 16 }}
+              securityContext:
+                {{- include "commercial-billing.containerSecurityContext" $ | nindent 16 }}
+{{- end }}

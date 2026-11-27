@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
-# BIL-OPS-2 (LLD §3.2): every outbox_events mutation goes through
-# platform-events. No hand-written SQL may touch outbox_events outside
-# migrations.
+# BIL-OPS-2 (LLD §3.2): the outbox, its dead letters and the inbox's
+# processed-message ledger belong to platform-events (outbox.EnqueueOrdered,
+# outbox.Runner, inbox.Store). No hand-written SQL may read or write
+# outbox_events, outbox_dead_letters or processed_events outside migrations
+# and tests (which assert on them).
 set -euo pipefail
-bad=$(grep -rlniE --include='*.go' '(insert[[:space:]]+into|update|delete[[:space:]]+from)[[:space:]]+outbox_events' . \
-  | grep -v '/migrations/' | grep -v '^\./test/' || true)
+tables='(outbox_events|outbox_dead_letters|processed_events)'
+# Any statement form, optionally schema-qualified or quoted:
+# INSERT INTO / UPDATE / DELETE FROM / FROM / JOIN / TRUNCATE [TABLE] /
+# COPY / ALTER TABLE / LOCK [TABLE] / MERGE INTO / REFERENCES.
+verbs='(insert[[:space:]]+into|update|delete[[:space:]]+from|from|join|truncate([[:space:]]+table)?|copy|alter[[:space:]]+table|lock([[:space:]]+table)?|merge[[:space:]]+into|references)'
+bad=$(grep -rniE --include='*.go' \
+  "${verbs}[[:space:]]+(only[[:space:]]+)?(\"?[a-z_]+\"?\.)?\"?${tables}\b" . \
+  | grep -v '/migrations/' | grep -v '^\./test/' | grep -v '_test\.go:' || true)
 if [ -n "$bad" ]; then
-  echo "BIL-OPS-2 violation: direct outbox_events mutation outside platform-events:"
+  echo "BIL-OPS-2 violation: direct SQL on a platform-events table:"
   echo "$bad"
   exit 1
 fi
-echo "BIL-OPS-2: no direct outbox_events mutations"
+echo "BIL-OPS-2: outbox_events, outbox_dead_letters and processed_events only through platform-events"

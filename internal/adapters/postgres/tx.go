@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"time"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
@@ -20,16 +18,16 @@ type txKey struct{}
 // txCtx is the transaction in ctx plus per-transaction state: the last
 // event time stamped in it (BIL-EVT-1).
 type txCtx struct {
-	tx            pgx.Tx
+	tx            pgcommon.Tx
 	lastEventTime time.Time
 }
 
 // withTx stores the transaction in ctx for repositories.
-func withTx(ctx context.Context, tx pgx.Tx) context.Context {
+func withTx(ctx context.Context, tx pgcommon.Tx) context.Context {
 	return context.WithValue(ctx, txKey{}, &txCtx{tx: tx})
 }
 
-func txFrom(ctx context.Context) (pgx.Tx, bool) {
+func txFrom(ctx context.Context) (pgcommon.Tx, bool) {
 	t, ok := ctx.Value(txKey{}).(*txCtx)
 	if !ok {
 		return nil, false
@@ -66,17 +64,14 @@ func (r *TxRunner) RunInTenantTx(ctx context.Context, tenantID string, fn func(c
 		return fn(ctx)
 	}
 	ctx = pgcommon.WithGUCSet(ctx, pgdomain.GUCSet{TenantID: tenantID})
-	return mapDBError(pgcommon.RunInTxWithRetryOpts(ctx, r.pool, pgx.TxOptions{}, writeRetry, func(ctx context.Context, tx pgx.Tx) error {
+	return mapDBError(pgcommon.RunInTxWithRetryOpts(ctx, r.pool, pgcommon.TxOptions{}, writeRetry, func(ctx context.Context, tx pgcommon.Tx) error {
 		return fn(withTx(ctx, tx))
 	}))
 }
 
-// querier is what repositories run statements on.
-type querier interface {
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
+// querier is what repositories run statements on: the transaction
+// platform-pgcommon opened (RunInTx / RunInTxWithRetryOpts).
+type querier = pgcommon.Tx
 
 // inTx runs fn on the transaction in ctx, or in a new transaction on pool.
 // Tenant repositories are always called inside RunInTenantTx; the fallback
@@ -85,7 +80,7 @@ func inTx(ctx context.Context, pool *pgcommon.Pool, fn func(q querier) error) er
 	if tx, ok := txFrom(ctx); ok {
 		return fn(tx)
 	}
-	return mapDBError(pgcommon.RunInTx(ctx, pool, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+	return mapDBError(pgcommon.RunInTx(ctx, pool, pgcommon.TxOptions{}, func(ctx context.Context, tx pgcommon.Tx) error {
 		return fn(tx)
 	}))
 }
@@ -113,24 +108,43 @@ func mapDBError(err error) error {
 	return err
 }
 
+// isDBUnavailable: Postgres reported the connection or server unusable,
+// the pool is closed, or the call failed in transport before Postgres
+// answered (dial refused or timed out, connection reset: a net.Error that
+// pgx wraps, never a SQLSTATE).
 func isDBUnavailable(err error) bool {
-	var connectErr *pgconn.ConnectError
+	var netErr net.Error
 	return pgcommon.IsConnectionException(err) || pgcommon.IsInsufficientResources(err) ||
 		pgcommon.IsOperatorIntervention(err) || pgcommon.IsSystemError(err) || pgcommon.IsPoolClosed(err) ||
-		errors.As(err, &connectErr)
+		(!pgcommon.IsPgError(err) && errors.As(err, &netErr))
 }
 
 // sqlState returns the SQLSTATE of err, or "".
-func sqlState(err error) string {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return pgErr.Code
-	}
-	return ""
-}
-
 // subscriptionNotFound is the 404 for a missing account, subscription or item:
 // a tenant without them has no subscription (§17 SUBSCRIPTION_NOT_FOUND).
 func subscriptionNotFound(what, id string) error {
 	return domain.NewError(domain.ErrSubscriptionNotFound, fmt.Sprintf("%s %s not found", what, id))
+}
+
+func isNoRows(err error) bool { return errors.Is(err, pgcommon.ErrNoRows) }
+
+// SystemTxRunner is port.SystemTxRunner on sysPool (billing_system,
+// BYPASSRLS): global operator writes and their AL-5 entry in one
+// transaction (BIL-AUD-1).
+type SystemTxRunner struct{ pool *pgcommon.Pool }
+
+var _ port.SystemTxRunner = (*SystemTxRunner)(nil)
+
+// NewSystemTxRunner wraps the system pool.
+func NewSystemTxRunner(sysPool *pgcommon.Pool) *SystemTxRunner { return &SystemTxRunner{pool: sysPool} }
+
+// RunInSystemTx runs fn in one system-pool transaction; repositories and
+// the audit writer called with the returned ctx join it.
+func (r *SystemTxRunner) RunInSystemTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if _, ok := txFrom(ctx); ok {
+		return fn(ctx)
+	}
+	return mapDBError(pgcommon.RunInTxWithRetryOpts(ctx, r.pool, pgcommon.TxOptions{}, writeRetry, func(ctx context.Context, tx pgcommon.Tx) error {
+		return fn(withTx(ctx, tx))
+	}))
 }

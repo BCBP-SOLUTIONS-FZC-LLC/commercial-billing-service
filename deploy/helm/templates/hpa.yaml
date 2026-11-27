@@ -1,0 +1,39 @@
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "commercial-billing.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "commercial-billing.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- if .Values.autoscaling.webhookBacklog.enabled }}
+    # §13.1: received ledger rows > 200 add a replica (prometheus-adapter
+    # external metric; the gauge is the same on every pod, so it is a
+    # cluster-wide value, not per pod).
+    - type: External
+      external:
+        metric:
+          name: {{ .Values.autoscaling.webhookBacklog.metricName }}
+          selector:
+            matchLabels:
+              status: received
+              service: commercial-billing
+        target:
+          type: Value
+          value: {{ .Values.autoscaling.webhookBacklog.averageValue | quote }}
+    {{- end }}
+{{- end }}

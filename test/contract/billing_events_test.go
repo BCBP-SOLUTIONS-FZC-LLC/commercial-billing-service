@@ -59,12 +59,24 @@ var consumerFiles = map[domain.EventType][]string{
 		"iam-audit-log/billing_audit_tenant_subscription_cancelled.json"},
 	domain.EventTenantReactivated: {"iam-org-membership/tenant_reactivated.json", "iam-audit-log/billing_audit_tenant_reactivated.json",
 		"iam-realm-provisioner/billing_tenant_reactivated.json"},
-	domain.EventTenantQuotaAddOnChanged: {"iam-audit-log/billing_audit_tenant_quota_add_on_changed.json"},
+	domain.EventTenantQuotaAddOnChanged: {"iam-audit-log/billing_audit_tenant_quota_add_on_changed.json",
+		entitlementsAddonFile},
+}
+
+// consumersDir is where the consumer schemas are read from: the vendored
+// copies by default; CONTRACT_CONSUMERS_DIR points at freshly fetched ones
+// (the contract-live workflow), so a consumer's change on its main branch
+// fails here before the copies are refreshed.
+func consumersDir() string {
+	if d := os.Getenv("CONTRACT_CONSUMERS_DIR"); d != "" {
+		return d
+	}
+	return filepath.Join("testdata", "consumers")
 }
 
 func compile(t *testing.T, file string) *jsonschema.Schema {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("testdata", "consumers", file))
+	raw, err := os.ReadFile(filepath.Join(consumersDir(), file))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,9 +141,10 @@ func TestEveryConsumerSchemaIsUsed(t *testing.T) {
 			used[f] = true
 		}
 	}
-	files, _ := filepath.Glob("testdata/consumers/*/*.json")
+	dir := consumersDir()
+	files, _ := filepath.Glob(filepath.Join(dir, "*", "*.json"))
 	for _, f := range files {
-		rel, _ := filepath.Rel("testdata/consumers", f)
+		rel, _ := filepath.Rel(dir, f)
 		if !used[filepath.ToSlash(rel)] {
 			t.Errorf("%s is not mapped in consumerFiles", rel)
 		}

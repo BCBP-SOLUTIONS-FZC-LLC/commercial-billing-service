@@ -1,0 +1,44 @@
+# Pre-merge CHANGELOG check (CONTRIBUTING.md, documentation update checklist).
+# Fails a PR that changes behaviour — internal/, api/, deploy/, cmd/, pkg/ —
+# without updating CHANGELOG.md, so a release never starts without its notes.
+name: Changelog check
+
+"on":
+  pull_request:
+    paths:
+      - 'internal/**'
+      - 'api/**'
+      - 'deploy/**'
+      - 'cmd/**'
+      - 'pkg/**'
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  changelog:
+    name: changelog
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: CHANGELOG updated in this PR
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if git diff --name-only "$BASE" "$HEAD" | grep -q '^CHANGELOG\.md$'; then
+            echo "CHANGELOG.md updated in this PR — OK."
+          else
+            echo "::error file=CHANGELOG.md,title=CHANGELOG not updated::This PR changes internal/, api/, deploy/, cmd/ or pkg/ but not CHANGELOG.md. Add a dated entry under [Unreleased] naming the LLD revision."
+            exit 1
+          fi

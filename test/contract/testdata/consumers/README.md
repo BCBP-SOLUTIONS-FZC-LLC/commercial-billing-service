@@ -11,6 +11,15 @@ and record the source commit below.
 | `iam-org-membership/` (Core, `billing-orgm-q`) | `internal/adapter/outbound/eventbus/schemas/tenant_*.json` | `5a643fb` (main) |
 | `iam-audit-log/` (`billing-audit-q`) | `internal/eventschema/billing_audit_*.json` | `0e12f2c` (main) |
 | `iam-realm-provisioner/` (`billing-realm-q`) | `internal/eventschema/billing_tenant_reactivated.json` | `9e8fcab` (main) |
+| `commercial-entitlements/` (`billing-entitlements-q`) | `commercial-entitlements-service` `internal/adapter/outbound/eventbus/schemas/inbound_tenant_quota_add_on_changed.json`; consumer structs mirrored in `entitlements_addon_test.go` from `internal/core/domain/event.go` and `entitlement.go` | `dc9b654` (main) |
 
-AuthZ Enrichment, Entitlements and Notification do not yet publish consumed
-schemas for Billing's events; add them here when they do.
+Entitlements publishes a consumed schema for `TenantQuotaAddOnChanged` only;
+its consumer of Billing's other events (`TenantPlanChanged`,
+`TenantSubscriptionCancelled`, `TenantReactivated`) has none yet. AuthZ
+Enrichment and Notification publish none. Add them here when they do.
+
+`entitlements_addon_test.go` also checks schema compatibility both ways and
+that every produced add-on payload decodes into Entitlements' inbound structs.
+When Entitlements changes `event.go` or `billingResourceKeys`, update the
+mirrors there too. The `Contract (live consumers)` workflow runs the suite daily
+against the schema on Entitlements' `main` (`CONTRACT_CONSUMERS_DIR`).
