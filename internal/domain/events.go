@@ -243,3 +243,28 @@ func (p TenantQuotaAddOnChanged) Validate() error {
 	}
 	return nil
 }
+
+// EventPayload is implemented by every produced payload: its type name, the
+// tenant it is about (data.tenant_id, equal to the envelope's), and its
+// schema rules.
+type EventPayload interface {
+	EventType() EventType
+	Tenant() string
+	Validate() error
+}
+
+// EventType implementations.
+func (TenantPlanChanged) EventType() EventType           { return EventTenantPlanChanged }
+func (TenantSeatsChanged) EventType() EventType          { return EventTenantSeatsChanged }
+func (TenantPaymentPastDue) EventType() EventType        { return EventTenantPaymentPastDue }
+func (TenantSubscriptionCancelled) EventType() EventType { return EventTenantSubscriptionCancelled }
+func (TenantReactivated) EventType() EventType           { return EventTenantReactivated }
+func (TenantQuotaAddOnChanged) EventType() EventType     { return EventTenantQuotaAddOnChanged }
+
+// Tenant implementations.
+func (p TenantPlanChanged) Tenant() string           { return p.TenantID }
+func (p TenantSeatsChanged) Tenant() string          { return p.TenantID }
+func (p TenantPaymentPastDue) Tenant() string        { return p.TenantID }
+func (p TenantSubscriptionCancelled) Tenant() string { return p.TenantID }
+func (p TenantReactivated) Tenant() string           { return p.TenantID }
+func (p TenantQuotaAddOnChanged) Tenant() string     { return p.TenantID }

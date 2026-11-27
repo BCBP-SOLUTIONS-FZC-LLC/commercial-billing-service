@@ -46,8 +46,9 @@ services:
       retries: 10
 
   floci:
-    # SNS + SQS + Glue Schema Registry emulator (same image as the IAM services).
-    # Phase 4 adds scripts/init-floci.sh for the billing-events topology.
+    # SNS + SQS + Glue Schema Registry emulator (same image as the IAM
+    # services). scripts/init-floci.sh provisions the LLD §7 topology and the
+    # billing-events Glue registry from the embedded schemas.
     image: floci/floci:2.1.0-compat
     ports:
       - "4667:4566"
@@ -55,8 +56,12 @@ services:
       FLOCI_DEFAULT_REGION: ap-south-1
       FLOCI_DEFAULT_ACCOUNT_ID: "000000000000"
       FLOCI_HOSTNAME: floci
+      # The hook makes ~60 sequential CLI calls; the default 30 s is tight.
+      FLOCI_INIT_HOOKS_TIMEOUT_SECONDS: "90"
     volumes:
       - floci_data:/app/data
+      - ./scripts/init-floci.sh:/etc/floci/init/ready.d/init-floci.sh:ro
+      - ./internal/adapters/eventbus/schemas:/etc/floci/init/schemas:ro
 
   stripe-mock:
     # Stripe API mock for the adapter tests (LLD §14.2).

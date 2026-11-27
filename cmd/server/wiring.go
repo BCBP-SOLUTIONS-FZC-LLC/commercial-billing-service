@@ -17,6 +17,8 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/config"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events/v2/pkg/events"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events/v2/pkg/outbox"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
 )
 
@@ -46,14 +48,33 @@ func providers(cfg config.Config, sysPool *pgcommon.Pool, log port.Logger) (*pro
 
 // workers holds the in-pod background loops (§13.1).
 type workers struct {
-	cancel context.CancelFunc
-	done   chan struct{}
+	cancel    context.CancelFunc
+	done      chan struct{}
+	outbox    *outbox.Runner
+	consumers []events.Consumer
+	log       port.Logger
 }
 
-// startWorkers starts the registry refresh and the webhook processor.
-func startWorkers(cfg config.Config, reg *provider.Registry, appPool, sysPool *pgcommon.Pool, log port.Logger) *workers {
+// startWorkers starts the registry refresh, the webhook processor, the
+// outbox publisher, the SQS consumers and the delayed-emission worker.
+func startWorkers(cfg config.Config, reg *provider.Registry, appPool, sysPool *pgcommon.Pool, b *bus, log port.Logger) *workers {
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &workers{cancel: cancel, done: make(chan struct{})}
+	w := &workers{cancel: cancel, done: make(chan struct{}), outbox: b.outbox, consumers: b.consumers, log: log}
+	if b.outbox != nil {
+		go func() {
+			if err := b.outbox.Start(ctx); err != nil {
+				log.Error("outbox runner", map[string]any{"error": err.Error()})
+			}
+		}()
+	}
+	for _, c := range b.consumers {
+		go func() {
+			if err := c.Start(ctx); err != nil && ctx.Err() == nil {
+				log.Error("sqs consumer stopped", map[string]any{"error": err.Error()})
+			}
+		}()
+	}
+	go b.emissions.Run(ctx, cfg.EmissionPollInterval)
 	proc := &app.WebhookProcessor{
 		Ledger:      pgadapter.NewLedgerRepository(sysPool),
 		Providers:   reg,
@@ -70,9 +91,20 @@ func startWorkers(cfg config.Config, reg *provider.Registry, appPool, sysPool *p
 	return w
 }
 
-// stop cancels the loops and waits up to timeout for the processor to return.
+// stop cancels the loops, drains the outbox runner's in-flight batch, and
+// waits up to timeout for the processor to return.
 func (w *workers) stop(timeout time.Duration) {
 	w.cancel()
+	for _, c := range w.consumers {
+		if err := c.Stop(); err != nil {
+			w.log.Error("sqs consumer stop", map[string]any{"error": err.Error()})
+		}
+	}
+	if w.outbox != nil {
+		if err := w.outbox.Stop(); err != nil {
+			w.log.Error("outbox runner stop", map[string]any{"error": err.Error()})
+		}
+	}
 	select {
 	case <-w.done:
 	case <-time.After(timeout):

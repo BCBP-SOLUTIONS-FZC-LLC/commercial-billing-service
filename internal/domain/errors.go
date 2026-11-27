@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 )
@@ -35,6 +36,12 @@ func (e *DomainError) With(key string, value any) *DomainError {
 	maps.Copy(c.Extensions, e.Extensions)
 	c.Extensions[key] = value
 	return &c
+}
+
+// HasCode reports whether err is (or wraps) a DomainError with code.
+func HasCode(err error, code ErrorCode) bool {
+	var de *DomainError
+	return errors.As(err, &de) && de.Code == code
 }
 
 // NewError builds a DomainError.

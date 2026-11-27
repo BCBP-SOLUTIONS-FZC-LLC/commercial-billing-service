@@ -1,13 +1,663 @@
-# Billing AsyncAPI contract (LLD §7.6). Phase 0 skeleton; Phase 4 adds the
-# servers, channels and the produced and consumed payload schemas of §7.3 and §7.1.
 asyncapi: 3.0.0
+
 info:
-  title: commercial-billing events
-  version: 0.0.0
-  description: >-
-    billing.events produced by commercial-billing; tenant-billing-q and
-    usage-billing-q consumed. See docs/lld/commercial-lld-billing-service.md §7.
-channels: {}
-operations: {}
+  title: Commercial Billing Events
+  version: "1.0.0"
+  description: |
+    Events produced by commercial-billing on billing.events, and the events it
+    consumes (LLD §7). Source of truth for the JSON Schemas under
+    internal/adapters/eventbus/schemas/ (generated with `make schema-extract`):
+    the six produced types, and the consumed tenant-billing-q (Iam*) and
+    usage-billing-q payloads.
+
+    Topic            Glue registry    Produced events
+    ──────────────────────────────────────────────────────────────────────
+    billing-events   billing-events   TenantPlanChanged, TenantSeatsChanged,
+                                      TenantPaymentPastDue, TenantSubscriptionCancelled,
+                                      TenantReactivated, TenantQuotaAddOnChanged
+
+    Wire format: the SNS message body is the platform-events envelope JSON. With
+    the Glue codec, "data" carries [0x03][0x00][16-byte schema version UUID]
+    [payload JSON]; consumers strip the 18-byte header (HLD §9.3). Payloads are
+    open (additionalProperties: true) and carry tenant_id in data as well as in
+    the envelope (D-1, HLD v0.65 §9.4). BillingPeriodRolled is not emitted.
+
+    Ordering: rows for one tenant publish in commit order (ordered outbox,
+    key tenant_id; BIL-EVT-5). `time` is Billing's clock at commit, strictly
+    increasing within one transaction (BIL-EVT-1).
+
+servers:
+  billingEventsTopic:
+    host: sns.ap-south-1.amazonaws.com
+    protocol: sns
+    description: SNS topic billing-events (Commercial IaC).
+  tenantBillingQueue:
+    host: sqs.ap-south-1.amazonaws.com
+    protocol: sqs
+    description: SQS tenant-billing-q (DLQ tenant-billing-q-dlq), subscribed to iam-tenant-events.
+  usageBillingQueue:
+    host: sqs.ap-south-1.amazonaws.com
+    protocol: sqs
+    description: SQS usage-billing-q (DLQ usage-billing-q-dlq), subscribed to usage-events.
+
+channels:
+  billingEvents:
+    address: billing-events
+    servers:
+      - $ref: '#/servers/billingEventsTopic'
+    description: |
+      Subscribers (LLD §7.3.9):
+        billing-orgm-q          Core               TenantPlanChanged, TenantSeatsChanged, TenantPaymentPastDue, TenantSubscriptionCancelled, TenantReactivated
+        billing-authz-q         AuthZ Enrichment   TenantPlanChanged, TenantSubscriptionCancelled, TenantReactivated
+        billing-realm-q         Realm Provisioner  TenantReactivated
+        billing-audit-q         Audit Log          all six
+        billing-entitlements-q  Entitlements       TenantPlanChanged, TenantSubscriptionCancelled, TenantReactivated, TenantQuotaAddOnChanged
+        billing-notification-q  Notification       TenantPaymentPastDue, TenantSubscriptionCancelled
+    messages:
+      TenantPlanChanged:
+        $ref: '#/components/messages/TenantPlanChanged'
+      TenantSeatsChanged:
+        $ref: '#/components/messages/TenantSeatsChanged'
+      TenantPaymentPastDue:
+        $ref: '#/components/messages/TenantPaymentPastDue'
+      TenantSubscriptionCancelled:
+        $ref: '#/components/messages/TenantSubscriptionCancelled'
+      TenantReactivated:
+        $ref: '#/components/messages/TenantReactivated'
+      TenantQuotaAddOnChanged:
+        $ref: '#/components/messages/TenantQuotaAddOnChanged'
+
+  tenantBilling:
+    address: tenant-billing-q
+    servers:
+      - $ref: '#/servers/tenantBillingQueue'
+    description: |
+      Billing's queue on iam-tenant-events; SNS filter EventType IN
+      [TenantConverted, TenantSuspended, TenantReactivated, TenantOffboarded]
+      (LLD §7.1). Payloads per iam-realm-provisioner/api/asyncapi.yaml.
+    messages:
+      IamTenantConverted:
+        $ref: '#/components/messages/IamTenantConverted'
+      IamTenantSuspended:
+        $ref: '#/components/messages/IamTenantSuspended'
+      IamTenantReactivated:
+        $ref: '#/components/messages/IamTenantReactivated'
+      IamTenantOffboarded:
+        $ref: '#/components/messages/IamTenantOffboarded'
+  usageBilling:
+    address: usage-billing-q
+    servers:
+      - $ref: '#/servers/usageBillingQueue'
+    description: |
+      Billing's queue on usage-events; SNS filter EventType IN [UsagePeriodClosed].
+      Contract taken from the HLD until the Usage & Metering LLD exists (BL-OQ-24).
+    messages:
+      UsagePeriodClosed:
+        $ref: '#/components/messages/UsagePeriodClosed'
+
+operations:
+  publishBillingEvents:
+    action: send
+    channel:
+      $ref: '#/channels/billingEvents'
+    summary: Billing publishes its state transitions through the ordered outbox.
+    messages:
+      - $ref: '#/channels/billingEvents/messages/TenantPlanChanged'
+      - $ref: '#/channels/billingEvents/messages/TenantSeatsChanged'
+      - $ref: '#/channels/billingEvents/messages/TenantPaymentPastDue'
+      - $ref: '#/channels/billingEvents/messages/TenantSubscriptionCancelled'
+      - $ref: '#/channels/billingEvents/messages/TenantReactivated'
+      - $ref: '#/channels/billingEvents/messages/TenantQuotaAddOnChanged'
+  receiveTenantLifecycle:
+    action: receive
+    channel:
+      $ref: '#/channels/tenantBilling'
+    summary: IAM tenant lifecycle projected onto billing_accounts; TenantConverted confirms the conversion saga (LLD §7.1).
+    messages:
+      - $ref: '#/channels/tenantBilling/messages/IamTenantConverted'
+      - $ref: '#/channels/tenantBilling/messages/IamTenantSuspended'
+      - $ref: '#/channels/tenantBilling/messages/IamTenantReactivated'
+      - $ref: '#/channels/tenantBilling/messages/IamTenantOffboarded'
+  receiveUsagePeriodClosed:
+    action: receive
+    channel:
+      $ref: '#/channels/usageBilling'
+    summary: Period totals kept for reference; nothing is priced from them (LLD §7.1, §8.12).
+    messages:
+      - $ref: '#/channels/usageBilling/messages/UsagePeriodClosed'
+
 components:
-  schemas: {}
+  tags:
+    published:
+      name: published
+      description: commercial-billing is the producer, on billing-events.
+    consumed:
+      name: consumed
+      description: Produced by another service; commercial-billing consumes it.
+
+  messageTraits:
+    glueWireFormat:
+      description: |
+        "data" is Glue-framed: [0x03][0x00][16-byte schema version UUID][payload JSON].
+
+  messages:
+    TenantPlanChanged:
+      name: TenantPlanChanged
+      x-lifecycle:
+        status: active
+      x-owner:
+        team: commercial-billing
+      title: Tenant Plan Changed
+      summary: Upgrade payment confirmed, or a downgrade took effect at renewal (LLD §7.3.3).
+      tags:
+        - $ref: '#/components/tags/published'
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/glueWireFormat'
+      payload:
+        $ref: '#/components/schemas/TenantPlanChangedEnvelope'
+    TenantSeatsChanged:
+      name: TenantSeatsChanged
+      x-lifecycle:
+        status: active
+      x-owner:
+        team: commercial-billing
+      title: Tenant Seats Changed
+      summary: Post-conversion seat sync, seat purchase or top-up confirmed, renewal reduction, resync (LLD §7.3.4).
+      tags:
+        - $ref: '#/components/tags/published'
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/glueWireFormat'
+      payload:
+        $ref: '#/components/schemas/TenantSeatsChangedEnvelope'
+    TenantPaymentPastDue:
+      name: TenantPaymentPastDue
+      x-lifecycle:
+        status: active
+      x-owner:
+        team: commercial-billing
+      title: Tenant Payment Past Due
+      summary: Subscription moved active → past_due (LLD §7.3.5).
+      tags:
+        - $ref: '#/components/tags/published'
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/glueWireFormat'
+      payload:
+        $ref: '#/components/schemas/TenantPaymentPastDueEnvelope'
+    TenantSubscriptionCancelled:
+      name: TenantSubscriptionCancelled
+      x-lifecycle:
+        status: active
+      x-owner:
+        team: commercial-billing
+      title: Tenant Subscription Cancelled
+      summary: Subscription moved active or past_due → cancelled (LLD §7.3.5).
+      tags:
+        - $ref: '#/components/tags/published'
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/glueWireFormat'
+      payload:
+        $ref: '#/components/schemas/TenantSubscriptionCancelledEnvelope'
+    TenantReactivated:
+      name: TenantReactivated
+      x-lifecycle:
+        status: active
+      x-owner:
+        team: commercial-billing
+      title: Tenant Reactivated
+      summary: Subscription moved past_due or cancelled → active; source billing (LLD §7.3.5).
+      tags:
+        - $ref: '#/components/tags/published'
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/glueWireFormat'
+      payload:
+        $ref: '#/components/schemas/TenantReactivatedEnvelope'
+    TenantQuotaAddOnChanged:
+      name: TenantQuotaAddOnChanged
+      x-lifecycle:
+        status: active
+      x-owner:
+        team: commercial-billing
+      title: Tenant Quota Add-On Changed
+      summary: Token add-on purchase confirmed (reason purchase) or add-on refund succeeded (reason refund) (LLD §7.3.6).
+      tags:
+        - $ref: '#/components/tags/published'
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/glueWireFormat'
+      payload:
+        $ref: '#/components/schemas/TenantQuotaAddOnChangedEnvelope'
+
+    IamTenantConverted:
+      name: TenantConverted
+      x-lifecycle:
+        status: active
+      x-owner:
+        team: iam
+      title: TenantConverted (iam-tenant-events)
+      summary: Consumed only — Realm Provisioner's conversion result; confirms the saga matched by billing_subscription_id.
+      tags:
+        - $ref: '#/components/tags/consumed'
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/glueWireFormat'
+      payload:
+        $ref: '#/components/schemas/IamTenantConvertedPayload'
+    IamTenantSuspended:
+      name: TenantSuspended
+      x-lifecycle:
+        status: active
+      x-owner:
+        team: iam
+      title: TenantSuspended (iam-tenant-events)
+      summary: Consumed only — tenant suspended for billing lapse or by an operator.
+      tags:
+        - $ref: '#/components/tags/consumed'
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/glueWireFormat'
+      payload:
+        $ref: '#/components/schemas/IamTenantSuspendedPayload'
+    IamTenantReactivated:
+      name: TenantReactivated
+      x-lifecycle:
+        status: active
+      x-owner:
+        team: iam
+      title: TenantReactivated (iam-tenant-events)
+      summary: Consumed only — Realm Provisioner's operator reactivation, distinct from Billing's own TenantReactivated on billing-events.
+      tags:
+        - $ref: '#/components/tags/consumed'
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/glueWireFormat'
+      payload:
+        $ref: '#/components/schemas/IamTenantReactivatedPayload'
+    IamTenantOffboarded:
+      name: TenantOffboarded
+      x-lifecycle:
+        status: active
+      x-owner:
+        team: iam
+      title: TenantOffboarded (iam-tenant-events)
+      summary: Consumed only — closes the billing account. export_s3_key is never read, logged or copied.
+      tags:
+        - $ref: '#/components/tags/consumed'
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/glueWireFormat'
+      payload:
+        $ref: '#/components/schemas/IamTenantOffboardedPayload'
+    UsagePeriodClosed:
+      name: UsagePeriodClosed
+      x-lifecycle:
+        status: active
+      x-owner:
+        team: commercial-usage-metering
+      title: UsagePeriodClosed (usage-events)
+      summary: Consumed only — one per tenant per UTC month (HLD §8.7).
+      tags:
+        - $ref: '#/components/tags/consumed'
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/glueWireFormat'
+      payload:
+        $ref: '#/components/schemas/UsagePeriodClosedPayload'
+
+  schemas:
+    # ── Envelope (platform-events; LLD §7.3.1) ──────────────────────────────
+    EventEnvelopeBase:
+      type: object
+      required: [id, type, specversion, source, subject, tenant_id, time, data]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUID v7; consumer dedup key.
+        type:
+          type: string
+        specversion:
+          type: string
+        source:
+          type: string
+          const: commercial-billing
+        subject:
+          type: string
+          format: uuid
+          description: Equals tenant_id (Core requires subject).
+        tenant_id:
+          type: string
+          format: uuid
+        time:
+          type: string
+          format: date-time
+          description: Billing's clock at commit (BIL-EVT-1).
+        dataschema:
+          type: string
+          description: Glue schema version UUID.
+        actor:
+          type: string
+          description: Tenant user id, operator sub, or commercial-system for webhook / job / consumer driven changes.
+        trace_id:
+          type: string
+        correlation_id:
+          type: string
+        ip_address:
+          type: string
+        user_agent:
+          type: string
+        data: {}
+
+    TenantPlanChangedEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelopeBase'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/TenantPlanChangedPayload'
+    TenantSeatsChangedEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelopeBase'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/TenantSeatsChangedPayload'
+    TenantPaymentPastDueEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelopeBase'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/TenantPaymentPastDuePayload'
+    TenantSubscriptionCancelledEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelopeBase'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/TenantSubscriptionCancelledPayload'
+    TenantReactivatedEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelopeBase'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/TenantReactivatedPayload'
+    TenantQuotaAddOnChangedEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelopeBase'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/TenantQuotaAddOnChangedPayload'
+
+    # ── Produced payloads (open; LLD §7.3.3–§7.3.6) ─────────────────────────
+    TenantPlanChangedPayload:
+      type: object
+      additionalProperties: true
+      required: [tenant_id, plan, previous_plan, effective_at, billing_ref]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        plan:
+          type: string
+          enum: [starter, pro, enterprise]
+          description: New plan; the only field Core reads.
+        previous_plan:
+          type: string
+          enum: [starter, pro, enterprise]
+        direction:
+          type: string
+          enum: [upgrade, downgrade]
+        effective_at:
+          type: string
+          format: date-time
+        billing_ref:
+          type: string
+          description: plan_change_requests.change_id
+        billing_subscription_id:
+          type: string
+          format: uuid
+
+    TenantSeatsChangedPayload:
+      type: object
+      additionalProperties: true
+      required: [tenant_id, licensed_seats, reason]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        licensed_seats:
+          type: integer
+          minimum: 1
+          maximum: 100000
+          description: Absolute count (snapshot); Core applies it unconditionally (SEAT-2).
+        previous_licensed_seats:
+          type: [integer, 'null']
+          minimum: 0
+        reason:
+          type: string
+          enum: [conversion, purchase, renewal, renewal_topup, reactivation, resync]
+        billing_ref:
+          type: [string, 'null']
+          description: seat_purchases.purchase_id, seat_change_schedules.schedule_id or billing_subscription_id
+        billing_subscription_id:
+          type: string
+          format: uuid
+        deferred_amount_minor:
+          type: integer
+          minimum: 1
+          description: Additive (BL-OQ-6). Purchase only; prorated amount not charged (below the provider minimum), billed from renewal.
+        deferral_reason:
+          type: string
+          enum: [below_provider_minimum]
+          description: Additive (BL-OQ-6). Present only with deferred_amount_minor.
+
+    TenantPaymentPastDuePayload:
+      type: object
+      additionalProperties: true
+      required: [tenant_id, invoice_ref, past_due_since]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        invoice_ref:
+          type: string
+          description: Billing invoice_id (UUID), never a provider id.
+        amount_due:
+          # Money (LLD §5.3), inlined: payload schemas are extracted standalone.
+          type: object
+          required: [amount_minor, currency]
+          properties:
+            amount_minor:
+              type: integer
+            currency:
+              type: string
+              pattern: '^[A-Z]{3}$'
+        past_due_since:
+          type: string
+          format: date-time
+        next_retry_at:
+          type: [string, 'null']
+          format: date-time
+
+    TenantSubscriptionCancelledPayload:
+      type: object
+      additionalProperties: true
+      required: [tenant_id, cancelled_at, reason]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        cancelled_at:
+          type: string
+          format: date-time
+          description: Billing commit time; Core uses COALESCE(cancelled_at, now()).
+        reason:
+          type: string
+          enum: [dunning_exhausted, customer, auto_renew_off, operator_reversal]
+
+    TenantReactivatedPayload:
+      type: object
+      additionalProperties: true
+      required: [tenant_id, source, reactivated_at]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          description: Required by Realm Provisioner's billing-realm-q schema (D-1).
+        source:
+          type: string
+          const: billing
+          description: RP-D13; RP emits source=operator on its own topic.
+        reactivated_at:
+          type: string
+          format: date-time
+        previous_status:
+          type: string
+          enum: [past_due, cancelled]
+
+    TenantQuotaAddOnChangedPayload:
+      type: object
+      additionalProperties: true
+      required: [tenant_id, resource, delta, reason, billing_ref]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        resource:
+          type: string
+          enum: [llm_tokens, api_requests]
+          description: Billing emits llm_tokens only in v1 (CD-55).
+        delta:
+          type: integer
+          not:
+            const: 0
+          description: purchase > 0; refund < 0 (Entitlements removes at most the grant's unused tokens). Idempotent on billing_ref.
+        reason:
+          type: string
+          enum: [purchase, refund]
+        billing_ref:
+          type: string
+          description: purchase → quota_addon_purchases.purchase_id; refund → refunds.refund_id
+        purchase_ref:
+          type: string
+          description: Refund only; purchase_id of the grant being reversed.
+        purchased_at:
+          type: string
+          format: date-time
+          description: Payment confirmation instant; basis of the 12-month expiry (BL-OQ-4).
+        pack_code:
+          type: string
+        pack_quantity:
+          type: integer
+          minimum: 1
+
+    # ── Consumed payloads (open; copied from RP's AsyncAPI, and the HLD for
+    #    UsagePeriodClosed until BL-OQ-24 closes) ──────────────────────────
+    IamTenantConvertedPayload:
+      type: object
+      additionalProperties: true
+      required: [tenant_id, realm, plan, users_migrated, direct_signup]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        realm:
+          type: string
+        plan:
+          type: string
+          enum: [starter, pro, enterprise]
+        billing_subscription_id:
+          type: string
+        users_migrated:
+          type: integer
+          minimum: 0
+        direct_signup:
+          type: boolean
+
+    IamTenantSuspendedPayload:
+      type: object
+      additionalProperties: true
+      required: [tenant_id, realm, suspended_at, source]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        realm:
+          type: string
+        cancelled_at:
+          type: string
+          format: date-time
+        suspended_at:
+          type: string
+          format: date-time
+        source:
+          type: string
+          enum: [billing_lapse, operator]
+        reason:
+          type: string
+
+    IamTenantReactivatedPayload:
+      type: object
+      additionalProperties: true
+      required: [tenant_id, realm, source]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        realm:
+          type: string
+        source:
+          type: string
+          enum: [operator]
+        reason:
+          type: string
+
+    IamTenantOffboardedPayload:
+      type: object
+      additionalProperties: true
+      required: [tenant_id, realm, offboarded_at]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        realm:
+          type: string
+        export_s3_key:
+          type: string
+          description: Never read, logged or copied by Billing.
+        offboarded_at:
+          type: string
+          format: date-time
+
+    UsagePeriodClosedPayload:
+      type: object
+      additionalProperties: true
+      required: [tenant_id, period_start, period_end, tokens_total, api_requests_total, limits]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        period_start:
+          type: string
+          format: date-time
+        period_end:
+          type: string
+          format: date-time
+        tokens_total:
+          type: integer
+          minimum: 0
+        api_requests_total:
+          type: integer
+          minimum: 0
+        addon_consumed:
+          type: integer
+          minimum: 0
+        limits:
+          type: object
