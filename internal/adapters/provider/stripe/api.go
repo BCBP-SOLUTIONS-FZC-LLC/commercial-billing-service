@@ -634,14 +634,18 @@ func (a *Adapter) FetchCurrent(ctx context.Context, obj domain.ProviderObjectRef
 		}
 		st.Status = string(d.Status)
 		st.Fields["reason"], st.Fields["amount_minor"], st.Fields["created"] = string(d.Reason), d.Amount, time.Unix(d.Created, 0).UTC()
-		a.paymentFields(ctx, st.Fields, d.Charge, d.PaymentIntent)
+		if err := a.paymentFields(ctx, st.Fields, d.Charge, d.PaymentIntent); err != nil {
+			return st, err
+		}
 	case domain.ObjectEarlyFraudWarning:
 		w, err := a.sc.V1RadarEarlyFraudWarnings.Retrieve(ctx, obj.ID, nil)
 		if err != nil {
 			return st, mapErr(err)
 		}
 		st.Status, st.Fields["reason"], st.Fields["created"] = "open", string(w.FraudType), time.Unix(w.Created, 0).UTC()
-		a.paymentFields(ctx, st.Fields, w.Charge, w.PaymentIntent)
+		if err := a.paymentFields(ctx, st.Fields, w.Charge, w.PaymentIntent); err != nil {
+			return st, err
+		}
 	default:
 		return st, port.ErrUnsupported
 	}
@@ -650,13 +654,15 @@ func (a *Adapter) FetchCurrent(ctx context.Context, obj domain.ProviderObjectRef
 
 // paymentFields records the disputed payment and the invoice it paid (via
 // the invoice payments of its PaymentIntent), so the dispute handler can
-// tell a conversion payment without another provider call (CD-10).
-func (a *Adapter) paymentFields(ctx context.Context, f map[string]any, ch *stripego.Charge, pi *stripego.PaymentIntent) {
+// tell a conversion payment without another provider call (CD-10). A
+// failed lookup is returned (mapped), so the callback is retried rather than
+// applied without its invoice; no invoice payment at all is not an error.
+func (a *Adapter) paymentFields(ctx context.Context, f map[string]any, ch *stripego.Charge, pi *stripego.PaymentIntent) error {
 	if ch != nil {
 		f["payment_ref"] = ch.ID
 	}
 	if pi == nil {
-		return
+		return nil
 	}
 	f["payment_intent"] = pi.ID
 	if f["payment_ref"] == nil {
@@ -666,11 +672,15 @@ func (a *Adapter) paymentFields(ctx context.Context, f map[string]any, ch *strip
 		PaymentIntent: stripego.String(pi.ID)}}
 	lp.Limit = stripego.Int64(1)
 	for ip, err := range a.sc.V1InvoicePayments.List(ctx, lp).All(ctx) {
-		if err == nil && ip.Invoice != nil {
+		if err != nil {
+			return mapErr(err)
+		}
+		if ip.Invoice != nil {
 			f["invoice"] = ip.Invoice.ID
 		}
 		break
 	}
+	return nil
 }
 
 // ListSince lists subscriptions, invoices or events created since a time,
@@ -873,7 +883,8 @@ func stringOrNil(v string) *string {
 }
 
 // VerifyPrice checks a Stripe Price for B-O11 / B-O12: active, same unit
-// amount and currency, recurring with the same interval (or one-off).
+// amount and currency, recurring with the same interval and an interval
+// count of 1 (Billing's month / year mean one month / one year), or one-off.
 func (a *Adapter) VerifyPrice(ctx context.Context, priceRef string, want port.PriceExpectation) error {
 	p, err := call(ctx, a, func() (*stripego.Price, error) { return a.sc.V1Prices.Retrieve(ctx, priceRef, nil) })
 	if err != nil {
@@ -894,6 +905,8 @@ func (a *Adapter) VerifyPrice(ctx context.Context, priceRef string, want port.Pr
 		problems = append(problems, "recurring price for a one-off pack")
 	case want.Interval != "" && (p.Recurring == nil || string(p.Recurring.Interval) != want.Interval):
 		problems = append(problems, "interval differs")
+	case want.Interval != "" && p.Recurring.IntervalCount != 1:
+		problems = append(problems, fmt.Sprintf("interval count %d ≠ 1", p.Recurring.IntervalCount))
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("%w: %s", port.ErrPriceMismatch, strings.Join(problems, "; "))

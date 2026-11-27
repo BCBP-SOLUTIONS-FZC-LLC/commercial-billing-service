@@ -827,6 +827,9 @@ func caseDecline(ctx context.Context, e *Env) (Evidence, error) {
 	if !e.Stateful() {
 		return ev, nil
 	}
+	if ev == nil { // addon returns no evidence when the signup itself failed
+		ev = Evidence{}
+	}
 	ev["error"] = fmt.Sprint(err)
 	if !domain.HasCode(err, domain.ErrPaymentDeclined) {
 		return ev, fmt.Errorf("want 402 PAYMENT_DECLINED, got %v", err)

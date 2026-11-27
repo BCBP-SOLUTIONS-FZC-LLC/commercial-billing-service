@@ -118,7 +118,10 @@ func (a *Adapter) Capabilities() port.ProviderCapabilities {
 // mapErr maps a Stripe error to the port's adapter errors (§18.8):
 // card_error → ErrDeclined (decline code); authentication_required /
 // requires_action → ErrActionRequired; rate limit, connection and 5xx →
-// ErrProviderUnavailable; idempotency_error → ErrIdempotencyMismatch;
+// ErrProviderUnavailable; 409 Conflict / idempotency_key_in_use (a request
+// with the same key still in flight, retryable per stripe-go) →
+// ErrProviderUnavailable, so the caller retries with the same key;
+// idempotency_error (same key, different parameters) → ErrIdempotencyMismatch;
 // resource_missing → ErrNotFound; other invalid_request_error → an internal
 // error carrying only the request log URL, never the request body.
 func mapErr(err error) error {
@@ -146,6 +149,9 @@ func mapErr(err error) error {
 			code = string(se.Code)
 		}
 		return port.ErrDeclined{Code: code}
+	case se.HTTPStatusCode == http.StatusConflict || se.Code == stripego.ErrorCodeIdempotencyKeyInUse:
+		// Same key still being processed: transient, never "parameters differ".
+		return fmt.Errorf("%w: stripe %d %s", port.ErrProviderUnavailable, se.HTTPStatusCode, se.Code)
 	case se.Type == stripego.ErrorTypeIdempotency:
 		return port.ErrIdempotencyMismatch
 	case se.HTTPStatusCode == http.StatusTooManyRequests || se.HTTPStatusCode >= 500 || se.HTTPStatusCode == 0:

@@ -151,16 +151,18 @@ func (s *Service) startCheckout(ctx context.Context, c Caller, tenantID string, 
 	now := s.now()
 	err = s.locked(ctx, tenantID, func(ctx context.Context) error {
 		if !hasAccount {
-			if err := s.Accounts.Create(ctx, acct); err != nil {
-				if sqlUnique(err) { // a concurrent first checkout created it
-					a, gerr := s.Accounts.Get(ctx, tenantID)
-					if gerr != nil {
-						return gerr
-					}
-					acct = a
-				} else {
-					return err
-				}
+			// Re-read under the tenant lock: a concurrent first checkout may
+			// have created the account since the read above. Checking here,
+			// rather than recovering from the insert's unique violation, keeps
+			// the transaction usable (a failed statement aborts it).
+			existing, found, err := s.accountIfAny(ctx, tenantID)
+			if err != nil {
+				return err
+			}
+			if found {
+				acct = existing
+			} else if err := s.Accounts.Create(ctx, acct); err != nil {
+				return accountCreateErr(err)
 			}
 		}
 		if acct.IAMLifecycle != domain.LifecycleTrial {
@@ -270,13 +272,6 @@ func deref(p *string) string {
 		return ""
 	}
 	return *p
-}
-
-// sqlUnique reports a unique violation surfaced by a repository.
-func sqlUnique(err error) bool {
-	type sqlstate interface{ SQLState() string }
-	var s sqlstate
-	return errors.As(err, &s) && s.SQLState() == "23505"
 }
 
 // ── Callbacks (§7.4, §8.1.1) ───────────────────────────────────────────────
@@ -617,4 +612,29 @@ func rpOutcome(a domain.RP3Action, status int) string {
 	default:
 		return "terminal"
 	}
+}
+
+// accountIfAny reads the tenant's billing account; found is false when it
+// has none.
+func (s *Service) accountIfAny(ctx context.Context, tenantID string) (domain.BillingAccount, bool, error) {
+	a, err := s.Accounts.Get(ctx, tenantID)
+	switch {
+	case err == nil:
+		return a, true, nil
+	case domain.HasCode(err, domain.ErrSubscriptionNotFound):
+		return domain.BillingAccount{}, false, nil
+	default:
+		return domain.BillingAccount{}, false, err
+	}
+}
+
+// accountCreateErr maps a failed account insert. The account is re-read
+// under the tenant lock first, so ErrAccountExists means a writer that does
+// not take the lock won a race; the transaction is aborted, so the caller
+// gets a retryable 409 instead of a recovery read that would fail.
+func accountCreateErr(err error) error {
+	if errors.Is(err, port.ErrAccountExists) {
+		return domain.NewError(domain.ErrConcurrentUpdate, "the billing account was created concurrently; retry")
+	}
+	return err
 }

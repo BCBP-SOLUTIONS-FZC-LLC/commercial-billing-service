@@ -123,14 +123,29 @@ func (s *Service) authorizeAndCharge(ctx context.Context, c Caller, r AuthorizeC
 	var price domain.PlanPrice
 	err = s.locked(ctx, tenantID, func(ctx context.Context) error {
 		if acct == nil {
+			// Re-read under the tenant lock (see StartCheckout): a concurrent
+			// signup may have created the account since the read above.
+			existing, found, err := s.accountIfAny(ctx, tenantID)
+			if err != nil {
+				return err
+			}
+			if found {
+				if existing.Currency != currency {
+					return domain.NewError(domain.ErrCurrencyMismatch, "currency differs from the account's")
+				}
+				custRef = deref(existing.ProviderCustomerID)
+				acct = &existing
+			}
+		}
+		if acct == nil {
 			a := domain.BillingAccount{TenantID: tenantID, Provider: prov.Name(), ProviderCustomerID: &custRef, Currency: currency,
 				IAMLifecycle: domain.LifecycleTrial, CompanyName: nonEmpty(r.CompanyName), Country: nonEmpty(r.Country),
 				DefaultPMSet: true} // the signup card becomes the customer default (AttachDefaultPaymentMethod)
 			if r.BillingContact != nil {
 				a.BillingContactName, a.BillingContactEmail = nonEmpty(r.BillingContact.Name), nonEmpty(r.BillingContact.Email)
 			}
-			if err := s.Accounts.Create(ctx, a); err != nil && !sqlUnique(err) {
-				return err
+			if err := s.Accounts.Create(ctx, a); err != nil {
+				return accountCreateErr(err)
 			}
 		}
 		var ok bool
@@ -152,12 +167,11 @@ func (s *Service) authorizeAndCharge(ctx context.Context, c Caller, r AuthorizeC
 		}
 		sub := domain.Subscription{BillingSubscriptionID: subID, TenantID: tenantID, Provider: prov.Name(), Origin: domain.OriginDirectSignup,
 			Plan: plan, Interval: interval, Status: domain.StatusIncomplete, AutoRenew: true}
+		// Subs.Live was checked above under the tenant lock, so a unique
+		// violation here means a writer that does not take the lock; the
+		// repository maps it to 409 SUBSCRIPTION_ALREADY_EXISTS. Nothing more
+		// can be read: the failed insert has aborted the transaction.
 		if err := s.Subs.Create(ctx, sub, domain.SubscriptionItem{PriceID: price.PriceID, Quantity: r.LicensedSeats}); err != nil {
-			if domain.HasCode(err, domain.ErrSubscriptionAlreadyExists) {
-				if live, found, _ := s.Subs.Live(ctx, tenantID); found {
-					return alreadyExists(live.BillingSubscriptionID)
-				}
-			}
 			return err
 		}
 		return nil
