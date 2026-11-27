@@ -1,19 +1,23 @@
 ---
 name: ci-local
-description: Run this repo's full CI gate locally (validate, helm, schema, dockerfile and contract jobs) and report one pass/fail table. Use before pushing or opening a PR.
+description: Run this repo's full CI gate locally (validate-test, validate-quality, image build, smoke and contract jobs) and report one pass/fail table. Use before pushing or opening a PR.
 disable-model-invocation: true
-argument-hint: "[quick]  (quick = skip integration tests, helm-check and schema-gov)"
+argument-hint: "[quick]  (quick = skip the coverage suites, helm-check, schema-gov and the image)"
 ---
 
 # /ci-local — commercial-billing CI gate, locally
 
-Reproduce what `.github/workflows/ci.yml` (jobs `validate`, `helm`, `schema`,
-`dockerfile`) and `contract-live.yml` check on a PR, so failures show up before the push.
+Reproduce what `.github/workflows/ci.yml` checks on a PR, so failures show up before the push:
+- the reusable `validate-test.yml` and `validate-quality.yml`;
+- `build-image` and `smoke`;
+- `contract-live.yml`.
+
+Trivy and the push to GHCR are CI-only.
 
 Run every step even when an earlier one fails, then report all results together.
 Do **not** fix anything unless the user asks; this skill reports.
 
-If `$ARGUMENTS` contains `quick`, skip steps 4, 5 and 7 and say so in the report.
+If `$ARGUMENTS` contains `quick`, skip steps 4, 5, 6 and 7 and say so in the report.
 
 ## 1. Modules
 
@@ -25,14 +29,16 @@ make tidy && git diff --exit-code go.mod go.sum   # tidy must be a no-op
 If a private `BCBP-SOLUTIONS-FZC-LLC` module can't be fetched, stop and tell the user
 (SSH key or `GOPRIVATE`); every later step needs them.
 
-## 2. Validate job (same order as CI)
+## 2. validate-quality / validate-test (fast steps)
 
 ```bash
 make fmt-check
 make vet
 make lint          # go tool golangci-lint: the version pinned in go.mod, so no local install needed
 make arch-lint     # installs go-arch-lint v1.15.0 if missing
-make guards        # BIL-PCI-1, BIL-OPS-2, RFC 9457 problem details
+make guards        # BIL-PCI-1, BIL-OPS-2, RFC 9457 problem details, BIL-OPS-11 pgcommon
+make metrics-lint  # observability standard
+make openapi-check
 make test          # -race, all packages (unit, contract, OpenAPI golden, metric inventory)
 make build
 ```
@@ -49,7 +55,7 @@ git diff --exit-code -- docs/swagger/ docs/observability/metric-registry.md
 
 A diff here, after step 2, means a golden or inventory was regenerated and not committed.
 
-## 4. Schema job (schema-gov)
+## 4. Schema sync (validate-test, schema-gov)
 
 Locally through Docker (CI installs schema-gov from source):
 
@@ -59,7 +65,7 @@ make schema-validate     # = schema-check (embedded schemas in sync with api/asy
 
 If Docker or the `platform-schemagov` image isn't available, mark SKIPPED.
 
-## 5. Helm job
+## 5. Helm (validate-quality)
 
 ```bash
 make helm-check
@@ -67,21 +73,22 @@ make helm-check
 
 Needs `helm` (v3.16+) and `promtool`. If either is missing, mark SKIPPED, not failed.
 
-## 6. Dockerfile
+## 6. Image (build-image, smoke)
 
 ```bash
 command -v hadolint >/dev/null && hadolint Dockerfile || docker run --rm -i hadolint/hadolint < Dockerfile
+make docker-build && IMAGE=commercial-billing:local GITHUB_STEP_SUMMARY=/dev/null bash .github/scripts/smoke-tests.sh
 ```
 
-SKIPPED if neither is available.
+SKIPPED without Docker. The image build needs `GO_PRIVATE_TOKEN` or SSH access to the private modules.
 
-## 7. Integration tests (not yet in CI; LLD §14.2 requires them per phase)
+## 7. Every suite with the coverage gate (validate-test)
 
 ```bash
-docker ps >/dev/null 2>&1 && make test-integration
+docker ps >/dev/null 2>&1 && make cover-all INT_PARALLEL=2 && bash .github/scripts/coverage-gate.sh
 ```
 
-SKIPPED without Docker. Report the failing test names only.
+SKIPPED without Docker. The gate is ≥ 96% over `internal/` + `pkg/`. Report the failing test names, or the coverage figure if it is below the gate.
 
 ## 8. Contract against Entitlements' main (contract-live.yml)
 

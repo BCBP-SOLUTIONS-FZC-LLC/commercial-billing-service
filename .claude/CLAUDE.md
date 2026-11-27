@@ -20,7 +20,7 @@ This file provides guidance to Claude Code when working with **commercial-billin
 
 **Status:** Phases 0–8 are implemented on the stacked branches `feat/billing-phase-<n>-*` (current: `feat/billing-phase-6-flows`). `main` holds only the LLD. Nothing is deployed to any environment.
 
-**LLD:** `docs/lld/commercial-lld-billing-service.md` (rev 0.52 at the time of writing; read the header) is the source of truth. **Implement what it says; don't invent endpoints, fields, events, statuses or config.** Open items owed by other teams: `docs/lld/billing-open-items.md`. Hand-offs to other teams: `docs/handoff/`. Invariant coverage: `docs/invariants-coverage.md`.
+**LLD:** `docs/lld/commercial-lld-billing-service.md` (rev 0.52 at the time of writing; read the header) is the source of truth. **Implement what it says; don't invent endpoints, fields, events, statuses or config.** Open items owed by other teams: `docs/lld/billing-open-items.md`. Invariant coverage: `docs/invariants-coverage.md`.
 
 Detail lives in the topic files next to this one:
 - `key-files.md`: per-file notes;
@@ -40,9 +40,9 @@ make run              # go run ./cmd/server (sources .env)
 
 make fmt / fmt-check  # gofmt
 make vet
-make lint             # go tool golangci-lint (v2, pinned in go.mod `tool`), default + integration tags
+make lint             # go tool golangci-lint (v2, pinned in go.mod `tool`), default build + every test tag (integration, helm)
 make arch-lint        # go-arch-lint (.go-arch-lint.yml, LLD §3.2)
-make guards           # BIL-PCI-1 stripe imports, BIL-OPS-2 outbox access, RFC 9457 problem-details guard
+make guards           # BIL-PCI-1 stripe imports, BIL-OPS-2 outbox access, RFC 9457 problem details, BIL-OPS-11 pgcommon
 
 make test             # go test ./... -race (unit + contract, no Docker)
 make test-integration # ./test/... -tags=integration (testcontainers Postgres 17; Docker)
@@ -52,6 +52,7 @@ make cover
 make schema-extract   # api/asyncapi.yaml → internal/adapters/eventbus/schemas/*.json (schema-gov 0.4, Docker)
 make schema-check     # embedded schemas in sync with asyncapi.yaml
 make schema-validate
+make metrics-lint     # observability standard: metricslint on the scrape + every referenced metric registered/exposed + inventory
 make metrics-inventory # regenerate docs/observability/metric-registry.md
 
 make helm-check       # helm lint + kubeconform + promtool + chart contract tests (test/helm, tag helm)
@@ -60,6 +61,11 @@ make testclock        # Stripe Test Clock rehearsal against staging (docs/runboo
 make check-first-deploy ENV=<env>  # LLD §19.1 order, read-only
 
 make build            # bin/commercial-billing, bin/jobs, bin/migrate, bin/certify
+make openapi          # regenerate docs/swagger/openapi.json (openapi-check verifies)
+make test-postgres | test-flows | test-bus | test-stripemock | test-helm   # one suite at a time
+make schema-register / schema-verify          # Glue billing-events (AWS or floci)
+make docker-build / trivy                     # image build / CVE scan
+make help            # every target, grouped
 make ci               # fmt-check vet lint arch-lint guards test build
 ```
 
@@ -75,10 +81,10 @@ make ci               # fmt-check vet lint arch-lint guards test build
 - Outbound adapters (`postgres`, `eventbus`, `provider/*`, `iamclient`, `entitlementsclient`) → `domain`, `port` (+ `httpx` for HTTP clients). Adapters never import each other, except the provider `registry` (→ `stripe`, `manual`).
 - Only `internal/bootstrap` and `cmd/*` wire adapters to ports.
 - **`BIL-PCI-1`:** only `internal/adapters/provider/stripe` imports `github.com/stripe/*`; no provider type crosses a port (`check-stripe-imports.sh`).
-- **`BIL-OPS-1` / `BIL-OPS-11`:** every pool comes from `pgcommon.NewPool` (forbidigo bans `pgxpool.New*`, `pgx.Connect*`, `sql.Open`).
-- **`BIL-OPS-2`:** the outbox, dead letters and `processed_events` only through platform-events; no hand-written SQL on them outside migrations and tests (`check-outbox-access.sh`).
-- **`BIL-API-6`:** every error response comes from platform-gincommon (`gincommon.AbortWithProblem`); no hand-written problem bodies, `c.JSON(4xx/5xx)`, `AbortWithStatus*` or `gin.Recovery` (`check-problem-details.sh`).
-- **`BIL-OPS-10`:** logs, metrics and traces only through platform-gincommon.
+- **`BIL-OPS-1` / `BIL-OPS-11`:** every pool, setting, statement and migration goes through platform-pgcommon. Drivers are denied everywhere (depguard `database`); pgcommon itself only in `adapters/postgres`, `bootstrap`, `certify` and `cmd/*` (depguard `database-boundary`). Classify DB errors with `pgcommon.Is*` and map them to domain codes or port errors (`port.ErrAccountExists`) inside `adapters/postgres`; no SQLSTATE literals, `SQLState()` interfaces or hand-written `set_config` / `SET LOCAL` (`check-pgcommon.sh`).
+- **`BIL-OPS-2`:** events, the outbox, dead letters and `processed_events` only through platform-events (`events.NewEnvelope`, `outbox.EnqueueOrdered`, `inbox.Store.Process`), and no hand-written SQL on those tables outside migrations and tests (`check-outbox-access.sh`). platform-events only in `adapters/eventbus`, `adapters/postgres`, `adapters/consumer`, `bootstrap`, `certify` and `cmd/*`; use cases see `port.EventEnqueuer` / `port.InboxRunner` (depguard `events-boundary`). SNS and SQS SDKs are denied everywhere; the Glue SDK only in `adapters/eventbus`, for the encode codec platform-events doesn't ship yet.
+- **`BIL-API-6`:** every error response comes from platform-gincommon (`gincommon.AbortWithProblem`, `ClassifyError`, `BindingError`; domain errors convert to `*problem.Error` with one `problem.Type` per §17 code). Problems from callees are read with gincommon's `problem.Decode` / `FromResponse`. No hand-written problem bodies, error DTOs or parsers, `c.JSON(4xx/5xx)`, `AbortWithStatus*`, `gin.Recovery` or `recover()` in HTTP adapters (`check-problem-details.sh`). The spec names "exception" types such as `ResourceNotFound`; gincommon's real API is `problem.NewNotFoundError`, `NewConflictError`, `NewBusinessRuleError`, `NewValidationError`, `MustType`.
+- **`BIL-OPS-10`:** logs, metrics and traces only through platform-gincommon. depguard denies Prometheus imports in all production code and OpenTelemetry outside `adapters/observability`, plus `log`, `slog`, `zap`, `logrus` and `zerolog`; forbidigo denies `fmt.Print*`, `println` and `gin.Default` / `gin.Logger`. Metrics use `gincommon.CounterVec` etc. and `gincommon.New*Vec`.
 
 ---
 

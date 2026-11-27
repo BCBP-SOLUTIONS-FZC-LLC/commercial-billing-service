@@ -23,7 +23,7 @@ Summary only. The contracts are LLD §5 (API), §7 (events) and §18 (integratio
 
 ### B-I1 (direct paid signup) in brief
 
-Full contract: LLD §5.4.2; BFF hand-off and reply: `docs/handoff/bl-oq-8-*.md`.
+Full contract: LLD §5.4.2; BFF alignment status: `docs/lld/billing-open-items.md` (BL-OQ-8).
 
 - **Request.** Key `charge:<tenant_id>`; body `tenant_id` must equal `x-tenant-id`. Required fields: `tenant_id`, `plan_code`, `licensed_seats` (1–1000), `payment_method_ref`.
 - **Success.** `201` (charged), or `200` replay.
@@ -44,7 +44,7 @@ Full contract: LLD §5.4.2; BFF hand-off and reply: `docs/handoff/bl-oq-8-*.md`.
 | Realm Provisioner | **RP-11** `GET …/tenants/:id/realm` | Operator saga view (B-O7) only | `RP_TIMEOUT_MS` |
 | Entitlements | `GET /api/v1/internal/tenants/:id/entitlements` | Add-on eligibility (`BIL-ADD-1`): fresh on purchase (B-P20, fail closed `503 ENTITLEMENTS_UNAVAILABLE`), 60 s cache for B-P19. Egress restricted to this route (W-10); identity contract LLD §10.2 | `ENTITLEMENTS_TIMEOUT_MS` (1000) |
 | Audit Log | AL-5 via platform-audit, **outbox mode** | Audit entries written in the same transaction (§10.6) | — |
-| Stripe | stripe-go v83 in `provider/stripe` only | Every call with an idempotency key from Billing ids (`BIL-IDEM-2`) | `STRIPE_TIMEOUT_MS` |
+| Stripe | stripe-go v87.2.0 (API `2026-11-18.endive`) in `provider/stripe` only | Every call with an idempotency key from Billing ids (`BIL-IDEM-2`) | `STRIPE_TIMEOUT_MS` |
 
 Billing never calls RP-2 (the BFF's), RP-10 or RP-14.
 

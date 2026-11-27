@@ -47,14 +47,22 @@ Schedules are in `cmd/jobs/main.go` and Helm `cronjobs.yaml` (`test/helm` assert
   - the monitoring namespace may reach `/metrics`.
 - **Gateway:** tenant and operator `HTTPRoute`s; the operator route lists B-O1…B-O17.
 - **Values:** `values-dev.yaml`, `values-staging.yaml`, `values-prod.yaml`.
+- **AWS:** the IRSA role's policy is in `deploy/iam/` (SNS publish, SQS consume and DLQ forward, Glue read-only). Don't add S3, KMS, Secrets Manager or CloudWatch, or Glue writes (CI-only).
+- **HPA external metric:** needs `deploy/monitoring/prometheus-adapter-rule.yaml` in prometheus-adapter (`max`, not `sum`: every pod reports the same backlog).
 - **Checks:** `make helm-check` (lint, kubeconform, promtool, chart contract tests).
 - **First deployment order:** LLD §19.1, checked with `make check-first-deploy ENV=…`.
 - **Release gate:** a provider adapter change bumps `AdapterVersion()`. The release then fails until a certification record exists in staging (`certify check`, §14.6). Production changes need a PCI owner group reviewer.
 
 ## Observability (§11)
 
-- **Metrics:** prefix `commercial_billing_` on gincommon's registry. The registry is `docs/observability/metric-registry.md`, generated with `make metrics-inventory`.
-- **Rules:** recording and SLO rules are in `deploy/monitoring/`.
+- **Metrics (Enterprise Platform Observability Standard):**
+  - Tier 1 `platform_*`: registry names only.
+  - Tier 2 `commercial_*`: none, since nothing is ratified; proposals are in `docs/observability/registry-proposals.md`.
+  - Tier 3 `commercial_billing_*`: built with gincommon's validated constructors.
+  - Identity labels are injected centrally.
+  - The registry is `docs/observability/metric-registry.md`, generated with `make metrics-inventory`.
+  - `make metrics-lint` checks naming, suffixes, labels and registry compliance, and that every metric referenced by alerts, rules, SLOs, the dashboard, HPA and runbooks exists.
+- **Rules:** recording and SLO rules are in `deploy/monitoring/`. `schema-registry-alerts.yml` holds the four Glue registration alerts (from `schema-gov metrics` in `schema-registry.yml`, via the Pushgateway); their runbook is `docs/runbooks/schema-registration.md`.
 - **Alerts:** `deploy/monitoring/app-alerts.yml`. Each alert has a `runbook_url` into `docs/runbooks/`, which `test/helm` checks:
   - `BillingConversionSagaOverdue`, `BillingSagaFailed`, `CommercialPurchaseNotActive`;
   - `BillingWebhookSignatureFailures`, `BillingWebhookBacklog`;

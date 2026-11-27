@@ -3,7 +3,7 @@
 ## First-Time Setup
 
 ```bash
-cp .env-example .env       # values match docker-compose.yml; never commit .env
+make setup                 # .env from .env-example (never commit .env) + .githooks (pre-commit: .env, tidy, fmt, lint, guards, openapi-check; pre-push: make trivy)
 make docker-up             # Postgres 17 :5634, PgBouncer :5633, floci :4667, stripe-mock :12111
 make migrate
 make run                   # API on :8180, metrics on :9190 (from .env-example)

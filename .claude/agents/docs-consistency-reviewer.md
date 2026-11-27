@@ -1,6 +1,6 @@
 ---
 name: docs-consistency-reviewer
-description: Read-only reviewer that checks the documentation a commercial-billing diff touches, or should have touched, against the code and the other docs. Covers routes (B-P1…B-P26, B-I1, B-W1, B-O1…B-O17) and their guards, error codes, events and schemas, outbound contracts (I-11, I-18, RP-3/4/11, Entitlements GET, AL-5), state machines, config keys and defaults, CronJobs, metrics and alerts, runbook links, Helm values and network policy, invariant ids (BIL-*, BL-OQ-*, CD-*, OP-G*), LLD revision and section references, open items and hand-offs, versions and file paths. Docs in scope: README, the LLD, docs/lld/billing-open-items.md, docs/handoff, docs/invariants-coverage.md, docs/runbooks, docs/observability, docs/billing-implementation-prompt.md, api/asyncapi.yaml descriptions, .claude/*.md and .claude/agents. Use before opening a PR that changes behaviour, a default, a contract, a name or a path, or that is docs-only. It has no shell, so first write the change set to a file (`git diff <base>...HEAD > <scratch>/docs.diff; git diff HEAD >> <scratch>/docs.diff`) and pass that absolute path in the prompt.
+description: Read-only reviewer that checks the documentation a commercial-billing diff touches, or should have touched, against the code and the other docs. Covers routes (B-P1…B-P26, B-I1, B-W1, B-O1…B-O17) and their guards, error codes, events and schemas, outbound contracts (I-11, I-18, RP-3/4/11, Entitlements GET, AL-5), state machines, config keys and defaults, CronJobs, metrics and alerts, runbook links, Helm values and network policy, invariant ids (BIL-*, BL-OQ-*, CD-*, OP-G*), LLD revision and section references, open items and hand-offs, versions and file paths. Docs in scope: README, the LLD, docs/lld/billing-open-items.md, docs/invariants-coverage.md, docs/runbooks, docs/observability, api/asyncapi.yaml descriptions, .claude/*.md and .claude/agents. Use before opening a PR that changes behaviour, a default, a contract, a name or a path, or that is docs-only. It has no shell, so first write the change set to a file (`git diff <base>...HEAD > <scratch>/docs.diff; git diff HEAD >> <scratch>/docs.diff`) and pass that absolute path in the prompt.
 tools: Read, Grep, Glob
 ---
 
@@ -30,8 +30,7 @@ outranks the code on what it *should* do; report those as code findings.
 Records are not current claims:
 - LLD revision-history rows;
 - dated status notes in `billing-open-items.md` and the LLD §16.1 register;
-- rows marked closed, done, superseded or deferred;
-- hand-offs and replies in `docs/handoff/`, which are dated letters.
+- rows marked closed, done, superseded or deferred.
 
 Don't report them as wrong. Do report a *current* section that repeats an outdated record as present fact.
 
@@ -60,10 +59,10 @@ Don't report them as wrong. Do report a *current* section that repeats an outdat
 3. **One fact, one answer.** A fact stated in several places must agree everywhere. Report each disagreement with both locations and which one matches the code:
    - the Go version (`go.mod`, `Dockerfile`, docs);
    - platform library versions (`go.mod` vs LLD §3.1 vs `.claude/CLAUDE.md`);
-   - the LLD's current revision: header `Status` line vs newest revision row vs "rev X" stated as current elsewhere (`billing-open-items.md`, `docs/handoff/*` headers that cite it, `.claude/CLAUDE.md`, `docs/billing-implementation-prompt.md`);
+   - the LLD's current revision: header `Status` line vs newest revision row vs "rev X" stated as current elsewhere (`billing-open-items.md`, `.claude/CLAUDE.md`);
    - BL-OQ item status in LLD §16.1 vs `billing-open-items.md` (§4 sections and the §7 tracker);
    - feature-flag defaults (`config.go` vs Helm vs LLD §12 vs docs);
-   - the B-I1 response table (LLD §5.4.2 vs `idempotency.go` / `direct_signup.go` vs `docs/handoff/bl-oq-8-signup-bff.md`).
+   - the B-I1 response table (LLD §5.4.2 vs `idempotency.go` / `direct_signup.go`).
 4. **Status claims.** Nothing is deployed to any environment, and `main` holds only the LLD; the code is on the stacked `feat/billing-phase-*` branches. A document must not:
    - describe a deployment, release or production state that doesn't exist;
    - call something pending that the code and `docs/invariants-coverage.md` record as done, or the reverse.

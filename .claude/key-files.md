@@ -48,7 +48,7 @@ Per-file notes on wiring decisions and where invariants are enforced. When a not
 ## Adapters (`internal/adapters`)
 
 - **`http/api.go`**: prefixes (`/api/v1/tenants/:id`, `/api/v1/operator`). **`routes.go`**: the route table: ID, method, path, idempotency rule, handler. **`router.go`**: groups and middleware. **`middleware.go`**: CD-19 headers and the XFCC principal.
-- **`http/idempotency.go`**: §9.2: claim `idempotency_records`, replay byte for byte with `Idempotent-Replayed: true`, `409 REQUEST_IN_PROGRESS` + `Retry-After`; B-I1 body mismatch → `409 SUBSCRIPTION_ALREADY_EXISTS`, elsewhere `422 IDEMPOTENCY_KEY_REUSED`.
+- **`http/idempotency.go`**: §9.2: claim `idempotency_records`, replay the stored response (the same JSON, not the same bytes: `response_body` is `jsonb`) with `Idempotent-Replayed: true`, `409 REQUEST_IN_PROGRESS` + `Retry-After`; B-I1 body mismatch → `409 SUBSCRIPTION_ALREADY_EXISTS`, elsewhere `422 IDEMPOTENCY_KEY_REUSED`.
 - **`http/bind.go`**: local JSON decode (unknown fields rejected on tenant/operator routes, tolerated on B-I1, §10.4); errors via `gincommon.BindingError`.
 - **`http/openapi.go`**: OpenAPI 3.1 generated from the route table and DTOs, served at `/openapi.json`; `docs/swagger/openapi.json` is kept equal by `TestOpenAPIGolden`.
 - **`webhook/handler.go`**: B-W1 `POST /api/v1/webhooks/:provider`: body limit, verify signature, ledger insert before anything else (`BIL-PAY-1`), duplicate → `200`.
@@ -61,4 +61,4 @@ Per-file notes on wiring decisions and where invariants are enforced. When a not
 
 ## Tests (`test/`)
 
-`postgres/` (RLS, constraints, triggers; tag `integration`), `flows/` (per-flow integration), `bus/` (floci SNS/SQS/Glue), `stripemock/`, `certify/`, `contract/` (produced payloads vs Core, RP, Audit and Entitlements consumed schemas, vendored under `testdata/consumers`), `helm/` (tag `helm`), `testclock/`.
+`postgres/` (RLS, constraints, triggers; tag `integration`), `flows/` (per-flow integration), `e2e/` (the full HTTP stack on Postgres; shared harness in `testkit/`), `bus/` (floci SNS/SQS/Glue), `stripemock/`, `certify/`, `contract/` (produced payloads vs Core, RP, Audit and Entitlements consumed schemas, vendored under `testdata/consumers`), `helm/` (tag `helm`), `testclock/`.

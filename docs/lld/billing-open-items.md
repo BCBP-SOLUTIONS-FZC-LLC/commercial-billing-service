@@ -268,7 +268,7 @@ OP-G4 test cases for B-O17:
 - **Action:** (1) `BILLING_TIMEOUT_MS` ≥ 15000; (2) map `PaymentToken` → `payment_method_ref`, `Plan` → `plan_code`, `Seats` → `licensed_seats`; (3) 3-D Secure: `402 PAYMENT_ACTION_REQUIRED` → browser authenticates → retry with the **same** idempotency key; (4) follow the go-live order in LLD §18.7.
 - **Done when:** the Pact contract test is green and the Test-Clock end-to-end run passes in staging.
 - **Depends on:** SRE-3.
-- **Status (2026-11-27, BFF reply):** alignment **done and merged**: `bff-signup` PR #6 (BFF LLD v1.3 §19), merged 2026-11-26 (`c2e9a1d`); not yet promoted to staging. All checklist items done except the Pact contract. The BFF never provisions on `409 SUBSCRIPTION_ALREADY_EXISTS` (LLD §5.4.2 updated, rev 0.52). Billing's answers: `docs/handoff/bl-oq-8-billing-reply.md`.
+- **Status (2026-11-27, BFF reply):** alignment **done and merged**: `bff-signup` PR #6 (BFF LLD v1.3 §19), merged 2026-11-26 (`c2e9a1d`); not yet promoted to staging. All checklist items done except the Pact contract. The BFF never provisions on `409 SUBSCRIPTION_ALREADY_EXISTS` (LLD §5.4.2 updated, rev 0.52). Billing's answers were sent to the BFF team on 2026-11-27.
 - **Still open:**
   - Billing: Pact broker URL, credentials path, provider name and verification branch (Q2), and the Pact provider verification in Billing's CI, which doesn't exist yet;
   - Billing: Test-Clock E2E slot in staging (Q4);
