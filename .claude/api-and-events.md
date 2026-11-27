@@ -4,13 +4,15 @@ Summary only. The contracts are LLD §5 (API), §7 (events) and §18 (integratio
 
 ## Inbound HTTP (LLD §5.3)
 
+45 endpoint IDs: 44 in the route table (39 paths and 44 operations in the OpenAPI document) plus B-W1, which the webhook adapter registers.
+
 | Group | IDs | Path prefix | Caller and guard |
 |---|---|---|---|
 | Tenant | B-P1 … B-P26 | `/api/v1/tenants/:id/…` | Gateway with CD-19 headers `x-user-id`, `x-tenant-id`, `x-tenant-roles`. `x-tenant-id` = path `:id` (`BIL-API-2`); one permission per route (`BIL-AUTH-1`, `BIL-AUTH-7`) |
 | Internal | B-I1 | `POST /api/v1/internal/subscriptions/authorize-and-charge` | Signup BFF only: SPIFFE `cluster.local/ns/bff/sa/bff-signup` from `X-Forwarded-Client-Cert` (`BIL-AUTH-3`, `BFF_CALLER_PRINCIPAL`) |
-| Webhook | B-W1 | `POST /api/v1/webhooks/:provider` | Provider signature only; no tenant header trusted (`BIL-AUTH-5`) |
+| Webhook | B-W1 | `POST /api/v1/webhooks/:provider` | Provider signature only; no tenant header trusted (`BIL-AUTH-5`). Gateway rate limit 50 rps per client IP (one bucket per IPv4 / IPv6 client), optional source CIDRs |
 | Operator | B-O1 … B-O17 | `/api/v1/operator/…` | `platform_operator` (`BIL-AUTH-2`); `403` until `OPERATOR_PATH_LIVE=true` (`BIL-AUTH-6`); B-O17 also `pci_owner_reviewer`, not the submitter (`BIL-PROV-4`) |
-| Docs, probes | — | `/openapi.json`, `/asyncapi`, `/healthz`, `/readyz` | `/metrics` is on `METRICS_PORT` only |
+| Docs, probes | — | `/openapi.json`, `/asyncapi`, `/asyncapi.yaml`, `/healthz`, `/readyz` | `/metrics` is on `METRICS_PORT` only. `/healthz` fails only when the platform-audit runner is not alive |
 
 `commercial-system` is rejected inbound on every route (`BIL-AUTH-4`).
 
@@ -68,10 +70,10 @@ No event for an `incomplete` subscription (`BIL-EVT-8`); status events only on a
 | Queue | Events | Notes |
 |---|---|---|
 | `tenant-billing-q` (topic `iam-tenant-events`) | `TenantConverted`, `TenantSuspended`, `TenantReactivated`, `TenantOffboarded` | Last-writer-wins on envelope `time`, 300 s future clamp → DLQ (`BIL-EVT-3`). `TenantConverted` with no saga increments `commercial_billing_unmatched_conversions_total`. `export_s3_key` is never read or logged |
-| `usage-billing-q` (topic `usage-events`) | `UsagePeriodClosed` | Reference-only records, prices nothing; contract unverified (BL-OQ-24) |
+| `usage-billing-q` (topic `usage-events`) | `UsagePeriodClosed` | Off by default: the consumer starts only with `USAGE_BILLING_CONSUMER_ENABLED=true` (then `SQS_USAGE_BILLING_QUEUE_URL` is required). Reference-only records, prices nothing; contract unverified (BL-OQ-24) |
 
-Dedup through `pkg/inbox` (`processed_events`); DLQ at receive 4 (`SQS_MAX_RECEIVE_COUNT`).
+Dedup through platform-events' `inbox.Store.Process` (`processed_events`); DLQ at receive 4 (`SQS_MAX_RECEIVE_COUNT`). Outside dev, startup refuses an enabled queue without a usable `RedrivePolicy`.
 
 ## Provider callbacks (LLD §7.4, §8.15)
 
-These are not bus events. B-W1 verifies the signature, then inserts into `payment_event_ledger` (allow-listed payload) and answers `200`. The webhook processor claims rows per tenant in `provider_created_at` order, re-reads each with `FetchCurrent` and applies it. The Stripe mapping table is in §18.8.
+These are not bus events. B-W1 verifies the signature, then inserts into `payment_event_ledger` (allow-listed payload) and answers `200`. The webhook processor claims rows per tenant in `provider_created_at` order, re-reads each with `FetchCurrent` and applies it. The Stripe mapping table is in §18.8. Payments that cannot be applied safely are parked, not retried, and logged SEV-2 `BillingPaymentParked` (`BIL-PAY-6`, `BIL-PAY-7`; details in `flows-and-concurrency.md`).

@@ -11,10 +11,11 @@ finding. You are read-only. Never edit files and never run commands that change 
 
 ## Scope
 
-Default: the branch diff, `git diff $(git merge-base main HEAD)`, plus untracked files
-(`git ls-files --others --exclude-standard`). Note that `main` holds only the LLD, so on
-a phase branch prefer the diff against the previous phase branch or `HEAD~n` when the
-caller names one. Read the surrounding code, not just the hunks: an invariant usually
+Default: the uncommitted change set, `git diff HEAD`, plus untracked files
+(`git ls-files --others --exclude-standard`). Note that `main` holds only the LLD: phases
+0–5 are on `feat/billing-phase-0-scaffolding` … `feat/billing-phase-5-api`, and phases 6–8
+and everything after are on `feat/billing-phase-6-flows`, so for a branch review diff
+against `feat/billing-phase-5-api` or the `HEAD~n` / commit the caller names. Read the surrounding code, not just the hunks: an invariant usually
 breaks in the caller.
 
 Ground truth:
@@ -48,12 +49,14 @@ Check each item. Report only real breaches you can point at.
    - status events only on an actual transition;
    - no hand-written SQL on `outbox_events`, `outbox_dead_letters` or `processed_events`;
    - AL-5 audit in the same transaction via `AuditWriter`.
-5. **Webhooks (`BIL-PAY-1..5`):**
+5. **Webhooks and settlement (`BIL-PAY-1..7`):**
    - the ledger insert comes before any domain write;
    - a failed signature, tolerance or `livemode` check → `400`, stored nowhere;
    - the tenant comes from the `(provider, provider_customer_id)` mapping, not metadata;
    - `FetchCurrent` re-read before applying;
-   - per-tenant order kept.
+   - per-tenant order kept;
+   - one provider invoice settles at most one purchase or plan change; a looked-up invoice already recorded elsewhere is never used, re-checked under the lock (`BIL-PAY-6`, `internal/app/purchase_invoice.go`);
+   - a purchase is granted only when the invoice's amount paid (or total) and currency equal the purchase's; otherwise it is parked (`failed:invoice_amount_mismatch`, SEV-2 log `BillingPaymentParked`), never granted (`BIL-PAY-7`).
 6. **Idempotency (`BIL-IDEM-1..3`, `BIL-API-3`):**
    - a charging route stores its outcome before returning;
    - provider keys derive from Billing ids only (never request input) and follow §9.2's formats;
@@ -83,7 +86,7 @@ Check each item. Report only real breaches you can point at.
     - new accounts only with a `passed` / `exempt` certification for the current adapter version;
     - an adapter change bumps `AdapterVersion()`.
 11. **Defaults and config:**
-    - feature flags keep their §12 defaults (`FEATURE_DIRECT_SIGNUP`, `FEATURE_TOKEN_ADDONS`, `AUTO_REVERT_ON_EFW` off; `OPERATOR_PATH_LIVE` false);
+    - feature flags keep their §12 defaults (`FEATURE_DIRECT_SIGNUP`, `FEATURE_TOKEN_ADDONS`, `USAGE_BILLING_CONSUMER_ENABLED`, `AUTO_REVERT_ON_EFW` off; `OPERATOR_PATH_LIVE` false; `AUTO_PAUSE_ON_OPERATOR_SUSPENSION` true);
     - new config keys have bounds in `config.Load()` and appear in Helm values;
     - no hard-coded timeouts or TTLs that the LLD makes configurable.
 12. **Errors and platform libraries (`BIL-API-6`, `BIL-OPS-10`):**
@@ -91,7 +94,7 @@ Check each item. Report only real breaches you can point at.
     - branches on upstream `errorCode`, never `detail`;
     - logs, metrics and spans through gincommon only;
     - outbound HTTP through `httpx`.
-13. **Architecture:** `internal/domain` imports only the standard library (and gincommon `problem`); adapters don't import each other; wiring only in `internal/bootstrap` and `cmd/*`.
+13. **Architecture:** `internal/domain` imports only the standard library (and gincommon `problem`); adapters don't import each other; `pkg/requestctx` only from `adapters/http` and `adapters/httpx`; wiring only in `internal/bootstrap` and `cmd/*`; in-pod loops started through the `cmd/server/lifecycle.go` supervisor.
 14. **Tests and coverage:** a new or changed invariant has a test named with its ID, and `docs/invariants-coverage.md` is updated.
 
 ## Output

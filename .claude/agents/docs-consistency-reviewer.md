@@ -1,6 +1,6 @@
 ---
 name: docs-consistency-reviewer
-description: Read-only reviewer that checks the documentation a commercial-billing diff touches, or should have touched, against the code and the other docs. Covers routes (B-P1…B-P26, B-I1, B-W1, B-O1…B-O17) and their guards, error codes, events and schemas, outbound contracts (I-11, I-18, RP-3/4/11, Entitlements GET, AL-5), state machines, config keys and defaults, CronJobs, metrics and alerts, runbook links, Helm values and network policy, invariant ids (BIL-*, BL-OQ-*, CD-*, OP-G*), LLD revision and section references, open items and hand-offs, versions and file paths. Docs in scope: README, the LLD, docs/lld/billing-open-items.md, docs/invariants-coverage.md, docs/runbooks, docs/observability, api/asyncapi.yaml descriptions, .claude/*.md and .claude/agents. Use before opening a PR that changes behaviour, a default, a contract, a name or a path, or that is docs-only. It has no shell, so first write the change set to a file (`git diff <base>...HEAD > <scratch>/docs.diff; git diff HEAD >> <scratch>/docs.diff`) and pass that absolute path in the prompt.
+description: Read-only reviewer that checks the documentation a commercial-billing diff touches, or should have touched, against the code and the other docs. Covers routes (B-P1…B-P26, B-I1, B-W1, B-O1…B-O17) and their guards, error codes, events and schemas, outbound contracts (I-11, I-18, RP-3/4/11, Entitlements GET, AL-5), state machines, config keys and defaults, CronJobs, metrics and alerts, runbook links, Helm values and network policy, invariant ids (BIL-*, BL-OQ-*, CD-*, OP-G*), LLD revision and section references, open items and hand-offs, versions and file paths. Docs in scope: README, ARCHITECTURE.md, the LLD, docs/lld/billing-open-items.md, docs/invariants-coverage.md, docs/runbooks, docs/observability, api/asyncapi.yaml descriptions, .claude/*.md and .claude/agents. Use before opening a PR that changes behaviour, a default, a contract, a name or a path, or that is docs-only. It has no shell, so first write the change set to a file (`git diff <base>...HEAD > <scratch>/docs.diff; git diff HEAD >> <scratch>/docs.diff`) and pass that absolute path in the prompt.
 tools: Read, Grep, Glob
 ---
 
@@ -12,14 +12,15 @@ so and stop.
 ## Ground truth
 
 Ground truth is the code:
-- `internal/`, `cmd/`, `pkg/`, `api/asyncapi.yaml`;
+- `internal/`, `cmd/`, `pkg/` (`pkg/requestctx`), `api/asyncapi.yaml`;
 - `internal/adapters/http/routes.go` and `api.go` (every route, prefix, idempotency rule), `router.go`, `middleware.go`, `idempotency.go`, `bind.go`;
 - `internal/domain/` (transition tables, `errors.go` codes, `permission.go`, `events.go`);
 - `internal/config/config.go` (keys, defaults, bounds);
 - `cmd/jobs/main.go` (job names and schedules);
 - `internal/adapters/metrics/` (metric names and labels);
-- `deploy/helm/` (values, templates), `deploy/monitoring/` (alerts, `runbook_url`s);
-- `Makefile`, `.github/workflows/`, `.github/scripts/`, `.go-arch-lint.yml`, `.golangci.yml`, `go.mod`, `Dockerfile`, `.env-example`;
+- `cmd/server/main.go` and `cmd/server/lifecycle.go` (startup checks, shutdown order and budget, loop supervision);
+- `deploy/helm/` (`Chart.yaml`, values, templates, render guards in `_helpers.tpl`), `deploy/monitoring/` (alerts, `runbook_url`s), `deploy/iam/` (IRSA policy);
+- `Makefile`, `.githooks/`, `.github/workflows/`, `.github/scripts/`, `.go-arch-lint.yml`, `.golangci.yml`, `go.mod`, `Dockerfile`, `.env-example`, `.gitignore`;
 - `test/` and `*_test.go` (which tests enforce what).
 
 Then the LLD (`docs/lld/commercial-lld-billing-service.md`) says why. Where the code
@@ -44,7 +45,7 @@ Don't report them as wrong. Do report a *current* section that repeats an outdat
      - idempotency key formats; env vars; Helm keys; metric names; alert names; make targets;
      - the mesh principals (`cluster.local/ns/bff/sa/bff-signup`, `cluster.local/ns/billing/sa/commercial-billing`);
      - `commercial-system`.
-   - **Order:** flow steps (§8), state transitions (§8.14, §9.3), startup and shutdown order in `cmd/server/main.go`.
+   - **Order:** flow steps (§8), state transitions (§8.14, §9.3), startup and shutdown order in `cmd/server/main.go` and `lifecycle.go`.
 2. **Claims the diff makes wrong.** For every behaviour, default, name, path or order the diff changes in code, search the documents for the old wording and report each place that still describes it. Typical misses:
    - LLD §5.3 catalogue and §5.4 spec, plus `docs/swagger/openapi.json` (golden), after a route, status or error change;
    - LLD §17 error catalogue after a new `domain.Err…`;
@@ -58,6 +59,8 @@ Don't report them as wrong. Do report a *current* section that repeats an outdat
    - `.claude/*.md` after any of the above.
 3. **One fact, one answer.** A fact stated in several places must agree everywhere. Report each disagreement with both locations and which one matches the code:
    - the Go version (`go.mod`, `Dockerfile`, docs);
+   - the Stripe adapter version (`adapterSemver` in `provider/stripe/adapter.go`), the Helm chart version and `kubeVersion` (`Chart.yaml`);
+   - counts: routes, CronJobs, migrations, alerts and rules, runbooks, metrics, invariants (README, ARCHITECTURE.md, `.claude/*.md`);
    - platform library versions (`go.mod` vs LLD §3.1 vs `.claude/CLAUDE.md`);
    - the LLD's current revision: header `Status` line vs newest revision row vs "rev X" stated as current elsewhere (`billing-open-items.md`, `.claude/CLAUDE.md`);
    - BL-OQ item status in LLD §16.1 vs `billing-open-items.md` (§4 sections and the §7 tracker);

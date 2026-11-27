@@ -14,7 +14,7 @@ Billing moves money: the rules below exist to stop double charges, lost events, 
 - **Docker**, for the integration suites (testcontainers Postgres 17, floci for SNS/SQS/Glue, stripe-mock) and for schema-gov.
 - **golangci-lint** comes in as a Go tool (`go tool golangci-lint`, pinned in `go.mod`). There's nothing to install.
 - **Private modules:** set `GOPRIVATE=github.com/BCBP-SOLUTIONS-FZC-LLC/*` and `GONOSUMDB` for the same prefix (the Makefile exports both). You also need an SSH key registered with the BCBP org, so `go mod download` can fetch `platform-gincommon`, `platform-pgcommon`, `platform-events` and `platform-audit`.
-- **For `make helm-check`:** `helm` v3.16+, `promtool`, and `kubeconform` (installed by the script if missing).
+- **For `make helm-check`:** `helm` v3.19+, `promtool`, and `kubeconform` (installed by the script if missing).
 
 ## Development setup
 
@@ -24,7 +24,7 @@ cd commercial-billing-service
 make setup             # .env from .env-example (values match docker-compose.yml; never commit .env) + git hooks
 make tidy
 make docker-up         # Postgres 17 + PgBouncer + floci + stripe-mock
-make migrate           # library schemas, then 000001–000006
+make migrate           # library schemas, then 000001–000007
 make lint
 make test              # unit, HTTP, contract, observability (no Docker)
 make run               # API on :8180, metrics on :9190
@@ -141,7 +141,7 @@ For the full picture see [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`.claude/key-
 
 ### Adding a migration
 
-1. Add `NNNNNN_description.up.sql` and `.down.sql` to `internal/adapters/postgres/migrations/`, numbered after the last one (`000006`). **Never edit or renumber an existing migration.** They are embedded and applied in order, and Billing's history is tracked in `billing_schema_migrations`.
+1. Add `NNNNNN_description.up.sql` and `.down.sql` to `internal/adapters/postgres/migrations/`, numbered after the last one (`000007`). **Never edit or renumber an existing migration.** They are embedded and applied in order, and Billing's history is tracked in `billing_schema_migrations`.
 2. **Tenant-scoped tables:**
    - `ENABLE` + `FORCE ROW LEVEL SECURITY`;
    - the `tenant_isolation` policy using `rls_check_tenant(tenant_id, '<table>')`;

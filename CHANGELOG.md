@@ -6,6 +6,90 @@ This service has never been deployed to any environment, and there is no release
 
 ## [Unreleased]
 
+### Fixed (2026-11-27 — production-readiness review round 2, LLD rev 0.60)
+
+**Money**
+- **`BIL-PAY-6`:** one provider invoice settles at most one purchase or plan change. An invoice found with `FindInvoice` that another seat purchase, plan change or add-on purchase already recorded is never voided, deleted or settled for this one, re-checked under the tenant lock; the `invoice.paid` fallback for an unrecorded invoice skips it too.
+- **`BIL-PAY-7`:** a purchase is granted only when the invoice's amount paid (or total) and currency equal the purchase's. Otherwise nothing is granted and SEV-2 `BillingPaymentParked` is logged ("provider payment does not match the purchase; operator decision needed"); a callback parks the ledger row as `failed:invoice_amount_mismatch`.
+- **Purchase invoices (§8.5.1):** a draft invoice is deleted (new port method `DeleteDraftInvoice`), not voided. Proration lookups (seats, upgrades) match invoices created at or after the purchase (no backward slack) with a positive line for the seats after or the target price; add-ons still match the exact metadata `purchase_id`.
+- **Token add-on (§8.7):** the invoice is created with `auto_advance=false`, so an empty draft never becomes a paid 0 invoice; paying it finalises it (B-P23 still works). A draft whose item fails is deleted at once; its id is returned only if the delete fails.
+- **Unlinked `invoice.paid` (§8.1.1, §8.15):** no `billing_subscription_id` metadata → `ignored:unknown_subscription`; a Billing subscription linked to a different provider subscription → `ignored:superseded_provider_subscription` (warning, nothing mirrored), except a `cancelled` subscription's `subscription_create` invoice, which retries while a B-P14 reactivation awaits its link.
+- **Conversion checkout (§8.1.1):** confirming the payment from `invoice.paid` marks the checkout session `completed`; a completion of an expired session is parked only when its subscription is ended or linked to another provider subscription (the already-linked one → `ignored:already_linked`).
+- **Checkout expiry (§13.2):** `purchase-expiry` expires the session at the provider first, outside any transaction, with B-P2's keys; a session the customer completed (`ErrCheckoutCompleted`) stays open for its callbacks; the outcome commits under the lock with a re-read.
+- **Idempotent resume (§9.2):** the adjustment and refund resume compares the whole body (adjustment: kind, amount, currency, description, reason; refund: invoice, amount, currency, category, reason) → `422 IDEMPOTENCY_KEY_REUSED`.
+- Stripe adapter version `1.1.0` (`adapterSemver`).
+
+**Operations**
+- New alert `BillingCronJobNeverSucceeded` (kube-state-metrics `kube_cronjob_status_last_schedule_time` / `kube_cronjob_status_last_successful_time` plus the pushed success stamp; SEV-2 `saga-sweeper`, SEV-3 others, for 15 min; a fresh deploy does not page). `app-alerts.yml` now has 27 rules for 20 alerts.
+- A background loop that stops is restarted in-process with backoff (1 s → 5 min) and alerted (`BillingBackgroundLoopStopped`); liveness no longer fails for it, only for the platform-audit runner's `Alive()`.
+- `BillingOutboxLag`: the gauge keeps its last value when its query fails; `platform_outbox_errors_total{operation="oldest_pending"}` counts the failures.
+- Startup runs the deterministic checks (configuration, Glue schema versions, each enabled queue's `RedrivePolicy` outside dev, a transient lookup retried 3 times) before any listener opens.
+- Shutdown order: readiness off → `SHUTDOWN_DRAIN_DELAY` → API drain ∥ workers → every pool closed once with `DrainAndClose` → metrics listener → tracer, logger last; worst case 48 s within 50 s.
+- Runbook `operator-review.md` covers the amount-mismatch case and separates the review trigger (`alert=BillingOperatorReviewNeeded`) from `BillingPaymentParked`.
+
+**Deployment and CI security**
+- `metrics.scrapeMode`: `plaintext` (default; metrics port `PERMISSIVE`, authorised by `metrics.monitoringCIDRs` or by the NetworkPolicy alone) or `mesh` (`STRICT`, authorised by namespace).
+- Staging and prod refuse to render with `PeerAuthentication`, `AuthorizationPolicy` or `NetworkPolicy` disabled.
+- HTTPS egress to public addresses, plus `networkPolicy.awsEndpointCIDRs` (server only, `BILLING_AWS_ENDPOINT_CIDRS`) for VPC interface endpoints and optional `networkPolicy.egressGateway`.
+- B-W1 rate limit: one bucket per IPv4 and per IPv6 client (`0.0.0.0/0`, `::/0`).
+- Migrate hook: ServiceAccount and Secret deleted on success or failure (Helm ≥ 3.19; CI and `release.yml` pin 3.21.4); `MIGRATE_TIMEOUT` 7m and `activeDeadlineSeconds` 480 under Helm's 10 min.
+- Kubernetes ≥ 1.30 everywhere (chart `kubeVersion`).
+- Workflows: `persist-credentials: false` on checkouts; the image build reads GHCR with `packages: read` and only the `main` push job writes the registry build cache; schema-gov installed from hash-locked requirements (`.github/schema-gov-requirements.txt`) without credentials; `release.yml` documents the `production` environment's deployment-branch rules (`v*` tags and `main` only) and the optional `BILLING_AWS_ENDPOINT_CIDRS` / `BILLING_MONITORING_CIDRS`. The render-guard values come from `release.yml` for production only; a staging deploy must supply them.
+
+**Repository**
+- The tracked 83 MB root `server` binary is untracked. `.gitignore` aligned with iam-org-membership's: `.go_private_token`, `.DS_Store`, `.vscode/`, `.claude/worktrees/`, `.tmp/`, and the root-anchored `/server`, `/jobs`, `/migrate`, `/certify`, `/commercial-billing`.
+- `.go-arch-lint.yml` restructured in iam-org-membership's layout (`workdir: .`, non-runtime directories excluded, commented components). It now also checks the `cmd/*` composition roots and the embedded `api` package; the component rules are unchanged (LLD §3.2, rev 0.61).
+- `.dockerignore` aligned with iam-org-membership's: secrets (`.env*`, `.go_private_token`), `.claude/`, `docs/`, `deploy/`, `scripts/`, Markdown, compose, tests and test artefacts, build outputs and the root-level binaries stay out of the build context (about 600 kB, previously including the 83 MB root `server` binary). Only `go.mod`/`go.sum`, `cmd/`, `internal/`, `pkg/` and `api/` are needed.
+
+**Outstanding**
+- Stripe adapter `1.1.0` needs its certification (B-O14 → B-O17 by a second `pci_owner_reviewer`) before Stripe takes new accounts.
+- The synchronous paid responses of `ChargeOneOff`, `ChangeQuantity` and `ChangePrice` are not amount-checked (the port results carry no amount).
+- ServiceMonitor TLS for `mesh` scrape mode is platform-specific and not rendered by the chart.
+- Go-live checks in LLD §20.10 (Pushgateway `honorLabels`, kube-state-metrics CronJob families, AWS endpoint CIDRs, client IP trust, `production` deployment-branch rules).
+
+### Fixed (2026-11-27 — production-readiness review, LLD rev 0.59)
+
+**Money and correctness**
+- **B-P2 superseded checkout:** the replaced session is expired at the provider (`ExpireCheckout`, key `bsub:<id>:expire`) before transaction 1; an already completed one answers `409 SUBSCRIPTION_ALREADY_EXISTS`. Transaction 2 re-reads the session, and a session a concurrent B-P2 replaced is expired at the provider and answered `409 CONCURRENT_UPDATE`. Before, a superseded session could still be paid.
+- **Callbacks (§8.1.1, §8.15):** a completion of a session Billing expired is parked as `failed:checkout_superseded`, and a first invoice paid for an ended subscription as `failed:paid_after_end` (no retry, SEV-2 log `BillingPaymentParked`, runbook `operator-review.md`). An `invoice.paid` processed before `checkout.session.completed` resolves the subscription from `billing_subscription_id` in the provider subscription metadata, else it is retried instead of ignored. `checkout.session.completed` whose session invoice is already paid confirms the conversion itself.
+- **Reactivation (§8.9):** only the first invoice (`subscription_create`) reactivates a `cancelled` subscription; a late payment of an old cycle invoice is mirrored, with no `TenantReactivated`.
+- **Purchases (§8.4.1, §8.5.1, §8.7):** a provider error on a charge keeps the purchase or upgrade `pending_payment`. New port method `FindInvoice` finds an invoice Billing did not record (add-on by metadata `purchase_id`; seats and upgrade by subscription, `billing_reason` and amount). `purchase-expiry` and declines void only an `open` / `draft` invoice; a paid invoice settles the purchase, never expires or fails it. Declines void outside the transaction (keys `addon:|seatpur:|planchg:<id>:void`).
+- **Idempotency (§9.2):** a retry under the same `Idempotency-Key` after a 5xx resumes the add-on purchase, adjustment or refund row and its provider key; a different body → `422 IDEMPOTENCY_KEY_REUSED`; a concurrent insert → `409 REQUEST_IN_PROGRESS` (new port error `port.ErrIdempotencyKeyTaken`); a row older than 23 h is not replayed.
+- **RP-3 (§9.3.2):** `409 optimistic_lock_conflict` and every 5xx are retried.
+- **I-18:** `400 invalid_target_plan` now maps to `500 INTERNAL`, as the LLD states.
+- **Ledger payload (`BIL-PCI-3`):** metadata limited to `tenant_id`, `billing_subscription_id`, `purpose`, `purchase_id`, `change_id`.
+- **saga-sweeper:** alerts overdue sagas before re-running due sagas, which get at most 80% of the remaining job time; the alert write takes the tenant lock (`BIL-CONC-1`), as does B-I1's provider-subscription write.
+- **Migration `000007_rls_helper_grants`:** `rls_check_tenant` executable only by `billing_app`, `admin_readonly` and `billing_audit_drainer`; `app_tenant_id` and `log_rls_violation` by no role.
+- Outbound calls forward the inbound `X-Request-ID` (`pkg/requestctx`).
+
+**Deployment**
+- `terminationGracePeriodSeconds` 60 with a native `preStop` sleep of 10 s (Kubernetes ≥ 1.30); the server's shutdown fits 50 s (worst case 45 s, `cmd/server/lifecycle.go`): readiness fails first, then HTTP, consumers, outbox and audit runner stop in parallel. New `SHUTDOWN_DRAIN_DELAY` (2 s, 0–5 s); `SQS_DRAIN_TIMEOUT` and `OUTBOX_DRAIN_TIMEOUT` capped at 15 s. Probe timeout 6 s; liveness covers the supervised in-pod loops and the audit runner's `Alive()`.
+- Pods labelled `app.kubernetes.io/component` `server` / `cronjob` / `migrate`; server selectors select `component=server` only. Istio native sidecars for the server and CronJobs (Istio ≥ 1.24); migrate runs without a sidecar.
+- B-I1 identity: the sidecar appends the verified client certificate to `X-Forwarded-Client-Cert` (`APPEND_FORWARD`); `PeerAuthentication` `STRICT` (metrics port `PERMISSIVE`) replaces the `forwardClientCertDetails: SANITIZE_SET` annotation, which applies to gateways only.
+- Migrate hook Job: own ServiceAccount `commercial-billing-migrate` (no IRSA) and hook Secret with only `MIGRATION_DATABASE_URL`. Secrets split per workload; `automountServiceAccountToken: false`; CronJob pools `PG_MAX_CONNS` 3, `PG_MIN_CONNS` 0, `PG_SYSTEM_MAX_CONNS` 2.
+- NetworkPolicies per workload (CronJob, migrate), istiod 15012 egress. B-W1 rate limit per client IP, optional `gateway.webhook.allowedSourceCIDRs`.
+- The chart refuses to render staging / prod with the placeholder account `000000000000`, no IRSA role ARN, empty SNS / tenant queue values or empty `postgresCIDRs`; `release.yml` passes them from `BILLING_*` environment variables.
+- Config: `USAGE_BILLING_CONSUMER_ENABLED` (false, BL-OQ-24; queue URL required only when true); required secrets per binary; in Kubernetes an unset `APP_ENV` fails closed.
+
+**Operations and observability**
+- `cmd/server` now calls `events.InitMetrics`: platform-events' `platform_*` series were never emitted, so `BillingDLQNotEmpty` and `BillingOutboxDeadLetter` could not fire.
+- New gauges `commercial_billing_background_loop_running`, `…_cron_job_last_success_timestamp_seconds`, `…_metrics_snapshot_last_success_timestamp_seconds`, `…_seat_projection_last_run_mismatches`. Snapshot gauges always expose the known statuses (0 included), so the HPA's `status="received"` series never disappears.
+- New alerts `BillingQueueBacklog`, `BillingQueueStalled`, `BillingOutboxLag`, `BillingBackgroundLoopStopped`, `BillingMetricsSnapshotStale`, `BillingCronJobNotSucceeding`, with runbooks. `BillingDLQNotEmpty` reads the source queue names; `BillingSeatProjectionDrift` reads the per-run gauge (`repeat="true"`).
+- Metrics listener has read, write and idle timeouts.
+
+**Security and supply chain**
+- Workflow actions pinned by SHA; `GO_PRIVATE_TOKEN` used only in the download step, then `GOPROXY=off`; AWS through GitHub OIDC (`AWS_ROLE_ARN`); release tags must be on `main`; the registry build cache is written only from `main`; Cosign identities pinned to `ci.yml@refs/heads/main` and `release.yml`.
+
+**Outstanding**
+- BL-OQ-29: `OUTBOX_MAX_ATTEMPTS` stays 5 (HLD §9.3 owns it). Recommended 10 with `OUTBOX_RETRY_BACKOFF=30s` and `OUTBOX_MAX_RETRY_BACKOFF=5m`: today an SNS or Glue outage dead-letters every row in about a minute.
+- The SEV-2 `BillingPaymentParked` page needs a Loki rule (observability team) on `alert="BillingPaymentParked"`.
+
+**Found, owned by other teams** (BL-OQ-28, `docs/lld/billing-open-items.md` §4.4)
+- Entitlements F-5 (critical): its SQS consumer has no Glue decode codec, so every Glue-framed Billing event would be retried and dead-lettered once Billing publishes Glue-framed events (staging, prod); dev-like environments publish plain JSON.
+- Entitlements F-1 / F-2 still open: every add-on purchase gets `503 ENTITLEMENTS_UNAVAILABLE`.
+- Entitlements F-6: a `TenantPlanChanged` processed before Core applies the plan is never corrected.
+- Realm Provisioner: queue named `iam-billing-realm-q` in its IaC example, `billing-realm-q` in Billing's AsyncAPI.
+
 ### Added (2026-11-27 — deploy references)
 
 - **`deploy/iam/`** (`README.md`, `policy.json`, `policy.tf.example`): the least-privilege IRSA policy for `system:serviceaccount:billing:commercial-billing`.

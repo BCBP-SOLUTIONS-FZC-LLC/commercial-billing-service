@@ -2,7 +2,7 @@
 
 This document describes the internal structure, dependency rules and runtime data flows of `commercial-billing-service`.
 
-`commercial-billing` is a **private Go service** (`github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service`, Go 1.26.11), deployed as a containerised microservice in namespace `billing` (HPA 2–4 replicas). It refines the **Commercial Domain HLD v0.65** and is specified by its LLD, [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md). The LLD is the source of truth: where this document and the LLD disagree, the LLD wins, and this document should be fixed.
+`commercial-billing` is a **private Go service** (`github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service`, Go 1.26.11), deployed as a containerised microservice in namespace `billing` (HPA 2–4 replicas). It refines the **Commercial Domain HLD v0.65** and is specified by its LLD, [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md) (rev 0.61). The LLD is the source of truth: where this document and the LLD disagree, the LLD wins, and this document should be fixed.
 
 **What Billing owns:**
 - subscriptions, renewals and seat licensing;
@@ -19,10 +19,12 @@ This document describes the internal structure, dependency rules and runtime dat
 **Three binaries ship from one image:**
 - `cmd/server` (`/commercial-billing`), which runs:
   - the HTTP surface: tenant, internal, webhook and operator routes;
-  - two inbound SQS consumers;
+  - the `tenant-billing-q` consumer, plus the `usage-billing-q` consumer only when `USAGE_BILLING_CONSUMER_ENABLED=true` (default `false`, BL-OQ-24);
   - the platform-events outbox runner and the platform-audit outbox runner;
   - the webhook processor, the saga worker, the lifecycle follow-up worker and the reconciliation worker;
   - the delayed-emission worker, the provider-registry refresh and a metrics snapshot exporter.
+
+  Every in-pod loop runs under the supervisor in `cmd/server/lifecycle.go`, which restarts a stopped loop in-process (the platform-audit runner, single-use, is the one exception and fails liveness instead).
 - `cmd/jobs` (`/jobs`): one binary dispatched by `--job=<name>`, covering 10 CronJobs.
 - `cmd/migrate` (`/migrate`): applies the schema once per release as a Helm pre-install/pre-upgrade hook Job, then exits.
 
@@ -37,7 +39,7 @@ A fourth binary, `cmd/certify`, is the provider certification suite. It is an op
 - notifications (Notification);
 - card data, which stays with the provider: the browser tokenises it, and no PAN, CVV or expiry ever reaches Billing.
 
-**State:** Phases 0–8 are implemented on the stacked branches `feat/billing-phase-<n>-*`, while `main` holds only the LLD. Nothing is deployed to any environment.
+**State:** Phases 0–8 are implemented. Phases 0–5 are on the stacked branches `feat/billing-phase-0-scaffolding` … `feat/billing-phase-5-api`; phases 6–8 and all later work, including the fixes from two production-readiness review rounds (LLD rev 0.59 and 0.60), are on `feat/billing-phase-6-flows`. `main` holds only the LLD. Nothing is deployed to any environment.
 
 ---
 
@@ -52,9 +54,9 @@ The service is organised in concentric hexagonal layers, and dependencies point 
 ```mermaid
 graph TD
     subgraph cmd["Composition roots — cmd/ (three runtime binaries in one image, plus cmd/certify)"]
-        server["server/main.go + wiring.go + events.go + identity.go<br/>config.Load (refuses to start on any bad key, §12)<br/>gincommon logger, tracing, metrics registry, then pgcommon pool metrics<br/>optional RUN_MIGRATIONS (Helm sets false — the migrate hook Job owns it)<br/>bootstrap.Pools: app pool billing_app (RLS) + sysPool billing_system (BYPASSRLS)<br/>bootstrap.Providers + first certification refresh<br/>bootstrap.Audit (platform-audit outbox mode) · bootstrap.NewService<br/>event bus: outbox runner + SNS publisher with Glue codec, two SQS consumers, delayed emissions<br/>router: webhook route, API routes, docs routes<br/>background loops: webhook processor, saga worker, lifecycle follow-ups,<br/>reconciliation runs, registry refresh, metrics snapshot, audit runner<br/>API on APP_PORT 8080, /metrics on METRICS_PORT 9090<br/>shutdown: HTTP drain, then workers, then both pools in parallel, then gincommon flush<br/>terminationGracePeriodSeconds 45"]
+        server["server/main.go + wiring.go + events.go + lifecycle.go + service.go + identity.go<br/>config.Load (refuses to start on any bad key, §12)<br/>gincommon logger, tracing, metrics registry, then pgcommon pool metrics<br/>optional RUN_MIGRATIONS (Helm sets false — the migrate hook Job owns it)<br/>bootstrap.Pools: app pool billing_app (RLS) + sysPool billing_system (BYPASSRLS)<br/>bootstrap.Providers + first certification refresh<br/>bootstrap.Audit (platform-audit outbox mode) · bootstrap.NewService<br/>event bus: outbox runner + SNS publisher with Glue codec, tenant-billing-q consumer (+ usage-billing-q when enabled), delayed emissions<br/>deterministic startup checks before listen: Glue schema versions, queue RedrivePolicy outside dev<br/>router: webhook route, API routes, docs routes<br/>background loops: webhook processor, saga worker, lifecycle follow-ups,<br/>reconciliation runs, registry refresh, metrics snapshot, audit runner<br/>(supervised: a stopped loop restarts in-process, backoff 1 s to 5 min)<br/>API on APP_PORT 8080, /metrics on METRICS_PORT 9090<br/>shutdown: /readyz fails, SHUTDOWN_DRAIN_DELAY, HTTP drain ∥ consumers/outbox/audit,<br/>pools, metrics listener, tracer, logger flush (worst case 48 s of a 50 s budget)<br/>terminationGracePeriodSeconds 60 (preStop sleep 10 s)"]
         jobs["jobs/main.go<br/>one binary, --job=name, ten CronJobs (§13.2)<br/>saga-sweeper · seat-renewal · downgrade-apply · purchase-expiry<br/>seat-projection-check · pii-minimisation · outbox-prune<br/>processed-events-prune · renewal-repricing · idempotency-prune<br/>same use cases as the server (internal/bootstrap)<br/>pushes its run's series to PUSHGATEWAY_URL"]
-        migrate["migrate/main.go<br/>MigrateSchema: outbox + inbox schemas, then the audit outbox, then 000001–000006<br/>MIGRATION_DATABASE_URL, direct to Postgres, never PgBouncer<br/>Helm hook Job, exit 0 or 1"]
+        migrate["migrate/main.go<br/>MigrateSchema: outbox + inbox schemas, then the audit outbox, then 000001–000007<br/>MIGRATION_DATABASE_URL, direct to Postgres, never PgBouncer<br/>Helm hook Job, exit 0 or 1"]
         certify["certify/main.go (not in the image)<br/>run · submit (B-O14) · review (B-O17) · check (release gate)"]
     end
 
@@ -87,7 +89,7 @@ graph TD
     end
 
     subgraph pkg_grp["Shared packages — pkg/"]
-        requestctx["requestctx/<br/>RequestContext{UserID, TenantID, Roles, ClientIP, UserAgent}"]
+        requestctx["requestctx/<br/>RequestContext{UserID, TenantID, Roles, ClientIP, UserAgent}<br/>imported only by http/ and httpx/"]
     end
 
     server --> bootstrap
@@ -97,27 +99,26 @@ graph TD
     server --> http_a
     server --> webhook_a
     server --> consumer_a
+    server --> obs_a
+    jobs --> obs_a
     bootstrap --> app
     bootstrap --> postgres_a
     bootstrap --> eventbus_a
     bootstrap --> provider_a
     bootstrap --> iam_a
-    bootstrap --> obs_a
     http_a --> app
     webhook_a --> app
     consumer_a --> app
-    http_a --> obs_a
-    webhook_a --> obs_a
-    consumer_a --> obs_a
+    http_a --> requestctx
     app --> port
     app --> domain
     port --> domain
     postgres_a --> port
-    eventbus_a --> port
+    eventbus_a --> domain
     provider_a --> port
-    provider_a --> httpx_a
     iam_a --> port
     iam_a --> httpx_a
+    httpx_a --> requestctx
     obs_a --> port
 ```
 
@@ -137,7 +138,7 @@ graph TD
 
 ## Package dependency graph
 
-Arrows are Go `import` relationships between project packages. The graph mirrors `.go-arch-lint.yml` component by component; vendor imports are governed by depguard, not shown.
+Arrows are Go `import` relationships between project packages, as `go list` reports them for production code. Edges from the composition roots (`cmd/*`, `internal/bootstrap`, `internal/certify`) to `app`, `port` and `domain` are left out for legibility. `.go-arch-lint.yml` is the enforced rule set; it also allows a few edges the code doesn't use today (inbound adapters → `metrics`, provider registry → `stripe` / `manual`, `stripe` → `httpx`, `eventbus` → `port`). Vendor imports are governed by depguard, not shown.
 
 ```mermaid
 graph LR
@@ -168,59 +169,68 @@ graph LR
     httpx(["adapters/httpx"])
     metrics(["adapters/metrics"])
     observability(["adapters/observability"])
+    requestctx(["pkg/requestctx"])
 
     server --> bootstrap
+    server --> config
     server --> http
     server --> webhook
     server --> consumer
+    server --> postgres
+    server --> eventbus
+    server --> registry
+    server --> httpx
+    server --> metrics
+    server --> observability
     jobsb --> bootstrap
+    jobsb --> config
+    jobsb --> postgres
+    jobsb --> httpx
+    jobsb --> metrics
+    jobsb --> observability
+    migrateb --> config
     migrateb --> postgres
     certifyb --> certify
 
     certify --> bootstrap
+    certify --> config
     certify --> postgres
     certify --> stripe
     certify --> webhook
     bootstrap --> config
-    bootstrap --> app
     bootstrap --> postgres
     bootstrap --> eventbus
     bootstrap --> registry
+    bootstrap --> stripe
+    bootstrap --> manual
     bootstrap --> iamclient
     bootstrap --> entclient
-    bootstrap --> metrics
-    bootstrap --> observability
+    bootstrap --> httpx
 
     http --> app
-    http --> port
-    http --> domain
-    http --> metrics
+    http --> requestctx
     webhook --> app
-    webhook --> metrics
     consumer --> app
-    consumer --> metrics
 
     app --> port
     app --> domain
     port --> domain
 
     postgres --> port
-    eventbus --> port
-    registry --> stripe
-    registry --> manual
+    eventbus --> domain
     registry --> port
     stripe --> port
-    stripe --> httpx
     manual --> port
     iamclient --> port
     iamclient --> httpx
     entclient --> port
     entclient --> httpx
+    httpx --> requestctx
     metrics --> port
     observability --> port
 ```
 
-`config` and `httpx` depend on no other project component. `metrics` is the one cross-cutting component that inbound adapters may import, so they can count outcomes where they happen. The app layer reports through `port.Metrics` and `port.Tracer`, not through adapters.
+`config` and `pkg/requestctx` depend on no other project component, and `requestctx` is imported only by `http` (the router) and `httpx` (forwards `X-Request-ID`). Every adapter except `observability`, `httpx` and the registry also imports `domain`, and the inbound adapters import `port` (not drawn). Inbound adapters may import `metrics` to count outcomes where they happen; today `cmd/server` passes the metrics in instead. The app layer reports through `port.Metrics` and `port.Tracer`, not through adapters.
 
 ---
 
@@ -302,7 +312,7 @@ Every error on every path is an RFC 9457 problem produced by platform-gincommon 
 Billing adds only the `Retry-After` header (on `409 REQUEST_IN_PROGRESS` and `503`) and the idempotency replay. The replay re-sends the stored response, which is the same JSON document; it is not the same bytes, because `idempotency_records.response_body` is `jsonb` and Postgres normalises key order and spacing.
 
 **Probes:**
-- **`/healthz`** (liveness) never checks a dependency. It fails only when a registered background loop stops.
+- **`/healthz`** (liveness) never checks a dependency. It fails only when the platform-audit runner's `Alive()` fails; a background loop that stops is restarted in-process with backoff (1 s → 5 min) and alerted (`BillingBackgroundLoopStopped`), not a liveness failure (LLD rev 0.60).
 - **`/readyz`** (readiness) checks the app pool and the sysPool. They are separate physical connections, so a credential rotation on `billing_system` alone is caught.
 
 ---
@@ -325,8 +335,8 @@ sequenceDiagram
 
     B ->> BFF: SB-5 (payment token from Stripe.js, never card data)
     BFF ->>+ SC: POST authorize-and-charge<br/>Idempotency-Key charge:tenant_id, x-tenant-id
-    SC ->>+ H: mTLS verified, X-Forwarded-Client-Cert set (SANITIZE_SET)
-    Note over H: principal must be cluster.local/ns/bff/sa/bff-signup (BIL-AUTH-3)<br/>body tenant_id must equal x-tenant-id<br/>same key, different body → 409 SUBSCRIPTION_ALREADY_EXISTS
+    SC ->>+ H: mTLS verified (PeerAuthentication STRICT), verified cert appended to X-Forwarded-Client-Cert (APPEND_FORWARD)
+    Note over H: last XFCC element's principal must be cluster.local/ns/bff/sa/bff-signup (BIL-AUTH-3)<br/>body tenant_id must equal x-tenant-id<br/>same key, different body → 409 SUBSCRIPTION_ALREADY_EXISTS
     H ->>+ UC: request
     UC ->> DB: tenant tx: live subscription? (incomplete direct signup → continue it)
     UC ->>+ P: customer, then subscription (keys bsub:id:customer, :create) — outside any tx
@@ -418,8 +428,8 @@ stateDiagram-v2
     [*] --> awaiting_tenant_converted: B-I1 paid
     payment_confirmed --> rp_convert_pending: same commit
     rp_convert_pending --> awaiting_tenant_converted: RP-3 200 or 409 realm_already_dedicated
-    rp_convert_pending --> rp_convert_pending: 409 in progress, 502, 503, timeout — backoff
-    rp_convert_pending --> failed: 409 tenant_offboarded, 400, 403, 404
+    rp_convert_pending --> rp_convert_pending: 409 operation_in_progress / optimistic_lock_conflict, any 5xx, timeout (backoff)
+    rp_convert_pending --> failed: 409 tenant_offboarded, other 409, 400, 403, 404
     rp_convert_pending --> confirmed: TenantConverted arrived first
     awaiting_tenant_converted --> confirmed: TenantConverted
     failed --> rp_convert_pending: B-O9 retry
@@ -478,6 +488,12 @@ Every `failed` ledger row has one of three endings (`BIL-OPS-6`):
 - an operator sets it `ignored` with a reason (B-O13 replay);
 - the next reconciliation run (B-O5) lists it.
 
+**Parked outcomes and purchase settlement** (LLD rev 0.59, 0.60; `internal/app/webhook_processor.go`, `purchase_invoice.go`):
+- Some payments cannot be applied safely and are parked instead of retried, with a SEV-2 log line `BillingPaymentParked` for an operator (runbook `operator-review.md`): `failed:checkout_superseded` (a checkout Billing expired was completed anyway), `failed:paid_after_end` (the first invoice was paid for an ended subscription) and `failed:invoice_amount_mismatch`.
+- A purchase's invoice (seats, upgrade, add-on) is re-read outside any transaction when a purchase is declined or expires: `open` is voided, `draft` deleted, and `paid` settles the purchase only when the amount paid (or total) and the currency equal the purchase's (`BIL-PAY-7`); otherwise nothing is granted and the payment is parked.
+- An invoice Billing has not recorded is looked up with `FindInvoice` (add-ons by metadata `purchase_id`, proration invoices by subscription, amount, currency and lines, never from before the purchase). An invoice already recorded on another purchase or plan change is never used, re-checked under the tenant lock (`BIL-PAY-6`).
+- An unlinked `invoice.paid` is resolved through the `billing_subscription_id` metadata of the provider subscription on the re-read invoice; a Billing subscription linked to a different provider subscription is `ignored:superseded_provider_subscription`.
+
 ---
 
 ## Cache strategy
@@ -503,7 +519,7 @@ Billing has **no shared cache**. Money, seat and status state is always read fro
 **Database:**
 - one Postgres 17 database, with PgBouncer in transaction mode for the app pool; migrations go direct;
 - **25 Billing tables**, plus platform-events' `outbox_events`, `outbox_dead_letters` and `processed_events`, and platform-audit's `pending_audit_entries`;
-- migrations `000001`–`000006` (`internal/adapters/postgres/migrations`), applied after the library schemas (LLD §4.4).
+- migrations `000001`–`000007` (`internal/adapters/postgres/migrations`), applied after the library schemas (LLD §4.4); `000007` narrows `EXECUTE` on the RLS helpers (`rls_check_tenant` for `billing_app`, `admin_readonly` and `billing_audit_drainer` only).
 
 **RLS:** **18 Billing tables** are tenant-scoped, as is `pending_audit_entries`. Each has `ENABLE` + `FORCE ROW LEVEL SECURITY` and the `tenant_isolation` policy (`rls_check_tenant(tenant_id, '<table>')`, `BIL-RLS-1`).
 
@@ -727,7 +743,7 @@ Everything goes through platform-gincommon (`BIL-OPS-10`):
 - The inventory is generated into [`docs/observability/metric-registry.md`](docs/observability/metric-registry.md) by `make metrics-inventory`.
 
 **Rules and dashboards** (`deploy/monitoring/`, with chart copies under `deploy/helm/files/`):
-- `app-alerts.yml`: 14 rules for 13 Billing alerts (`BillingWebhookBacklog` has two thresholds), each with a `runbook_url` into [`docs/runbooks/`](docs/runbooks/);
+- `app-alerts.yml`: 27 rules for 20 Billing alerts (`BillingWebhookBacklog` has two thresholds, `BillingCronJobNotSucceeding` one rule per job cadence, `BillingCronJobNeverSucceeded` a SEV-2 rule for `saga-sweeper` and a SEV-3 rule for the others), each with a `runbook_url` into [`docs/runbooks/`](docs/runbooks/). Log-based alerts (`BillingReversalDecisionNeeded`, `BillingReviewTrigger`, the SEV-2 `BillingPaymentParked`) are Loki rules owned by the observability team;
 - `recording-rules.yml` and `slo-rules.yml`: availability and latency SLOs with burn-rate alerts;
 - the vendored `platform-audit.rules.yml`;
 - the "Commercial / Billing" Grafana dashboard, and the shared "Platform audit delivery" dashboard;
@@ -799,20 +815,20 @@ Everything goes through platform-gincommon (`BIL-OPS-10`):
 | Paid, saga not confirmed | `saga-sweeper` | `BillingConversionSagaOverdue` (SEV-2) at 30 min; runbook: retry or refund (B-O9) |
 | Seat projection drift | `seat-projection-check` | Re-emits the seat snapshot with a fresh `time` |
 
-Full table: LLD §9.5. Runbooks: [`docs/runbooks/`](docs/runbooks/) (20 files, one per alert plus disaster recovery, key rotation, certification and the Test Clock rehearsal).
+Full table: LLD §9.5. Runbooks: [`docs/runbooks/`](docs/runbooks/) (27 files: a README index and 26 runbooks, one per alert family plus operator review, reversal decision, dependency degradation, disaster recovery, key rotation, certification and the Test Clock rehearsal).
 
 ---
 
 ## Key invariants
 
-About 70 `BIL-*` invariants are defined in the LLD. Each is referenced by ID at its enforcement point and tested by a test whose name contains the ID. [`docs/invariants-coverage.md`](docs/invariants-coverage.md) maps every one to its enforcement location, test and status. The ones that shape the architecture:
+76 `BIL-*` invariants are defined in the LLD. Each is referenced by ID at its enforcement point and tested by a test whose name contains the ID. [`docs/invariants-coverage.md`](docs/invariants-coverage.md) maps every one to its enforcement location, test and status. The ones that shape the architecture:
 
 | Invariant | Rule |
 |---|---|
 | `BIL-PCI-1..3`, `BIL-API-4` | No card data, provider key or webhook secret anywhere; `client_secret` only in the 3-D Secure action returned to the payer; stripe-go only in the Stripe adapter |
 | `BIL-CONC-1`, `BIL-CONC-2` | Per-tenant lock on every write; no HTTP inside a transaction |
 | `BIL-EVT-2`, `BIL-EVT-5` | State and event in one transaction, ordered per tenant through the outbox |
-| `BIL-PAY-1..5` | Ledger first, verify, resolve tenant from Billing's mapping, re-read, per-tenant order |
+| `BIL-PAY-1..7` | Ledger first, verify, resolve tenant from Billing's mapping, re-read, per-tenant order; one invoice settles at most one purchase; a purchase is granted only for an invoice paid in its amount and currency |
 | `BIL-IDEM-1..3`, `BIL-API-3` | A charging route stores its outcome before returning; provider keys from Billing ids only |
 | `BIL-SAGA-1`, `BIL-OPS-5` | RP-3 only after server-side payment confirmation; an unconfirmed saga pages once at 30 min |
 | `BIL-SUB-3`, `BIL-SUB-4`, `BIL-SUB-5` | One live subscription; transitions only through the domain table; seats change only on confirmed payment or renewal |
@@ -837,21 +853,27 @@ About 70 `BIL-*` invariants are defined in the LLD. Each is referenced by ID at 
 
 ### Helm chart
 
-`deploy/helm`: namespace `billing`, with ServiceAccount and `app.kubernetes.io/name` both `commercial-billing` (`BIL-OPS-4`).
+`deploy/helm` (chart 0.7.0, `kubeVersion >=1.30`): namespace `billing`, with ServiceAccount and `app.kubernetes.io/name` both `commercial-billing` (`BIL-OPS-4`).
 
 - **Workload:**
-  - Deployment: 2 replicas, `terminationGracePeriodSeconds: 45`;
+  - Deployment: 2 replicas, `terminationGracePeriodSeconds: 60` with a native `preStop` sleep of 10 s (Kubernetes ≥ 1.30), leaving the app a 50 s shutdown budget (worst case 48 s, `cmd/server/lifecycle.go`); probes time out after 6 s; liveness covers only the audit runner's `Alive()` (stopped loops restart in-process);
   - HPA 2–4 on CPU 70%, plus an optional external metric on the webhook backlog;
   - PDB;
-  - ten CronJobs (`concurrencyPolicy: Forbid`) with schedules matching `cmd/jobs`;
-  - the migrate pre-install / pre-upgrade hook Job.
+  - ten CronJobs (`concurrencyPolicy: Forbid`) with schedules matching `cmd/jobs`, and pools of `PG_MAX_CONNS` 3, `PG_MIN_CONNS` 0, `PG_SYSTEM_MAX_CONNS` 2;
+  - the migrate pre-install / pre-upgrade hook Job (weight -5, no sidecar, `activeDeadlineSeconds` 480, `MIGRATE_TIMEOUT` 7m, both under `release.yml`'s Helm `--timeout=10m`), with its own hook ServiceAccount `commercial-billing-migrate` (no IRSA) and hook Secret holding only `MIGRATION_DATABASE_URL` (hook weight -10, deleted on success or failure; needs Helm ≥ 3.19);
+  - pods labelled `app.kubernetes.io/component` `server` / `cronjob` / `migrate`; server selectors select `component=server` only;
+  - one secret set per workload; `automountServiceAccountToken: false`.
 - **Mesh and network:**
-  - the pod annotation `proxy.istio.io/config` sets `forwardClientCertDetails: SANITIZE_SET`, so the sidecar forwards `X-Forwarded-Client-Cert` (B-I1 identity);
+  - Istio native sidecars for the server and the CronJobs (Istio ≥ 1.24, Kubernetes ≥ 1.30); the migrate Job runs without one;
+  - the sidecar's inbound listener appends the verified client certificate to `X-Forwarded-Client-Cert` (`APPEND_FORWARD`, the sidecar default; `forwardClientCertDetails` in ProxyConfig applies to gateways only); B-I1 reads its caller from the last element. `PeerAuthentication` `STRICT` on Billing's workloads stops a plaintext caller from writing that element itself;
+  - metrics scrape (`metrics.scrapeMode`): `plaintext` (default; Prometheus outside the mesh) leaves the metrics port `PERMISSIVE`, serving `/metrics` only, authorised by `metrics.monitoringCIDRs` when set or by the NetworkPolicy (monitoring namespace) alone; `mesh` keeps `STRICT` on every port and authorises by namespace;
   - NetworkPolicy and Istio AuthorizationPolicy admit only `bff/bff-signup` on B-I1;
-  - egress to Entitlements is allowed only on the eligibility `GET` (W-10);
+  - egress to Entitlements is allowed only on the eligibility `GET` (W-10); istiod on 15012; HTTPS to public addresses, plus `networkPolicy.awsEndpointCIDRs` (server only) for VPC interface endpoints and an optional `networkPolicy.egressGateway`;
+  - CronJob and migrate pods have their own NetworkPolicies (CronJobs: DNS, istiod, Postgres, Core and RP, 443, Pushgateway, OTel; migrate: DNS and 5432);
   - the monitoring namespace may reach `/metrics`.
-- **Gateway:** tenant and operator `HTTPRoute`s; the operator route lists B-O1…B-O17.
-- **Monitoring and secrets:** `ServiceMonitor`; `PrometheusRule`; a dashboard ConfigMap; `ExternalSecret` for every secret.
+- **Gateway:** tenant and operator `HTTPRoute`s; the operator route lists B-O1…B-O17; tenant routes are limited to 20 rps per tenant; B-W1 is rate-limited to 50 rps per client IP (one bucket per IPv4 and per IPv6 client; needs the gateway's `numTrustedHops` to see the real client), with an optional source-CIDR allow-list (`gateway.webhook.allowedSourceCIDRs`).
+- **Render-time guards:** staging and prod refuse to render with `PeerAuthentication`, `AuthorizationPolicy` or `NetworkPolicy` disabled, the placeholder account `000000000000`, a missing IRSA role ARN, empty SNS topic or tenant queue values, or empty `networkPolicy.postgresCIDRs`; every environment needs `metrics.scrapeMode` `plaintext` or `mesh`. `release.yml` sets the account values for the production deploy only, from the `production` environment's `BILLING_*` variables; a staging deploy must supply them itself.
+- **Monitoring and secrets:** `ServiceMonitor`; `PrometheusRule`; a dashboard ConfigMap; `ExternalSecret`s per workload.
 - **Defaults:** `OPERATOR_PATH_LIVE: "false"`, `FEATURE_DIRECT_SIGNUP: "false"`, `FEATURE_TOKEN_ADDONS: "false"`.
 - **Values:** `values.yaml`, plus `values-dev.yaml`, `values-staging.yaml` and `values-prod.yaml`.
 
@@ -859,7 +881,7 @@ About 70 `BIL-*` invariants are defined in the LLD. Each is referenced by ID at 
 - `helm lint --strict`;
 - `helm template` + kubeconform for every values file;
 - `promtool` on the rules;
-- the chart contract tests (`test/helm`): names, XFCC annotation, operator gate default, CronJobs = `cmd/jobs`, operator routes, NetworkPolicy, HPA/PDB/migrate, and alert → runbook links.
+- the chart contract tests (`test/helm`): names, `PeerAuthentication` STRICT, operator gate default, CronJobs = `cmd/jobs`, operator routes, NetworkPolicies per workload, component labels and selectors, native sidecars, secrets per workload, migrate hook prerequisites, placeholder guards, shutdown and probes, no service-account token, webhook rate limit and sources, CronJob pools, HPA/PDB/migrate, and alert → runbook links.
 
 ### Migration safety
 
@@ -887,13 +909,15 @@ A change under `internal/adapters/provider/<name>/`, or of the pinned provider A
 | Bus | `test/bus` (tag `integration`) | Docker (floci) | Framed publish, ordered delivery, consumption with dedup and DLQ, Glue codec |
 | Stripe | `test/stripemock` (tag `integration`) | Docker (stripe-mock) | The Stripe adapter against the mock |
 | Certification | `test/certify` (tag `integration`) | Docker | The `cert-1.0` suite end to end |
+| Scenarios | `test/scenarios/{commerce,jobs,lifecycle}` (tag `integration`) | Docker | Less-travelled use-case paths on Postgres 17 with the production roles (`test/testkit`): scripted provider outcomes and errors, IAM and Entitlements answers, storage faults injected at the ports; each refusal, rollback and retry asserted against the database, outbox and provider calls |
 | End to end | `test/e2e` (tag `integration`) | Docker | The production router and middleware over HTTP on the real `Service` and Postgres 17 (production roles, RLS); only the outbound world is faked (`test/testkit`). Error shape, tenant isolation, role matrix, operator gate, B-I1 caller and key, B-W1 signature and ledger, idempotent replay and concurrent duplicates, the route catalogue |
 | Helm | `test/helm` (tag `helm`) | helm | Chart contract |
 | Staging | `scripts/testclock` | Staging + Stripe test mode | Test Clock scenarios: renewals, dunning, suspension across renewal, repricing |
 
 **How to run them:**
 - `make test` runs unit, HTTP, contract and observability tests with `-race`.
-- `make test-integration` runs `./test/...` with the `integration` tag.
+- `make test-integration` runs `./test/...`, `./internal/...` and `./cmd/...` with the `integration` tag.
+- `make cover-all` runs every suite in one coverage profile; CI's gate (`coverage-gate.sh`) is ≥ 96% over `internal/` + `pkg/`, currently 98.4% (97.8% over every package).
 - `make ci` is the full local gate.
 - The `/ci-local` skill reproduces every CI job.
 
@@ -919,7 +943,7 @@ A service consuming `billing.events` must:
 3. Update the payload type and `Validate()` in `internal/domain/events.go`, and add a sample to `test/contract`.
 4. Make additive changes only: schemas are open, and consumers tolerate unknown fields.
 5. Register the new schema version in Glue `billing-events` per environment **before** the deploy. The server resolves versions at start and refuses to run ahead of the registry.
-6. CI `schema` job: `schema-gov extract --check` and `validate`.
+6. CI: `validate-test.yml` runs `schema-gov extract --check` and `validate`; `schema-registry.yml` diffs against the registry (a breaking change fails) and registers (staging on `main`, production on release).
 
 ---
 
@@ -956,6 +980,8 @@ A service consuming `billing.events` must:
 | `make helm-check` | Chart, rules and chart contract tests |
 | `make certify-rehearsal`, `make testclock`, `make check-first-deploy ENV=…` | Certification suite on stripe-mock; Test Clock rehearsal in staging; first-deploy order check |
 
+**Git hooks (`.githooks/`, installed by `make setup` / `make install-hooks`):** `pre-commit` refuses a staged `.env` and runs tidy, fmt-check, lint, guards and openapi-check; `pre-push` runs `make trivy`.
+
 **Claude Code project setup (`.claude/`):**
 - topic notes;
 - a hook that blocks edits to generated files and `.env`;
@@ -970,7 +996,11 @@ A service consuming `billing.events` must:
 - BL-OQ-8, Signup BFF (code merged; Pact and the staging E2E pending);
 - OP-G2 and OP-G3, the operator path;
 - BL-OQ-24, the `UsagePeriodClosed` contract;
-- BL-OQ-12, Notification messages.
+- BL-OQ-12, Notification messages;
+- BL-OQ-28, Entitlements' findings: Glue decode on its consumer (F-5, critical), access to the eligibility route (F-1, F-2) and the `TenantPlanChanged` race (F-6);
+- BL-OQ-29, the outbox retry window (an HLD §9.3 change).
+
+**Before go-live:** certification of Stripe adapter 1.1.0 in staging (the release gate fails until then), the Loki rules for the log-based alerts (`BillingReversalDecisionNeeded`, `BillingReviewTrigger`, `BillingPaymentParked`), and the LLD §20.10 checks (Pushgateway `honorLabels`, kube-state-metrics CronJob families, AWS endpoint CIDRs, client IP trust, scrape mode, `production` deployment-branch rules).
 
 **Gaps known in this repository:**
 - **Caches:** the price-book and I-11 display caches of LLD §6 are not implemented (see Cache strategy).
@@ -987,9 +1017,11 @@ A service consuming `billing.events` must:
 | [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md) | The LLD — source of truth (revision history at the top) |
 | [`docs/lld/billing-open-items.md`](docs/lld/billing-open-items.md) | What other teams still owe, by team |
 | [`docs/invariants-coverage.md`](docs/invariants-coverage.md) | Every `BIL-*` invariant → enforcement → test |
-| [`docs/runbooks/`](docs/runbooks/) | One runbook per alert, plus DR, key rotation, certification, Test Clock |
+| [`docs/runbooks/`](docs/runbooks/) | 26 runbooks and a README index: one per alert family, plus operator review, reversal decision, dependency degradation, DR, key rotation, certification, Test Clock |
 | [`docs/observability/metric-registry.md`](docs/observability/metric-registry.md) | Generated metric inventory |
 | [`docs/observability/registry-proposals.md`](docs/observability/registry-proposals.md) | Tier 2 candidates and the proposed platform entries Billing relies on |
 | [`docs/swagger/openapi.json`](docs/swagger/openapi.json) | OpenAPI 3.1, generated from the route table (also `GET /openapi.json`) |
 | [`api/asyncapi.yaml`](api/asyncapi.yaml) | AsyncAPI 3.0 — produced and consumed events (also `GET /asyncapi`) |
 | [`.claude/`](.claude/) | Claude Code notes, hooks, skill and reviewer agents |
+
+The full repository layout is in [`README.md`](README.md#repository-layout).

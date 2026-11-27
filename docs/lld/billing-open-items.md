@@ -2,10 +2,10 @@
 
 | Field | Value |
 |---|---|
-| Billing LLD | `commercial-lld-billing-service.md` rev 0.48 (base HLD v0.65). The LLD's §16.1 register is the source of truth for every BL-OQ item; this file holds the per-team detail and actions for the items that are **not closed** |
-| Date | 2026-11-26 (IAM status updated from IAM's replies in the hand-off doc "Billing — IAM Open Items Hand-off", 2026-11-26) |
+| Billing LLD | `commercial-lld-billing-service.md` rev 0.61 (base HLD v0.65). The LLD's §16.1 register is the source of truth for every BL-OQ item; this file holds the per-team detail and actions for the items that are **not closed** |
+| Date | 2026-11-26 (IAM status updated from IAM's replies in the hand-off doc "Billing — IAM Open Items Hand-off", 2026-11-26); Entitlements findings F-5, F-6 and the RP queue-name note added 2026-11-27 (contract check, Billing LLD rev 0.59) |
 | From | Commercial Team (Billing) |
-| Deployment state | No service is in production; all run in dev only. "Done" means merged **and** promoted with each environment (dev → staging → production) |
+| Deployment state | No service is deployed to any environment. "Done" means merged **and** promoted with each environment (dev → staging → production) |
 | Replaces | `billing-design-signoff-blockers.md`, `billing-register-open-items.md`, `billing-open-items-by-team.md`, `billing-open-items-handoff.md`, `billing-open-items-entitlements.md`, `billing-open-items-corrections.md`, `billing-decided-items-entitlements-build.md`, `billing-iam-actions.md`, `billing-iam-actions-reply.md`, `op-g2-platform-edge-request.md`. Their closed items and history are in git (removed in the commit that added this file) |
 
 ## 1. Where things stand
@@ -36,21 +36,21 @@
 
 | Team | Service / repository | Open items | Holds back |
 |---|---|---|---|
-| **Commercial HLD owner** | `commercial-hld-docs` | Merge and tag HLD v0.65 | **Final sign-off** |
+| **Commercial HLD owner** | `commercial-hld-docs` | Merge and tag HLD v0.65; BL-OQ-29 (outbox retry window, HLD §9.3) | **Final sign-off** |
 | **PCI owner group** | — | Re-confirm §4 and §5.4.4 (rev 0.21+); name `pci_owner_reviewer` holders; approve first certification | **Final sign-off**; first provider certification |
 | **Platform-edge** | Envoy Gateway (ingress) | BL-OQ-14: **OP-G2** | **Every operator route**, so paid launch too |
 | **IAM: Realm Provisioner** | `iam-realm-provisioner` | OP-G1 rollout and operator users; confirm A-10 (a) role (#62) and RP #63 live per environment (both merged) | Operator sign-in; provider certification; reversal reset |
 | **IAM: AuthZ Enrichment** | `iam-authz-enrichment` | OP-G3 payload key (issuer already set); OP-G4 runs (A-3); OP-G6 date. A-9 (a), A-10 (a, b) **done** (#45, v0.2.0) | Operator routes per environment |
 | **IAM: Audit Log** | `iam-audit-log` | Release and deploy A-9 (b), A-10 (c) (merged #25); deploy refund type (BL-OQ-23 b / W-12). `paused` field **confirmed** | Correct audit for B-O16, B-O17, add-on refunds |
 | **IAM: Core (Org & Membership)** | `iam-org-membership` | SRE-3 ordering per environment (no code left); BL-OQ-27 (a) deploy | Direct paid signup; reversal reset |
-| **Commercial Entitlements** | `commercial-entitlements-service` | W-2 (F-1, F-2); F-3; consumer event names; E-6; BL-OQ-27 (b) | **Token add-ons**; plan changes reaching Entitlements |
+| **Commercial Entitlements** | `commercial-entitlements-service` | **BL-OQ-28: F-5 (critical, Glue decode)**, F-6; W-2 (F-1, F-2); F-3; consumer event names; E-6; BL-OQ-27 (b) | **Token add-ons**; plan changes reaching Entitlements |
 | **Commercial TL** | — | F-4 (`TenantEntitlementsChanged {cause: addon_change}`) | Nothing in Billing |
 | **Commercial IaC / Platform-SRE** | IaC; clusters | Topics, registry, queues (incl. W-11); SRE-1, SRE-3, SRE-7; audit DB role; Gateway test cluster; Bedrock access; `platform-audit` probe | Billing events in any environment; token add-ons |
 | **AI team** | Model Gateway | BL-OQ-19 (AI-1, AI-3, AI-5) | Token add-ons |
 | **Web / growth** | Signup BFF | BL-OQ-8 | Direct paid signup |
 | **Notification** | Notification service | BL-OQ-12 | Customer emails; price increases for live subscribers |
 | **Usage & Metering** | `commercial-usage-metering-service` | BL-OQ-24 | Billing's usage-record consumer |
-| **Commercial Team (Billing)** | `commercial-billing` | W-8 (approved; production in Phase 6), W-9 and W-10 (approved; to build); F-2 header contract; LLD housekeeping; final approval; BL-OQ-15 (deferred) | Its own build |
+| **Commercial Team (Billing)** | `commercial-billing` | W-8, W-9, W-10 built (not deployed); F-2 header contract; Stripe adapter 1.1.0 certification; Pact provider verification for B-I1 (BL-OQ-8); LLD housekeeping; final approval; BL-OQ-15 (deferred) | Its own build |
 | Finance, Product, Legal, Security | — | None (all closed 2026-11-23) | — |
 
 ---
@@ -225,6 +225,12 @@ OP-G4 test cases for B-O17:
 - **F-3 (W-5, minor): refund idempotency uses the event ID, not `billing_ref`.** `ApplyBillingRefund` relies on `processOnce` with the envelope ID. Safe today (Billing reuses `addon_event_id`), but the decision is "idempotent on `billing_ref` (= `refund_id`)". **Fix:** record applied `refund_id`s (e.g. a `quota_addon_refunds` row keyed on `billing_ref`).
 - **F-4 (W-6, Commercial TL decision): add-on changes show on `entitlement-events` via the effective set.** The effective set adds the remaining add-on balance to `llm_token_quota_monthly`, so a grant, revocation, expiry, purchase, refund or **drawdown** publishes `TenantEntitlementsChanged {cause: addon_change}`. S-8 forbids *add-on balance change events*, not effective-set changes. Decide (a) whether `cause: addon_change` is allowed under D-8, and (b) whether a drawdown should publish at all (one event per consumption from an add-on). Neither changes Billing.
 
+**Findings of 2026-11-27 — BL-OQ-28** (contract check against `main` at `dc9b654`, Billing LLD rev 0.59):
+
+- **F-5 (CRITICAL, would block every Billing event in staging and prod): the SQS consumer cannot decode Glue-framed messages.** `internal/adapter/inbound/sqspipeline/consumer.go:76-88` builds the consumer without `events.WithConsumerCodec(events.GlueDecodeCodec{})`. platform-events v2.3.0 (`internal/adapter/outbound/sqs/consumer.go:1597`) rejects any message carrying a `schema_id` when no codec is set, so every Glue-framed Billing event (`TenantQuotaAddOnChanged`, `TenantPlanChanged`, `TenantSubscriptionCancelled`, `TenantReactivated`) would be retried and dead-lettered once Billing publishes Glue-framed events (staging, prod); dev-like environments publish plain JSON. Nothing is deployed yet. **Fix (Entitlements):** add the one option, as Core and Realm Provisioner do. **Billing follow-up:** `contract-live` to test Glue-framed delivery, not only the decoded payload.
+- **F-1 and F-2 re-checked: still open.** `deploy/helm/templates/authz-policy.yaml:58-60` admits only `*/effective-set` and `*/quota-ceilings`; `billing` is not in `existingCallerNamespaces` in `values-staging.yaml` / `values-prod.yaml`; `middleware.go:39-47` returns `401` without `x-service-token`. Every add-on purchase gets `503 ENTITLEMENTS_UNAVAILABLE` until both are fixed. Billing calls `GET /api/v1/internal/tenants/:id/entitlements` with its mTLS principal (Billing LLD §10.2).
+- **F-6 (race): a `TenantPlanChanged` processed before Core applies the change is never corrected.** `billing_consumer.go:134-148` re-reads I-17 instead of using the event's plan; `membership_consumer.go:66-75` ignores Core's `TenantStateChanged` unless its cause is `TrialReactivated`, so nothing triggers a second recompute. **Fix (Entitlements):** apply the plan from the event, or recompute on Core's plan-change event too.
+
 **Other Entitlements items**
 
 | # | What | Action | Done when |
@@ -327,6 +333,8 @@ OP-G1 rollout ─► OP-G2 (platform-edge, not started) ─► OP-G3 ─► OP-G
 A-10 role + PCI names holders ───────────────────────────────────────────────────┴─► first certification (B-O17) ─► Stripe live
 ```
 
+**Hygiene (RP, 2026-11-27):** Realm Provisioner's `deploy/iam/sqs.tf.example` names Billing's queue `iam-billing-realm-q`, while Billing's `api/asyncapi.yaml` lists `billing-realm-q`. Align one name with IaC before the queue is created.
+
 **OP-G2 is the longest pole.** It hasn't started, and nothing operator-side can be proven without it. Ask IAM for the OP-G6 date and escalate OP-G2 first.
 
 ## 7. Tracker
@@ -348,7 +356,12 @@ A-10 role + PCI names holders ────────────────�
 | BL-OQ-27 (b) | Trial limits after reversal | Entitlements | Awaiting reply |
 | SRE-3 | Core `000004` before direct signup | IAM Core + SRE | Code ready |
 | BL-OQ-3 | W-1 eligibility | Entitlements | **Done** (`dc9b654`) |
-| BL-OQ-3 | W-2 Billing access | Entitlements + Billing | **Fail** (F-1, F-2) |
+| BL-OQ-3 | W-2 Billing access | Entitlements + Billing | **Fail** (F-1, F-2; re-checked 2026-11-27, still open) |
+| BL-OQ-28 / F-5 | Glue decode codec on the SQS consumer | Entitlements | **Critical**, open (2026-11-27) |
+| BL-OQ-28 / F-6 | `TenantPlanChanged` processed before Core applies the plan | Entitlements | Open (2026-11-27) |
+| BL-OQ-29 | `OUTBOX_MAX_ATTEMPTS=10`, `OUTBOX_RETRY_BACKOFF=30s`, `OUTBOX_MAX_RETRY_BACKOFF=5m` (today an SNS / Glue outage dead-letters every row in about a minute); needs an HLD §9.3 change | Commercial HLD owner | Open (2026-11-27) |
+| — | Glue-framed delivery in `contract-live` | Billing | Open (2026-11-27) |
+| — | RP queue name `iam-billing-realm-q` vs `billing-realm-q` | IAM Realm Provisioner | Open (2026-11-27) |
 | F-2 | Header / identity contract | Billing + Entitlements | **Approved** 2026-11-26; Billing LLD §10.2 text proposed (rev 0.50); waits on Entitlements' agreement, Entitlements LLD copy, build, integration tests |
 | BL-OQ-4 | W-3, W-4 single publisher, purchase consumer | Entitlements | **Done** (`dc9b654`) |
 | BL-OQ-20 | W-5, W-6, W-7 refunds, corrections, LLD | Entitlements | **Done**; F-3 open; F-4 with TL |
@@ -360,9 +373,9 @@ A-10 role + PCI names holders ────────────────�
 | BL-OQ-8 | BFF alignment | Web / growth (+ Billing for Pact, E2E) | BFF code merged (PR #6, `c2e9a1d`), not in staging; Pact and Test-Clock E2E pending |
 | BL-OQ-12 | NTF-3 messages | Notification + Commercial | Open |
 | BL-OQ-24 | `UsagePeriodClosed` contract | Usage & Metering | Open (known risk) |
-| W-8 | Add-on event publish | Billing | **Approved** 2026-11-26; schema, validation, Glue done (Phase 4); production with the add-on flows (Phase 6) |
-| W-9 | Eligibility read | Billing | **Approved** 2026-11-26; build as LLD §8.7 |
-| W-10 | Egress to Entitlements | Billing | **Approved** 2026-11-26; build in Billing Helm chart (LLD §10) |
+| W-8 | Add-on event publish | Billing | **Built** (Phase 6, `feat/billing-phase-6-flows`): purchase and refund events through the outbox; not deployed; Glue registration per environment open |
+| W-9 | Eligibility read | Billing | **Built** (`adapters/entitlementsclient`, B-P19 / B-P20, LLD §8.7); not deployed; works once Entitlements closes F-1, F-2 |
+| W-10 | Egress to Entitlements | Billing | **Built** in the chart's server NetworkPolicy (namespace `commercial`, pod `commercial-entitlements`, LLD §10.2); not deployed. A NetworkPolicy cannot limit the path: restricting Billing to the one `GET` needs an AuthorizationPolicy on the Entitlements side (open, with F-2) |
 | — | Contract test incl. Entitlements schema | Billing | **Done** 2026-11-26 |
 | — | LLD citations | Billing | Open |
 | BL-OQ-15 | Multi-provider follow-ups | Billing + Finance | Deferred (Phase 3) |

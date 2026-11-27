@@ -11,7 +11,7 @@ incomplete → ended   checkout expired / declined / 3-D Secure abandoned
 active → past_due    cycle invoice failed          → TenantPaymentPastDue
 past_due → active    invoice paid                  → TenantReactivated
 active|past_due → cancelled  ended / dunning exhausted → TenantSubscriptionCancelled
-cancelled → active   settled via a new provider subscription → TenantReactivated
+cancelled → active   first invoice (subscription_create) of a new provider subscription → TenantReactivated
 active|past_due|cancelled → ended  TenantOffboarded / RP-4 reversal / signup refund
 ```
 
@@ -24,8 +24,8 @@ payment_confirmed → rp_convert_pending (same commit)              trial checko
 [*] → rp_convert_pending                                          operator stub (B-O1)
 [*] → awaiting_tenant_converted                                   B-I1 paid (direct signup)
 rp_convert_pending → awaiting_tenant_converted   RP-3 200 / 409 realm_already_dedicated
-rp_convert_pending → rp_convert_pending          409 in progress, 502, 503, timeout (backoff)
-rp_convert_pending → failed                      409 tenant_offboarded, 400, 403, 404
+rp_convert_pending → rp_convert_pending          409 operation_in_progress / optimistic_lock_conflict, any 5xx, timeout (backoff)
+rp_convert_pending → failed                      409 tenant_offboarded, other 409 (realm_name_unavailable, credential_replay_expired), 400, 403, 404
 * → confirmed                                    TenantConverted (or B-O9 resolved_manually)
 failed → rp_convert_pending                      B-O9 retry
 rp_convert_pending|awaiting|failed → refund_pending → refunded   B-O9 refund
@@ -34,7 +34,7 @@ confirmed → reverted                             B-O8 RP-4
 
 - **`BIL-SAGA-1`:** RP-3 only after server-side payment confirmation.
 - **`BIL-SAGA-2`:** one saga per `billing_subscription_id`.
-- **`BIL-OPS-5`:** `saga-sweeper` pages `BillingConversionSagaOverdue` (SEV-2) once when payment is older than 30 min and the saga isn't confirmed. Runbook: `docs/runbooks/stuck-conversion-saga.md` (LLD §20.1).
+- **`BIL-OPS-5`:** `saga-sweeper` pages `BillingConversionSagaOverdue` (SEV-2) once when payment is older than 30 min and the saga isn't confirmed. It alerts first, then re-runs due sagas with at most 80% of the job's remaining time, so a hung RP cannot delay the page. Runbook: `docs/runbooks/stuck-conversion-saga.md` (LLD §20.1).
 
 ## Direct paid signup (B-I1, §8.3)
 
@@ -60,7 +60,7 @@ confirmed → reverted                             B-O8 RP-4
 | Operation | Key | Replay |
 |---|---|---|
 | Tenant / internal / operator mutation | `Idempotency-Key` → `idempotency_records (tenant_id, scope, key)`, 72 h | Same hash → stored response; different hash → `422 IDEMPOTENCY_KEY_REUSED` (B-I1: `409 SUBSCRIPTION_ALREADY_EXISTS`); in flight (`locked_until` 30 s) → `409 REQUEST_IN_PROGRESS`, `Retry-After: 2` |
-| Provider call | `bsub:<id>:customer\|pm\|create\|confirm\|checkout`, `seatpur:<purchase_id>`, `planchg:<change_id>`, `addon:<purchase_id>`, `refund:<refund_id>`, `adj:<adjustment_id>`, `sched:<schedule_id>`, `cancel:<sub_id>:<n>` | Stripe keys live 24 h; Billing never reuses a key after 23 h |
+| Provider call | `bsub:<id>:customer\|pm\|create\|confirm\|checkout\|expire`, `seatpur:<purchase_id>`, `planchg:<change_id>`, `addon:<purchase_id>` (voids: `addon:\|seatpur:\|planchg:<id>:void` on a decline, `…:expire` from purchase-expiry), `refund:<refund_id>`, `adj:<adjustment_id>`, `sched:<schedule_id>`, `cancel:<sub_id>:<n>` | Stripe keys live 24 h; Billing never reuses a key after 23 h. A retry under the same client key (after a 5xx) resumes the purchase / adjustment / refund row and its provider key; a different body → `422 IDEMPOTENCY_KEY_REUSED`; a concurrent insert → `409 REQUEST_IN_PROGRESS` |
 | Provider callback | `(provider, provider_event_id)` ledger PK | Duplicate → `200`, no work |
 | Consumed event | envelope `id` × consumer in `processed_events` | Claimed as the first statement of the handler's transaction |
 | RP-3 / RP-4 | `convert:` / `revert:<tenant_id>:<billing_subscription_id>` | RP replays its stored result |
@@ -75,6 +75,12 @@ Pipeline:
 5. It applies the change under the tenant lock, then retries with backoff up to `WEBHOOK_MAX_ATTEMPTS`.
 
 Every `failed` row is retried, ignored by an operator with a reason, or listed by reconciliation (`BIL-OPS-6`).
+
+Parked outcomes (rev 0.59, no retry, SEV-2 log `BillingPaymentParked`): `failed:checkout_superseded` (a session Billing expired was completed anyway, and its subscription is ended or linked to another provider subscription; one naming the already-linked provider subscription is `ignored:already_linked`, rev 0.60), `failed:paid_after_end` (first invoice paid for an ended subscription) and `failed:invoice_amount_mismatch` (rev 0.60, `BIL-PAY-7`: a purchase's invoice paid for another amount or currency; nothing granted). The operator cancels, refunds or re-bills in the provider. Claim still skips only tenants with a row in `processing`.
+
+Unlinked `invoice.paid` (rev 0.60, LLD §8.1.1 step 4): the Billing subscription is resolved from `billing_subscription_id` in the provider subscription's metadata on the re-read invoice. An incomplete trial conversion is linked and confirmed (its checkout session is marked `completed` at the same time); an ended one is parked `paid_after_end`; no usable metadata → `ignored:unknown_subscription`; a Billing subscription linked to a different provider subscription → `ignored:superseded_provider_subscription` (warning, nothing mirrored), except a `cancelled` subscription's `subscription_create` invoice, which retries while a B-P14 reactivation awaits its link; any other live subscription without a link retries.
+
+Settling a purchase's invoice (rev 0.59, 0.60, LLD §8.5.1; `internal/app/purchase_invoice.go`): `purchase-expiry` and declines re-read the invoice outside any transaction; `open` → void, `draft` → `DeleteDraftInvoice`; `paid` settles the purchase only when amount paid (or total) and currency equal the purchase's (`BIL-PAY-7`), else the purchase closes unpaid and `BillingPaymentParked` is logged. An unrecorded invoice is looked up with `FindInvoice`: add-ons by exact metadata `purchase_id` (1 min clock slack), proration invoices (seats, upgrades) by subscription, `subscription_update`, amount, currency and a positive line for `seats_after` or the target price, created at or after the purchase (no backward slack). A looked-up invoice already recorded on another purchase or plan change is never used, re-checked under the lock (`BIL-PAY-6`). Checkout sessions are expired at the provider first (B-P2 keys); `ErrCheckoutCompleted` leaves them open for the callbacks.
 
 ## Events and timing (§7.5)
 

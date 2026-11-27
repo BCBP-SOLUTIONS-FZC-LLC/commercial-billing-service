@@ -1,6 +1,6 @@
 ---
 name: contract-checker
-description: Checks commercial-billing's cross-service contracts against the other side's published contract and code in the sibling repos. Covers outbound calls (Core I-11/I-18, Realm Provisioner RP-3/RP-4/RP-11, Entitlements eligibility GET, Audit AL-5), produced billing.events vs each consumer's schema and handler, consumed events (tenant-billing-q, usage-billing-q) vs the producer's asyncapi, and the inbound B-I1 contract vs the Signup BFF adapter. Use when another team publishes a contract change or hand-off, before enabling a dependency or feature flag, or when writing a hand-off. Read-only.
+description: Checks commercial-billing's cross-service contracts against the other side's published contract and code in the sibling repos. Covers outbound calls (Core I-11/I-18, Realm Provisioner RP-3/RP-4/RP-11, Entitlements eligibility GET, Audit AL-5), produced billing.events vs each consumer's schema and handler, consumed events (tenant-billing-q, usage-billing-q) vs the producer's asyncapi, and the inbound B-I1 contract vs the Signup BFF adapter. Use when another team publishes a contract change or hand-off, before enabling a dependency or feature flag (FEATURE_DIRECT_SIGNUP, FEATURE_TOKEN_ADDONS, USAGE_BILLING_CONSUMER_ENABLED), or before recording a cross-team request in docs/lld/billing-open-items.md. Read-only.
 tools: Read, Grep, Glob, Bash
 ---
 
@@ -67,4 +67,4 @@ Verdicts:
 - `INCONSISTENT` (their LLD and code disagree);
 - `UNVERIFIED` (no source found; say what you looked for).
 
-Then list only DRIFT, GAP and THEIRS rows with the smallest fix for each and who owns it. Order them by impact: money or data loss first, then failed requests or dead-lettered events, then hygiene. Quote the versions checked (e.g. "Billing LLD rev 0.52, Entitlements `dc9b654`").
+Then list only DRIFT, GAP and THEIRS rows with the smallest fix for each and who owns it. Order them by impact: money or data loss first, then failed requests or dead-lettered events, then hygiene. Quote the versions checked (e.g. "Billing LLD rev 0.61, Entitlements `dc9b654`"). Cross-team findings belong in `docs/lld/billing-open-items.md` (by team and in its §7 tracker); there is no separate hand-off directory.

@@ -40,14 +40,14 @@ Billing has no Go package for another service to import. Its "public API" is the
 | **`deploy/helm/values.yaml` top-level keys** operators set: `image.*`, `serviceAccount.*`, `service.*`, `replicaCount`, `resources`, `jobResources`, `autoscaling.*`, `podDisruptionBudget.*`, `istio.*`, `probes.*`, `env.*`, `secretKeys`, `externalSecret.*`, `existingSecret`, `migrate.*`, `cronjobs.*`, `networkPolicy.*`, `gateway.*`, `dashboard.*`, `serviceMonitor.*` | Chart internals (`_helpers.tpl`, template structure) not exposed as a value |
 | **Metric names and labels** Billing owns: Tier 3 `commercial_billing_*` (generated inventory [`docs/observability/metric-registry.md`](docs/observability/metric-registry.md)) — dashboards, alerts, SLO rules and the HPA key off them. Renames after the first deployment follow the Observability Standard's migration (parallel emission → migrate consumers → deprecate → remove), not a silent change | Histogram buckets; Tier 1 `platform_*` names owned by platform-gincommon, platform-events, platform-pgcommon and platform-audit |
 | **Alert names** (`deploy/monitoring/app-alerts.yml`) and their `runbook_url`s — on-call routing keys off them | Alert thresholds and `for:` durations (tuning) |
-| **Probes:** `GET /healthz` (liveness, background loops only) and `GET /readyz` (both pools) — existence and meaning | `GET /openapi.json`, `/asyncapi`, `/asyncapi.yaml` — documentation surfaces. `METRICS_PORT`'s value is a Helm default |
+| **Probes:** `GET /healthz` (liveness: platform-audit runner only; stopped loops restart in-process) and `GET /readyz` (both pools) — existence and meaning | `GET /openapi.json`, `/asyncapi`, `/asyncapi.yaml` — documentation surfaces. `METRICS_PORT`'s value is a Helm default |
 | **Database roles and the RLS contract** the platform's IaC creates: `billing_migrator`, `billing_app`, `billing_system`, `billing_audit_drainer`, `admin_readonly`, and the `app.tenant_id` GUC | Table and column layout (owned by Billing alone; migrations are two-release safe, LLD §13.4) |
 
 **Retired IDs.** No Billing endpoint or event has been retired yet. When one is, its ID stays permanently unregistered and is never reused: reusing an ID would be a breaking and confusing change even though the ID is technically free.
 
 ### Provider adapter version
 
-Each payment-provider adapter reports `AdapterVersion()`. For Stripe this is `adapterSemver + "+stripeapi." + <pinned Stripe API version>`, currently `1.0.0+stripeapi.2026-11-18.endive` (stripe-go v87.2.0, `internal/adapters/provider/stripe/adapter.go`).
+Each payment-provider adapter reports `AdapterVersion()`. For Stripe this is `adapterSemver + "+stripeapi." + <pinned Stripe API version>`, currently `1.1.0+stripeapi.2026-11-18.endive` (stripe-go v87.2.0, `internal/adapters/provider/stripe/adapter.go`; `1.1.0` since LLD rev 0.60, which needs its own certification before Stripe takes new accounts).
 
 | Change | Adapter version | Service version |
 |---|---|---|
@@ -87,7 +87,7 @@ The release gate in LLD §14.6 makes this explicit: a release that changes an ad
 1. **The code is not on `main`.** Phases 0–8 sit on the stacked `feat/billing-phase-*` branches; `main` holds only the LLD.
 2. **The release pipeline has never run.** `release.yml` exists (maintainer process below), but its gates need configuration that doesn't exist yet: `CERTIFY_CHECK_DSN`, AWS credentials for Glue, `KUBECONFIG_B64`, `PROMETHEUS_URL`, and a `production` environment that requires PCI owner group reviewers.
 3. **The operator path is not live** (IAM OP-G2 / OP-G3). Operator routes answer `403` outside dev and test, and `OPERATOR_PATH_LIVE` must stay `false` until IAM confirms the path.
-4. **No certified provider exists in any environment.** The first Stripe certification (B-O14 → B-O17) needs the operator path. Until then, no account can be created on Stripe.
+4. **No certified provider exists in any environment.** The first Stripe certification (B-O14 → B-O17), now for adapter `1.1.0`, needs the operator path. Until then, no account can be created on Stripe.
 5. **The platform infrastructure isn't provisioned:** the IaC topology (SNS topic, queues and DLQs, Glue registry with the six schemas, database roles), Istio strict mTLS, and sidecar injection on `bff` for B-I1.
 6. **There's no production review yet.** The PCI owner group review (HLD §15.4) and the `production-data-migrations` approval are needed for the first production deploy.
 
@@ -125,13 +125,13 @@ Images are signed keylessly with Sigstore / Cosign. Verify before deploying:
 ```bash
 # main-branch builds (ci.yml push job)
 cosign verify \
-  --certificate-identity-regexp "^https://github\.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/.github/workflows/.*@refs/heads/main$" \
+  --certificate-identity "https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/.github/workflows/ci.yml@refs/heads/main" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/bcbp-solutions-fzc-llc/commercial-billing@<digest>
 
-# tagged releases (release.yml)
+# tagged releases (release.yml; a manual dispatch signs from main)
 cosign verify \
-  --certificate-identity-regexp "^https://github\.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/.github/workflows/.*@refs/tags/.*$" \
+  --certificate-identity-regexp "^https://github\.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/\.github/workflows/release\.yml@refs/(tags/v[0-9][^@]*|heads/main)$" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/bcbp-solutions-fzc-llc/commercial-billing@<digest>
 ```
@@ -171,13 +171,17 @@ helm upgrade commercial-billing ./deploy/helm \
 **Versions:** `image.tag` falls back to `Chart.yaml`'s `appVersion` when unset. Chart `version` and `appVersion` are bumped by hand with the Git tag; nothing derives them from the tag.
 
 **What the chart deploys, all from the same image:**
-- **one Deployment**: the server, with every route group, both consumers, the outbox and audit runners, and the background workers;
+- **one Deployment**: the server, with every route group, the tenant-billing-q consumer (and usage-billing-q when `USAGE_BILLING_CONSUMER_ENABLED=true`), the outbox and audit runners, and the background workers;
 - **ten CronJobs**: `/jobs --job=<name>`;
 - **the migrate hook Job**: `/migrate`, pre-install / pre-upgrade, which runs before new replicas.
 
 **Required Helm settings:**
 - the namespace must be `billing`, and the ServiceAccount and pod label `commercial-billing` (`BIL-OPS-4`, asserted by `make helm-check`);
-- keep `env.OPERATOR_PATH_LIVE: "false"` and the feature flags as decided per environment.
+- keep `env.OPERATOR_PATH_LIVE: "false"` and the feature flags as decided per environment;
+- staging and prod need the account values the chart's render guards check (IRSA role, SNS topic, tenant queue, `networkPolicy.postgresCIDRs`). `release.yml` supplies them for production only, from the `production` environment's `BILLING_*` variables; optional ones are `BILLING_USAGE_BILLING_QUEUE_URL`, `BILLING_WEBHOOK_SOURCE_CIDRS`, `BILLING_AWS_ENDPOINT_CIDRS` (`networkPolicy.awsEndpointCIDRs`, VPC interface endpoints) and `BILLING_MONITORING_CIDRS` (`metrics.monitoringCIDRs`). A staging deploy must pass them itself;
+- the `production` environment must have deployment-branch rules allowing only tags `v*` and the `main` branch (Settings → Environments → Deployment branches and tags), so a `workflow_dispatch` from another branch cannot reach its secrets.
+
+The remaining go-live checks are LLD §20.10.
 
 **First deployment:** follow LLD §19.1, checked with `make check-first-deploy ENV=<env>`. Glue schemas must be registered before the image starts.
 
@@ -248,13 +252,13 @@ Both are to produce a signed, scanned image, never a `latest` tag.
 
 | commercial-billing | Go (`go.mod`) | Shared platform libraries | Provider | `platform-schemagov` |
 |---|---|---|---|---|
-| Unreleased (phase branches) | `1.26.11` | `platform-gincommon/v2` v2.7.0 (first release with the `commercial` domain), `platform-pgcommon/v2` v2.0.2, `platform-events/v2` v2.3.0, `platform-audit` v0.1.2 | `stripe-go/v87` v87.2.0, Stripe API `2026-11-18.endive`, adapter `1.0.0+stripeapi.2026-11-18.endive`, suite `cert-1.0` | `0.4` (`SCHEMA_GOV_IMAGE`, CI installs v0.4.0) |
+| Unreleased (phase branches) | `1.26.11` | `platform-gincommon/v2` v2.7.0 (first release with the `commercial` domain), `platform-pgcommon/v2` v2.0.2, `platform-events/v2` v2.3.0, `platform-audit` v0.1.2 | `stripe-go/v87` v87.2.0, Stripe API `2026-11-18.endive`, adapter `1.1.0+stripeapi.2026-11-18.endive`, suite `cert-1.0` | `0.4` (`SCHEMA_GOV_IMAGE`, CI installs v0.4.0) |
 
 **Runtime infrastructure:**
 - PostgreSQL 17, with PgBouncer in transaction mode;
 - AWS SNS, SQS and the Glue Schema Registry;
-- Kubernetes ≥ 1.28 (`Chart.yaml` `kubeVersion`);
-- Istio, with `forwardClientCertDetails: SANITIZE_SET`.
+- Kubernetes ≥ 1.30 (`Chart.yaml` `kubeVersion`; the native `preStop` sleep action);
+- Istio ≥ 1.24 (native sidecars), with `PeerAuthentication` `STRICT` on Billing's workloads; the sidecar's default `APPEND_FORWARD` puts the verified client certificate last in `X-Forwarded-Client-Cert` (B-I1).
 
 None of the libraries is re-exported. Callers depend on the HTTP and event contract, never on a Go package here.
 

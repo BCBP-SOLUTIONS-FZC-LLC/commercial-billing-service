@@ -11,14 +11,17 @@ It never holds card data (PCI SAQ A), and it is on no per-request hot path.
 
 **Repository:** `github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service`
 
-**Module:** Go 1.26.11 · private module · three binaries from one image (`cmd/server`, `cmd/jobs`, `cmd/migrate`), plus the `cmd/certify` tool
+**Module:** Go 1.26.11 · private module · three binaries from one image (`cmd/server`, `cmd/jobs`, `cmd/migrate`), plus the `cmd/certify` tool · Helm chart 0.7.0 · Stripe adapter 1.1.0
 
 **Design:**
 - Refines the Commercial Domain HLD **v0.65**.
-- The LLD is [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md) (revision history at the top). It is the source of truth for everything here.
+- The LLD is [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md), rev 0.61 (revision history at the top). It is the source of truth for everything here.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) has the diagrams and runtime flows.
 
-**State:** Phases 0–8 are implemented on the stacked branches `feat/billing-phase-<n>-*`, while `main` holds only the LLD. Nothing is deployed to any environment.
+**State:**
+- Phases 0–8 are implemented. Phases 0–5 are on the stacked branches `feat/billing-phase-0-scaffolding` … `feat/billing-phase-5-api`. Phases 6–8 and everything after them are on `feat/billing-phase-6-flows`: platform-library routing, RFC 9457 errors, the observability standard, the test suites, CI/CD, and the fixes from two production-readiness review rounds (LLD rev 0.59 and 0.60).
+- `main` holds only the LLD. Nothing is deployed to any environment.
+- Before go-live: the cross-team items in [`docs/lld/billing-open-items.md`](docs/lld/billing-open-items.md) (among them Entitlements' BL-OQ-28 findings and the outbox retry window, BL-OQ-29), certification of Stripe adapter 1.1.0, the Loki rules for the log-based alerts, and the LLD §20.10 go-live checks.
 
 ---
 
@@ -67,7 +70,7 @@ The hexagonal layout enforces this structurally: `internal/app` depends only on 
 
 ## API overview
 
-**45 endpoint IDs** across four route prefixes:
+**45 endpoint IDs** across four route prefixes. 44 of them are in the route table (39 paths and 44 operations in the OpenAPI document); B-W1 is registered by the webhook adapter.
 
 | Group | Prefix | IDs |
 |---|---|---|
@@ -205,7 +208,7 @@ All operator routes answer `403` outside dev and test until IAM's operator path 
 
 | Route | Purpose |
 |---|---|
-| `GET /healthz` | Liveness — `200 {"status":"ok"}`; `503` only when a registered background loop stops. Never checks a dependency |
+| `GET /healthz` | Liveness — `200 {"status":"ok"}`; `503` only when the platform-audit runner is not alive (stopped background loops restart in-process). Never checks a dependency |
 | `GET /readyz` | Readiness — the app pool (`database`) and the BYPASSRLS pool (`sys_database`); `503` problem with `failed_check` and `checks` on failure |
 | `GET /openapi.json` | OpenAPI 3.1 document |
 | `GET /asyncapi`, `GET /asyncapi.yaml` | AsyncAPI 3.0 document |
@@ -269,18 +272,55 @@ Full catalogue: LLD §17 (codes, statuses, extension members) and §5.5 (status 
 
 ## Architecture
 
-See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the diagrams: layer model, dependency graph, request, write, saga and webhook flows, data model, RLS, concurrency, failure domains and threat model. In short:
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the diagrams: layer model, dependency graph, request, write, saga and webhook flows, data model, RLS, concurrency, failure domains and threat model.
+
+### Repository layout
 
 ```
-cmd/server, cmd/jobs, cmd/migrate, cmd/certify          composition roots
-internal/bootstrap                                      shared wiring (the only package that sees every adapter)
-internal/adapters/{http, webhook, consumer}             inbound
-internal/app                                            use cases (+ app/port: every interface)
-internal/domain                                         money, transition tables, permissions, events, error catalogue
-internal/adapters/{postgres, eventbus, provider/*,      outbound
-  iamclient, entitlementsclient, httpx, metrics, observability}
-pkg/requestctx                                          request context
+cmd/
+  server/                 commercial-billing: main.go, wiring.go, events.go, lifecycle.go (shutdown, loop supervision), service.go, identity.go
+  jobs/                   one binary, --job=<name>, ten CronJobs
+  migrate/                platform-events and platform-audit schemas, then 000001–000007
+  certify/                provider certification tool (not in the image)
+internal/
+  domain/                 money, proration, transition tables, permissions, event payloads, §17 error catalogue
+  app/                    use cases (Service, per-tenant lock); purchase_invoice.go settles purchase invoices (BIL-PAY-6/7)
+  app/port/               every interface (repositories, PaymentProvider, IAM, events, audit, jobs, observability)
+  adapters/
+    http/ webhook/ consumer/                         inbound
+    postgres/ (+ migrations/) eventbus/ (+ schemas/) outbound
+    provider/ (registry) provider/stripe/ provider/manual/
+    iamclient/ entitlementsclient/ httpx/
+    metrics/ observability/
+  bootstrap/              shared wiring for server, jobs and certify
+  certify/                the cert-1.0 suite behind cmd/certify
+  config/                 every key with bounds (§12)
+pkg/requestctx/           request context: caller identity type, X-Request-ID forwarded to outbound calls (imported by adapters/http and adapters/httpx only)
+api/                      asyncapi.yaml (event contract source) + embed.go
+test/
+  postgres/ flows/ bus/ stripemock/ certify/        integration suites (tag integration)
+  e2e/                    the full HTTP stack on Postgres 17
+  scenarios/{commerce,jobs,lifecycle}/              less-travelled use-case paths on Postgres
+  testkit/                shared harness of e2e and scenarios
+  contract/ (+ testdata/consumers)                  produced payloads vs consumers' schemas
+  helm/ (+ testdata)      chart contract (tag helm)
+deploy/
+  helm/                   chart 0.7.0 (templates/, files/ rule and dashboard copies, values{,-dev,-staging,-prod}.yaml)
+  monitoring/             alerts, recording and SLO rules, schema-registry alerts, Prometheus Adapter rule, dashboards/
+  iam/                    IRSA role policy (platform Terraform owns the role)
+docs/
+  lld/                    the LLD and billing-open-items.md
+  runbooks/               26 runbooks + README index
+  observability/          metric-registry.md (generated), registry-proposals.md
+  swagger/                openapi.json (generated)
+  invariants-coverage.md
+scripts/                  init-db.sql, init-floci.sh, check-first-deploy.sh, testclock/
+.githooks/                pre-commit, pre-push
+.github/                  workflows/ (7), scripts/, schema-gov-requirements.txt, CODEOWNERS, templates
+.claude/                  Claude Code notes, hook, /ci-local skill, reviewer agents
 ```
+
+Binaries are built into `bin/` (`make build`); never commit one. `.gitignore` also ignores root-level binaries from a bare `go build ./cmd/<name>` with root-anchored entries (`/server`, …), so the `cmd/server/` sources stay visible.
 
 ### Dependency rules (enforced in CI)
 
@@ -317,7 +357,9 @@ pkg/requestctx                                          request context
 | `platform-pgcommon/v2` | v2.0.2 | Pools, GUC binding, transactions with retry, SQLSTATE helpers, migration runner |
 | `platform-events/v2` | v2.3.0 | Envelope, ordered outbox and runner, SNS publisher, SQS consumers, DLQ, inbox dedup, Glue decode |
 | `platform-audit` | v0.1.2 | AL-5 audit entries in outbox mode, delivery runner |
-| `stripe-go/v87` | v87.2.0 (Stripe API `2026-11-18.endive`) | Stripe adapter only |
+| `stripe-go/v87` | v87.2.0 (Stripe API `2026-11-18.endive`) | Stripe adapter only (adapter version 1.1.0, re-certification pending) |
+| `gin-gonic/gin` | v1.12.0 | HTTP engine (built with `gin.New()`, never `gin.Default()`) |
+| `go.opentelemetry.io/otel` | v1.47.0 | Behind gincommon; named directly only in `adapters/observability` |
 
 ---
 
@@ -416,6 +458,7 @@ The `TenantQuotaAddOnChanged` contract is tested in CI against Entitlements' con
 | Lifecycle follow-ups | server loop | Post-commit provider steps (for example, the default payment method after B-P16) |
 | Reconciliation | server loop | Runs queued B-O5 runs |
 | Delayed emissions | server loop | Publishes `TenantSeatsChanged` 120 s after a conversion |
+| Consumers | server loops | `tenant-billing-q`; `usage-billing-q` only with `USAGE_BILLING_CONSUMER_ENABLED=true` (default `false`) |
 | `saga-sweeper` | CronJob, every minute | Pages `BillingConversionSagaOverdue` once per saga |
 | `seat-renewal`, `downgrade-apply`, `renewal-repricing` | CronJobs | Apply scheduled reductions, downgrades and price changes at renewal |
 | `purchase-expiry` | CronJob, every 5 min | Expires abandoned checkouts, purchases and 3-D Secure attempts |
@@ -431,7 +474,7 @@ The `TenantQuotaAddOnChanged` contract is tested in CI against Entitlements' con
 
 - Go 1.26.11, Docker, `make`.
 - `GOPRIVATE=github.com/BCBP-SOLUTIONS-FZC-LLC/*` and `GONOSUMDB` (the Makefile exports both), plus an SSH key registered with the BCBP org for the private platform modules.
-- For `make helm-check`: `helm` v3.16+, `promtool` and `kubeconform` (installed if missing).
+- For `make helm-check`: `helm` v3.19+, `promtool` and `kubeconform` (installed if missing).
 
 ### Setup
 
@@ -440,7 +483,7 @@ git clone https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service
 cd commercial-billing-service
 cp .env-example .env   # values match docker-compose.yml; never commit .env
 make docker-up         # Postgres 17 :5634 · PgBouncer :5633 · floci :4667 · stripe-mock :12111
-make migrate           # outbox + inbox + audit-outbox schemas, then 000001–000006
+make migrate           # outbox + inbox + audit-outbox schemas, then 000001–000007
 make run               # API on :8180, metrics on :9190 (from .env-example)
 ```
 
@@ -457,7 +500,7 @@ make run               # API on :8180, metrics on :9190 (from .env-example)
 | `make arch-lint` | `go-arch-lint` against `.go-arch-lint.yml` (installs v1.15.0 if missing) |
 | `make guards` | `check-stripe-imports.sh`, `check-outbox-access.sh`, `check-problem-details.sh`, `check-pgcommon.sh` |
 | `make test` | All packages with `-race` — unit, HTTP, contract, OpenAPI golden, observability (no Docker) |
-| `make test-integration` | `./test/...` with tag `integration` — Postgres, flows, bus, stripe-mock, certification (Docker) |
+| `make test-integration` | `./test/...`, `./internal/...` and `./cmd/...` with tag `integration` — Postgres, flows, e2e, scenarios, bus, stripe-mock, certification (Docker; `INT_PARALLEL` packages at once, default 4) |
 | `make test-postgres` / `test-flows` / `test-bus` / `test-stripemock` / `test-e2e` / `test-helm` | One integration suite at a time (verbose) |
 | `make race` | `make test` + `make test-integration` |
 | `make test-contract` | Produced payloads vs Billing's and consumers' schemas |
@@ -631,8 +674,8 @@ Publishing the same `TenantConverted` again (same envelope `id`) does nothing: `
 | Suite | Command | Needs |
 |---|---|---|
 | Unit, HTTP, contract, observability | `make test` | — |
-| Postgres (RLS, constraints, triggers, repositories), flows, bus, stripe-mock, certification, end to end | `make test-integration` | Docker |
-| End to end only: the full HTTP stack on Postgres 17 | `make test-e2e` | Docker |
+| Postgres (RLS, constraints, triggers, repositories), flows, scenarios (`test/scenarios/{commerce,jobs,lifecycle}`), bus, stripe-mock, certification, end to end | `make test-integration` | Docker |
+| End to end only: the full HTTP stack on Postgres 17 (harness `test/testkit`) | `make test-e2e` | Docker |
 | Helm chart contract | `make helm-check` | helm, promtool |
 | Stripe Test Clock (staging) | `make testclock` | Staging and Stripe test mode |
 
@@ -647,9 +690,11 @@ Publishing the same `TenantConverted` again (same envelope `id`) does nothing: `
 | `TestEveryErrorIsAProblem` | RFC 9457 on every error path |
 | RLS suite (`test/postgres`) | `FORCE` RLS on every tenant table; cross-tenant, missing and invalid GUC cases (§14.5) |
 | `test/contract` | Produced payloads vs Core, RP, Audit and Entitlements consumed schemas |
-| `TestScrapePassesMetricsLint`, `TestReferencedPlatformMetricsAreRegistered` | Enterprise Platform Observability Standard |
+| `TestScrapePassesMetricsLint`, `TestReferencedPlatformMetricsAreRegistered`, `TestInventoryUpToDate` | Enterprise Platform Observability Standard |
+| `TestShutdownBudgetFits` (`cmd/server`) | The shutdown sequence fits the 50 s left after the 10 s `preStop` |
+| `test/helm` | Chart contract: names, policies, component labels, native sidecars, secrets per workload, render guards, CronJobs = `cmd/jobs`, alert → runbook links |
 
-**Coverage is 98.7% of statements over every package, and 99.2% over `internal/` and `pkg/`,** measured with all suites (`make cover-all`). `make cover-gate` fails below 96% over `internal/` and `pkg/`, and CI enforces the same gate (`validate-test.yml`). LLD §14.6 targets ≥ 90% at first release.
+**Coverage is 97.8% of statements over every package, and 98.4% over `internal/` and `pkg/`** (about 580 top-level test functions), measured with all suites (`make cover-all`). `make cover-gate` fails below 96% over `internal/` and `pkg/`, and CI enforces the same gate (`validate-test.yml`). LLD §14.6 targets ≥ 90% at first release.
 
 ---
 
@@ -661,7 +706,8 @@ Publishing the same `TenantConverted` again (same envelope `id`) does nothing: `
 |---|---|---|---|
 | Server | `APP_PORT` / `METRICS_PORT` | `8080` / `9090` | Must differ |
 | | `REQUEST_TIMEOUT` | `30s` (5–60 s) | gincommon request deadline |
-| | `APP_ENV` / `ENVIRONMENT` | — | `dev`, `test`, `local` are dev-like (operator gate open, plain JSON events) |
+| | `SHUTDOWN_DRAIN_DELAY` | `2s` (0–5 s) | Time `/readyz` fails after `SIGTERM` before the listener closes |
+| | `APP_ENV` / `ENVIRONMENT` | — (`dev` outside Kubernetes) | `dev`, `test`, `local` are dev-like (operator gate open, plain JSON events). Inside Kubernetes (`KUBERNETES_SERVICE_HOST` set) an unset value fails closed: the binary refuses to start |
 | | `LOG_LEVEL` / `LOG_HASH_SALT` | `info` / secret | Salt for hashed identifiers in logs |
 | | `OTEL_TRACES_SAMPLER_ARG` | `0.2` | |
 | Feature flags | `FEATURE_DIRECT_SIGNUP` | `false` | B-I1 |
@@ -670,12 +716,13 @@ Publishing the same `TenantConverted` again (same envelope `id`) does nothing: `
 | | `OPERATOR_PATH_LIVE` | `false` | Operator routes `403` outside dev/test until true (`BIL-AUTH-6`) |
 | | `AUTO_REVERT_ON_EFW` | `false` | Early fraud warnings never revert automatically |
 | | `AUTO_PAUSE_ON_OPERATOR_SUSPENSION` | `true` | §8.10 |
+| | `USAGE_BILLING_CONSUMER_ENABLED` | `false` | Starts the `usage-billing-q` consumer (BL-OQ-24) |
 | Database | `PG_HOST`, `PG_PORT`, `PG_DBNAME`, `PG_USER`, `PG_PASSWORD`, `PG_SSLMODE`, `PG_BOUNCER_MODE`, `PG_STATEMENT_TIMEOUT`, `PG_LOCK_TIMEOUT` | — | App pool (`billing_app`), read by `pgcommon.ConfigFromEnv` |
 | | `PG_SYSTEM_USER` / `PG_SYSTEM_PASSWORD` / `PG_SYSTEM_MAX_CONNS` | `billing_system` / secret / `4` | BYPASSRLS pool (password required outside dev) |
 | | `PG_AUDIT_DRAINER_USER` / `_PASSWORD` / `_MAX_CONNS` | `billing_audit_drainer` / secret / `2` | platform-audit runner |
 | | `MIGRATION_DATABASE_URL` | — | Direct to Postgres, never PgBouncer |
-| | `RUN_MIGRATIONS` / `MIGRATE_TIMEOUT` | `false` / `10m` | Helm keeps `false`; the hook Job migrates |
-| Events | `SNS_BILLING_EVENTS_TOPIC_ARN`, `SQS_TENANT_BILLING_QUEUE_URL`, `SQS_USAGE_BILLING_QUEUE_URL` | — | |
+| | `RUN_MIGRATIONS` / `MIGRATE_TIMEOUT` | `false` / `10m` | Helm keeps `false`; the hook Job migrates with `MIGRATE_TIMEOUT` `7m` (below its `activeDeadlineSeconds` 480) |
+| Events | `SNS_BILLING_EVENTS_TOPIC_ARN`, `SQS_TENANT_BILLING_QUEUE_URL`, `SQS_USAGE_BILLING_QUEUE_URL` | — | The usage queue URL is required only when `USAGE_BILLING_CONSUMER_ENABLED=true` |
 | | `GLUE_REGISTRY_NAME` | `billing-events` | |
 | | `SQS_MAX_RECEIVE_COUNT` / `SQS_WAIT_TIME_SECONDS` / `SQS_VISIBILITY_TIMEOUT` | `4` / `20` / `60s` | |
 | | `MAX_LIFECYCLE_EVENT_SKEW_SECONDS` | `300` | Future-time clamp (`BIL-EVT-3`) |
@@ -714,7 +761,8 @@ Publishing the same `TenantConverted` again (same envelope `id`) does nothing: `
 |---|---|
 | PCI scope | SAQ A. No PAN, CVV, expiry, provider key or webhook secret in any table, log, event, span or error (`BIL-PCI-2`); ledger payloads allow-listed (`BIL-PCI-3`); `client_secret` only in the 3-D Secure action returned to the payer (`BIL-API-4`) |
 | Provider code isolation | stripe-go only in `adapters/provider/stripe` (`BIL-PCI-1`) |
-| Webhooks | Signature, tolerance, `livemode` verified before storage; tenant from Billing's mapping; state re-read from the provider (`BIL-PAY-2..4`) |
+| Webhooks | Signature, tolerance, `livemode` verified before storage; tenant from Billing's mapping; state re-read from the provider (`BIL-PAY-2..4`); gateway rate limit 50 rps per client IP |
+| Purchase settlement | One provider invoice settles at most one purchase (`BIL-PAY-6`); a purchase is granted only for an invoice paid in its amount and currency, otherwise parked for an operator (`BIL-PAY-7`, `BillingPaymentParked`) |
 | Tenant isolation | Headers-only identity, path-tenant match, `FORCE` RLS, transaction-local GUC, sysPool only on listed paths (`BIL-API-1..2`, `BIL-RLS-1..3`) |
 | Service identity | B-I1 admits only the BFF's mTLS principal; Billing's outbound identity is rejected inbound |
 | Operator actions | `platform_operator` only, gated by `OPERATOR_PATH_LIVE`; every mutation needs a reason and writes an AL-5 audit entry; certification approval needs a second person (`BIL-PROV-4`) |
@@ -739,14 +787,14 @@ The Enterprise Platform Observability Standard (LLD §11.2):
   - platform-audit;
   - `platform_dependency_request_seconds{dependency=stripe|core|realm_provisioner|entitlements, operation, outcome}`.
 - **Tier 2 — `commercial_*`:** none. Nothing is ratified; the candidates are in [`docs/observability/registry-proposals.md`](docs/observability/registry-proposals.md).
-- **Tier 3 — `commercial_billing_*`:** built with gincommon's validated constructors:
+- **Tier 3 — `commercial_billing_*`:** 33 metrics, built with gincommon's validated constructors:
   - webhooks (count, signature failures, processing seconds, backlog);
   - sagas (duration, in flight, overdue, RP-3 attempts);
   - subscriptions by status, plan and provider;
   - purchases, seats, proration deferrals, add-ons;
   - payment failures, dunning;
   - reconciliation findings, collection pauses, held invoices, invoice dispositions;
-  - scheduled emissions, provider certification;
+  - scheduled emissions, provider certification, background loops running (`commercial_billing_background_loop_running{loop}`);
   - events emitted, operator actions, cross-tenant job runs, purchase-to-event seconds.
 
 **Labels:** `domain="commercial"`, `service="commercial-billing"` and `environment` are injected centrally. High-cardinality labels (`tenant_id`, `user_id`, …) are refused.
@@ -759,7 +807,7 @@ The Enterprise Platform Observability Standard (LLD §11.2):
 
 | Asset | Location |
 |---|---|
-| Alert rules — 13 alerts | `deploy/monitoring/app-alerts.yml` |
+| Alert rules — 20 alerts | `deploy/monitoring/app-alerts.yml` |
 | Recording and SLO rules | `recording-rules.yml`, `slo-rules.yml` |
 | platform-audit rules (vendored) | `platform-audit.rules.yml` |
 | Chart copies | `deploy/helm/files/` |
@@ -769,12 +817,15 @@ The Enterprise Platform Observability Standard (LLD §11.2):
 | Prometheus Adapter rule for the HPA's webhook-backlog metric | `deploy/monitoring/prometheus-adapter-rule.yaml` |
 | AWS IAM policy for the IRSA role (SNS, SQS, DLQs, Glue read) | `deploy/iam/` |
 
-The 13 alerts:
+The 20 alerts (27 rules: `BillingWebhookBacklog` has two thresholds, `BillingCronJobNotSucceeding` one rule per job cadence, `BillingCronJobNeverSucceeded` one SEV-2 rule for `saga-sweeper` and one SEV-3 rule for the others):
 - `BillingConversionSagaOverdue`, `BillingSagaFailed`, `CommercialPurchaseNotActive`;
 - `BillingWebhookSignatureFailures`, `BillingWebhookBacklog`;
-- `BillingOutboxDeadLetter`, `BillingDLQNotEmpty`;
+- `BillingOutboxDeadLetter`, `BillingDLQNotEmpty`, `BillingQueueBacklog`, `BillingQueueStalled`, `BillingOutboxLag`;
+- `BillingBackgroundLoopStopped`, `BillingMetricsSnapshotStale`, `BillingCronJobNotSucceeding`, `BillingCronJobNeverSucceeded`;
 - `BillingI18Unavailable`, `BillingProviderUnavailable`, `BillingProviderNotCertified`;
 - `BillingSuspensionDraftsAwaitingDecision`, `BillingReconciliationDrift`, `BillingSeatProjectionDrift`.
+
+Log-based alerts (Loki rules owned by the observability team, not in this file): `BillingReversalDecisionNeeded` (SEV-2), `BillingReviewTrigger` (no page, log line `alert=BillingOperatorReviewNeeded`), and the SEV-2 `BillingPaymentParked` for a payment on a superseded checkout, after the subscription ended, or for another amount or currency than its purchase ([`operator-review.md`](docs/runbooks/operator-review.md)).
 
 Each alert links to a runbook in [`docs/runbooks/`](docs/runbooks/).
 
@@ -797,25 +848,31 @@ Each alert links to a runbook in [`docs/runbooks/`](docs/runbooks/).
 |---|---|---|
 | `commercial-billing` | `/commercial-billing` (entrypoint) | HTTP server, consumers, outbox and audit runners, webhook processor, saga, follow-up, reconciliation and emission workers, registry refresh, metrics snapshot |
 | `jobs` | `/jobs` | One-shot CronJob binary, `--job=<name>` for the ten §13.2 jobs; pushes its run's metrics to `PUSHGATEWAY_URL` |
-| `migrate` | `/migrate` | One-shot schema migration (platform-events outbox and inbox, platform-audit outbox, then 000001–000006); exit 0 or 1 |
+| `migrate` | `/migrate` | One-shot schema migration (platform-events outbox and inbox, platform-audit outbox, then 000001–000007); exit 0 or 1 |
 
 The image is a two-stage `Dockerfile`: a `golang:1.26.11-alpine` builder, then `gcr.io/distroless/static-debian13:nonroot` with no shell, running as a non-root user. `cmd/certify` is built by `make build` but is not shipped in the image.
 
 ### Helm chart
 
-`deploy/helm`, namespace `billing`, with ServiceAccount and pod label `commercial-billing`:
+`deploy/helm` (chart 0.7.0, `kubeVersion >=1.30`; Istio ≥ 1.24 and Helm ≥ 3.19 required), namespace `billing`, with ServiceAccount and pod label `commercial-billing`:
 
 - **Workload:**
   - Deployment: 2 replicas, HPA 2–4 on CPU 70% (plus an optional webhook-backlog external metric), PDB;
   - resources: CPU `100m` / `500m`, memory `256Mi` / `512Mi`;
-  - `terminationGracePeriodSeconds: 45` (HTTP drain, then workers, then pools);
-  - ten CronJobs (`concurrencyPolicy: Forbid`);
-  - the migrate pre-install / pre-upgrade hook Job.
+  - `terminationGracePeriodSeconds: 60` with a native `preStop` sleep of 10 s (Kubernetes ≥ 1.30); the app's shutdown fits in the remaining 50 s (worst case 48 s: readiness fails first, `SHUTDOWN_DRAIN_DELAY`, then HTTP drain in parallel with consumers, outbox and audit runner, then pools, metrics listener, tracer and logger flush);
+  - startup runs its deterministic checks (configuration, Glue schema versions, each enabled queue's `RedrivePolicy` outside dev) before the listeners open, so a bad deploy fails before it takes traffic;
+  - probes with a 6 s timeout; liveness fails only when the audit runner is not alive (a stopped in-pod loop is restarted in-process with backoff 1 s → 5 min and alerted, `BillingBackgroundLoopStopped`);
+  - ten CronJobs (`concurrencyPolicy: Forbid`), with small pools (`PG_MAX_CONNS` 3, `PG_MIN_CONNS` 0, `PG_SYSTEM_MAX_CONNS` 2);
+  - the migrate pre-install / pre-upgrade hook Job, with its own hook ServiceAccount `commercial-billing-migrate` (no IRSA) and hook Secret holding only `MIGRATION_DATABASE_URL`, created at hook weight -10 and deleted on success or failure (Helm ≥ 3.19); `activeDeadlineSeconds` 480, `MIGRATE_TIMEOUT` 7m;
+  - pods labelled `app.kubernetes.io/component` `server` / `cronjob` / `migrate`; the Service, PDB, ServiceMonitor, NetworkPolicy and AuthorizationPolicy of the server select `component=server` only;
+  - secrets split per workload (server, jobs, migrate: each gets only the keys its binary reads); `automountServiceAccountToken: false`.
 - **Mesh and network:**
-  - Istio `forwardClientCertDetails: SANITIZE_SET` (XFCC for B-I1);
-  - NetworkPolicy and AuthorizationPolicy: B-I1 from `bff/bff-signup` only, Entitlements egress on the eligibility `GET` only, `/metrics` from the monitoring namespace.
-- **Gateway:** tenant and operator `HTTPRoute`s plus gateway policies.
-- **Monitoring and secrets:** `ServiceMonitor`, `PrometheusRule`, dashboard ConfigMap, `ExternalSecret`.
+  - Istio native sidecars for the server and the CronJobs (Istio ≥ 1.24); the migrate Job runs without a sidecar. The sidecar's inbound listener appends the verified client certificate to `X-Forwarded-Client-Cert` (`APPEND_FORWARD`, the sidecar default; `forwardClientCertDetails` in ProxyConfig applies to gateways only), and B-I1 reads its caller from the last element. `PeerAuthentication` `STRICT` on Billing's workloads keeps plaintext callers from writing that element themselves;
+  - `metrics.scrapeMode`: `plaintext` (default, Prometheus outside the mesh: the metrics port is `PERMISSIVE`, serves only `/metrics`, and is admitted from `metrics.monitoringCIDRs` or by the NetworkPolicy alone) or `mesh` (`STRICT` everywhere, admitted by namespace);
+  - NetworkPolicies per workload: server (B-I1 from `bff/bff-signup` only, Entitlements egress on the eligibility `GET` only, `/metrics` from the monitoring namespace, HTTPS to public addresses plus `networkPolicy.awsEndpointCIDRs` for VPC interface endpoints and an optional `networkPolicy.egressGateway`), CronJobs (DNS, istiod, Postgres, Core and RP, 443, Pushgateway, OTel) and migrate (DNS and 5432); AuthorizationPolicy on the server.
+- **Gateway:** tenant and operator `HTTPRoute`s plus gateway policies; tenant routes 20 rps per tenant; B-W1 50 rps per client IP (one bucket per IPv4 and per IPv6 client; the gateway's `numTrustedHops` must let it see the real client), with an optional source-CIDR allow-list (`gateway.webhook.allowedSourceCIDRs`, Stripe's published webhook IPs).
+- **Render-time guards:** every environment needs `metrics.scrapeMode` `plaintext` or `mesh`. For staging and prod the chart refuses to render with `PeerAuthentication`, `AuthorizationPolicy` or `NetworkPolicy` disabled, the placeholder account `000000000000`, a missing IRSA role ARN, empty SNS topic or tenant queue values (and the usage queue when its consumer is on), or empty `networkPolicy.postgresCIDRs`. `release.yml` passes these values for the production deploy only, from the `production` environment's `BILLING_*` variables; a staging deploy must supply them itself.
+- **Monitoring and secrets:** `ServiceMonitor`, `PrometheusRule`, dashboard ConfigMap, one `ExternalSecret` per workload (keys from `secretKeys.server` / `jobs` / `migrate`).
 - **Values:** `values-dev.yaml`, `values-staging.yaml` and `values-prod.yaml` over `values.yaml`.
 - **Outside the chart** (platform-owned, references in this repo):
   - the IRSA role, whose policy is [`deploy/iam/`](deploy/iam/README.md); its ARN goes in `serviceAccount.annotations`;
@@ -839,9 +896,9 @@ Seven workflows in `.github/workflows/`, modelled on the IAM services' pipeline:
 |---|---|---|
 | `ci.yml` | PRs and pushes to `main`, dispatch | Orchestrator: `validate-test` ∥ `validate-quality` ∥ `build-image` → `trivy` ∥ `smoke` → `pr-summary` (PRs) / `push` (main) |
 | `validate-test.yml` | called by `ci.yml`, `release.yml` | `make test` (race) → `make cover-all` (every suite, testcontainers) → coverage gate **≥ 96%** over `internal/` + `pkg/` → arch-lint → OpenAPI drift → AsyncAPI ↔ schema sync |
-| `validate-quality.yml` | called by `ci.yml`, `release.yml` | modules, workflow hygiene, fmt, tidy, vet, lint (all build tags), `make guards`, `make metrics-lint`, govulncheck, Dockerfile digest pins, `make helm-check` |
-| `release.yml` | `v*` tags, dispatch | validate → build (tag = HEAD, CHANGELOG entry, Linux binaries) → **provider-certification gate** (LLD §14.6) → schema verify (production Glue) → image (Trivy, SBOM, SLSA provenance, Cosign) → deploy gate (Helm, digest check, 5xx < 1%, rollback) → GitHub Release |
-| `schema-registry.yml` | schema changes on PRs and `main`, releases, dispatch | validate; diff against the registry (fails on a breaking change); register in Glue `billing-events` (staging on `main`, production on release) and verify |
+| `validate-quality.yml` | called by `ci.yml`, `release.yml` | modules, workflow hygiene, fmt, tidy, vet, lint (all build tags), `make guards`, `make metrics-lint`, govulncheck, Dockerfile digest pins, `make helm-check` (Helm v3.21.4) |
+| `release.yml` | `v*` tags, dispatch | validate → build (tag on `main` and = HEAD, CHANGELOG entry, Linux binaries) → **provider-certification gate** (LLD §14.6) → schema verify (production Glue) → image (Trivy, SBOM, SLSA provenance, Cosign) → deploy gate (Helm, deployed digest = published digest, 5xx < 1% for 2 min, else `helm rollback`) → GitHub Release |
+| `schema-registry.yml` | schema changes on PRs and `main`, releases, dispatch | validate; diff against the registry (fails on a breaking change); register in Glue `billing-events` (staging on `main`, production on release; blocked by `SCHEMA_FREEZE` unless forced) and verify |
 | `changelog-check.yml` | PRs touching `internal/`, `api/`, `deploy/`, `cmd/`, `pkg/` | `CHANGELOG.md` must change too |
 | `contract-live.yml` | daily, PRs, dispatch | `test/contract` against Entitlements' consumed schema on its `main` |
 
@@ -851,18 +908,21 @@ Seven workflows in `.github/workflows/`, modelled on the IAM services' pipeline:
 - **On `main`:** the image is pushed to `ghcr.io/bcbp-solutions-fzc-llc/commercial-billing` with provenance and an SBOM, signed keylessly with Cosign, and the signature is verified.
 
 **Configuration:**
-- **Repository secret:** `GO_PRIVATE_TOKEN` (private modules, schema-gov, read access to `commercial-entitlements-service`).
+- **Repository secrets:** `GO_PRIVATE_TOKEN` (private modules, schema-gov source, read access to `commercial-entitlements-service`); optional `CI_REPO_READ_TOKEN` for checkouts (falls back to `github.token`).
 - **Release and registry** (per environment, `staging` / `production`):
   - `CERTIFY_CHECK_DSN` (staging, read-only);
-  - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`;
+  - AWS through GitHub OIDC: variable `AWS_ROLE_ARN` (the role assumed). Access keys are only a documented, commented-out fallback until the role exists;
   - `KUBECONFIG_B64` (production);
   - optional `PUSHGATEWAY_URL` and `ALARM_SNS_ARN` (schema registration metrics and alerts);
-  - variables `AWS_REGION`, `K8S_NAMESPACE`, `PROMETHEUS_URL`.
+  - variables `AWS_REGION`, `K8S_NAMESPACE`, `PROMETHEUS_URL`;
+  - production variables read by the deploy gate (the chart refuses to render without them): `BILLING_IRSA_ROLE_ARN`, `BILLING_SNS_TOPIC_ARN`, `BILLING_TENANT_BILLING_QUEUE_URL`, `BILLING_POSTGRES_CIDRS`; optional `BILLING_USAGE_BILLING_QUEUE_URL` (while the usage consumer is off, BL-OQ-24), `BILLING_WEBHOOK_SOURCE_CIDRS`, `BILLING_AWS_ENDPOINT_CIDRS`, `BILLING_MONITORING_CIDRS`;
+  - optional `SCHEMA_FREEZE` (blocks schema registration).
 
   The registry jobs are skipped until `AWS_REGION` is set.
+- **Supply chain:** third-party actions are pinned by commit SHA, and checkouts don't persist credentials. schema-gov is built from a pinned commit with hash-locked Python dependencies (`.github/schema-gov-requirements.txt`, `pip --require-hashes`, no credentials). In the validate workflows `GO_PRIVATE_TOKEN` is used only in the module-download step, through a credential helper in that step's environment (never on disk), before any code from the checkout runs; later steps run with `GOPROXY=off`. A release tag must be on `main` (`verify-release-tag.sh`; also enable tag rulesets on `v*`). The registry build cache is written only from `main`.
 - **Settings:** the `production` environment must require reviewers from the PCI owner group (HLD §15.4).
 
-Repository templates: `CODEOWNERS` (PCI owner group on the provider adapters, webhook, certification and production values), a pull-request template, `SECURITY.md`, issue templates, and a disabled `dependabot.yml`.
+Repository templates: `CODEOWNERS` (PCI owner group on the provider adapters, webhook, certification and production values), a pull-request template, `SECURITY.md`, issue templates, and a disabled Dependabot configuration (`.github/dependabot.yml.disabled`).
 
 ---
 
@@ -891,7 +951,7 @@ docker build -t commercial-billing:local \
 
 | Endpoint | Returns | Checks |
 |---|---|---|
-| `GET /healthz` | `200 {"status":"ok"}` / `503` problem | Background loops alive; no dependency |
+| `GET /healthz` | `200 {"status":"ok"}` / `503` problem | Platform-audit runner alive; no dependency |
 | `GET /readyz` | `200` / `503` problem (`failed_check`, `checks`) | App pool and BYPASSRLS pool, each through `pgcommon.Pool.Health` |
 
 ### Minimum required environment variables
@@ -904,7 +964,8 @@ MIGRATION_DATABASE_URL=postgres://billing_migrator:<password>@localhost:5634/bil
 
 # Events
 SNS_BILLING_EVENTS_TOPIC_ARN=arn:aws:sns:ap-south-1:<account>:billing-events
-SQS_TENANT_BILLING_QUEUE_URL=… SQS_USAGE_BILLING_QUEUE_URL=…
+SQS_TENANT_BILLING_QUEUE_URL=…
+# SQS_USAGE_BILLING_QUEUE_URL=… only with USAGE_BILLING_CONSUMER_ENABLED=true (default false, BL-OQ-24)
 
 # Provider
 STRIPE_API_KEY=rk_test_… STRIPE_WEBHOOK_SECRETS=whsec_…
@@ -1013,7 +1074,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, how to extend the service, tes
 | [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md) | The LLD — source of truth; §16 open items, §17 errors, §20 operations |
 | [`docs/lld/billing-open-items.md`](docs/lld/billing-open-items.md) | What other teams still owe, by team |
 | [`docs/invariants-coverage.md`](docs/invariants-coverage.md) | Invariant → enforcement → test |
-| [`docs/runbooks/`](docs/runbooks/) | Alert runbooks, DR, key rotation, certification, Test Clock |
+| [`docs/runbooks/`](docs/runbooks/) | 26 runbooks and an index: alerts, operator review, reversal decision, DR, key rotation, certification, Test Clock |
 | [`docs/observability/`](docs/observability/) | Generated metric inventory and registry proposals |
 | [`.claude/CLAUDE.md`](.claude/CLAUDE.md) | Guidance for Claude Code in this repo (plus topic notes, hooks, `/ci-local`, reviewer agents) |
 
