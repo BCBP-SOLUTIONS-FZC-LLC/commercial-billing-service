@@ -52,7 +52,7 @@ func (r *SeatPurchaseRepository) Insert(ctx context.Context, p domain.SeatPurcha
 			p.DeferredAmountMinor, p.DeferralReason, p.Status, p.RequestedBy, p.IdempotencyKey)
 		return err
 	})
-	if sqlState(err) == "23505" {
+	if pgcommon.IsUniqueViolation(err) {
 		return domain.NewError(domain.ErrSeatPurchaseInProgress, "a seat purchase is already in progress")
 	}
 	return err

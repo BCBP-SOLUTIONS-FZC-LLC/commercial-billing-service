@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
@@ -22,8 +23,11 @@ func NewAdminRepository(sysPool *pgcommon.Pool) *AdminRepository {
 	return &AdminRepository{sys: sysPool}
 }
 
+// overlap maps the price-book exclusion constraints (excl_*_overlap, SQLSTATE
+// 23P01, which pgcommon has no Is* helper for: matched by constraint name)
+// and the unique keys to PRICE_OVERLAP.
 func overlap(err error) error {
-	if s := sqlState(err); s == "23P01" || s == "23505" {
+	if pgcommon.IsUniqueViolation(err) || strings.HasPrefix(pgcommon.ConstraintName(err), "excl_") {
 		return domain.NewError(domain.ErrPriceOverlap, "the new row overlaps an existing one for this key")
 	}
 	return err
@@ -96,7 +100,7 @@ func (r *AdminRepository) InsertCertification(ctx context.Context, c port.Certif
 			string(c.Results), c.ProviderAccountRef, c.RunStartedAt, c.RunFinishedAt, c.CertifiedBy))
 		return err
 	})
-	if sqlState(err) == "23505" {
+	if pgcommon.IsUniqueViolation(err) {
 		return out, domain.NewError(domain.ErrCertificationExists, "this run is already pending, passed or exempt; decide or revoke it first")
 	}
 	return out, err

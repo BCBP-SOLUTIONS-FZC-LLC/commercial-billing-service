@@ -38,7 +38,7 @@ func (r *AccountRepository) Create(ctx context.Context, a domain.BillingAccount)
 	if a.IAMLifecycle == "" {
 		a.IAMLifecycle = domain.LifecycleTrial
 	}
-	return inTx(ctx, r.pool, func(q querier) error {
+	err := inTx(ctx, r.pool, func(q querier) error {
 		_, err := q.Exec(ctx, `
 			INSERT INTO billing_accounts (tenant_id, provider, provider_customer_id, currency, billing_contact_name,
 			  billing_contact_email, company_name, country, tax_id, default_pm_set, iam_lifecycle)
@@ -47,6 +47,10 @@ func (r *AccountRepository) Create(ctx context.Context, a domain.BillingAccount)
 			a.CompanyName, a.Country, a.TaxID, a.DefaultPMSet, a.IAMLifecycle)
 		return err
 	})
+	if pgcommon.IsUniqueViolation(err) {
+		return port.ErrAccountExists
+	}
+	return err
 }
 
 // Get returns the account; ACCOUNT not found maps to SUBSCRIPTION_NOT_FOUND

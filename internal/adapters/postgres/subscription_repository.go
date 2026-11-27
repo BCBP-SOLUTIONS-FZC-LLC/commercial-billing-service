@@ -56,7 +56,7 @@ func (r *SubscriptionRepository) Create(ctx context.Context, s domain.Subscripti
 			s.TenantID, s.BillingSubscriptionID, item.PriceID, item.Quantity, item.ProviderItemID)
 		return err
 	})
-	if sqlState(err) == "23505" {
+	if pgcommon.IsUniqueViolation(err) {
 		return domain.NewError(domain.ErrSubscriptionAlreadyExists, "tenant already has a live subscription")
 	}
 	return err

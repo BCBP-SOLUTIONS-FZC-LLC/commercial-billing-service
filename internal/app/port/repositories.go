@@ -2,6 +2,7 @@ package port
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
@@ -34,7 +35,14 @@ type SystemReader interface {
 }
 
 // AccountRepo stores billing_accounts.
+// ErrAccountExists is AccountRepo.Create's answer when the tenant already
+// has a billing account (a concurrent first checkout or signup created it).
+// Repositories map the storage error to it, so the app layer never inspects
+// database errors (BIL-OPS-11).
+var ErrAccountExists = errors.New("billing account already exists")
+
 type AccountRepo interface {
+	// Create inserts the account; ErrAccountExists when one exists.
 	Create(ctx context.Context, a domain.BillingAccount) error
 	Get(ctx context.Context, tenantID string) (domain.BillingAccount, error)
 	// UpdateContact sets contact fields with optimistic locking on record_version.

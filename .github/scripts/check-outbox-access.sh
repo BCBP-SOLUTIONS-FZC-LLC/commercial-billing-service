@@ -6,8 +6,12 @@
 # and tests (which assert on them).
 set -euo pipefail
 tables='(outbox_events|outbox_dead_letters|processed_events)'
+# Any statement form, optionally schema-qualified or quoted:
+# INSERT INTO / UPDATE / DELETE FROM / FROM / JOIN / TRUNCATE [TABLE] /
+# COPY / ALTER TABLE / LOCK [TABLE] / MERGE INTO / REFERENCES.
+verbs='(insert[[:space:]]+into|update|delete[[:space:]]+from|from|join|truncate([[:space:]]+table)?|copy|alter[[:space:]]+table|lock([[:space:]]+table)?|merge[[:space:]]+into|references)'
 bad=$(grep -rniE --include='*.go' \
-  "(insert[[:space:]]+into|update|delete[[:space:]]+from|from|join)[[:space:]]+${tables}\b" . \
+  "${verbs}[[:space:]]+(only[[:space:]]+)?(\"?[a-z_]+\"?\.)?\"?${tables}\b" . \
   | grep -v '/migrations/' | grep -v '^\./test/' | grep -v '_test\.go:' || true)
 if [ -n "$bad" ]; then
   echo "BIL-OPS-2 violation: direct SQL on a platform-events table:"

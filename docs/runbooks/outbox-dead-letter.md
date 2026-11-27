@@ -1,6 +1,6 @@
 # billing.events outbox dead letter
 
-**Alert:** `BillingOutboxDeadLetter` (SEV-2): `platform_outbox_dead_letters{service="commercial-billing"} > 0`. An event (`TenantSeatsChanged`, `TenantPlanChanged`, `TenantPaymentPastDue`, `TenantSubscriptionCancelled`, `TenantReactivated`, `TenantQuotaAddOnChanged`) failed `OUTBOX_MAX_ATTEMPTS` publishes, so IAM, Entitlements, Notification and Audit did not receive it.
+**Alert:** `BillingOutboxDeadLetter` (SEV-2): `sum(increase(platform_dlq_messages_total{service="commercial-billing",operation="outbox_publish"}[24h])) > 0`, platform-events' count of rows moved to `outbox_dead_letters`. The alert resolves 24 h after the last dead letter even if rows remain, so close the incident only when step 1 shows the table empty. An event (`TenantSeatsChanged`, `TenantPlanChanged`, `TenantPaymentPastDue`, `TenantSubscriptionCancelled`, `TenantReactivated`, `TenantQuotaAddOnChanged`) failed `OUTBOX_MAX_ATTEMPTS` publishes, so IAM, Entitlements, Notification and Audit did not receive it.
 
 1. Inspect `outbox_dead_letters` (admin_readonly): `event_type`, `last_error`. Typical causes: SNS permissions (IRSA role), topic ARN, Glue schema version missing (deploy ahead of schema registration), payload over the SNS limit.
 2. Fix the cause, then requeue with the platform-events runbook (move the row back to `outbox_events`; ordering is per tenant, so requeue a tenant's rows in `ordering_seq` order).

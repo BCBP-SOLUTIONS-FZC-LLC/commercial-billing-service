@@ -14,6 +14,7 @@ import (
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/problem"
 )
 
 // idemMode is a route's Idempotency-Key rule (§5.1, §5.3).
@@ -183,12 +184,11 @@ func (m *Idempotency) finish(c *gin.Context, r idemRoute, tenant, key string, cw
 	}
 }
 
+// isInProgress reads the captured gincommon problem with gincommon's own
+// decoder (BIL-API-6).
 func isInProgress(body []byte) bool {
-	var p struct {
-		ErrorCode string `json:"errorCode"`
-	}
-	_ = json.Unmarshal(body, &p)
-	return p.ErrorCode == string(domain.ErrRequestInProgress)
+	p, err := problem.Decode(bytes.NewReader(body))
+	return err == nil && p.ErrorCode == string(domain.ErrRequestInProgress)
 }
 
 // requestHash is SHA-256 of the method, path and compact JSON body (§4.2.19).

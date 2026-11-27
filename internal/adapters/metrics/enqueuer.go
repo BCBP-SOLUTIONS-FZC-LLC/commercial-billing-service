@@ -7,7 +7,7 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 )
 
-// CountingEnqueuer counts commercial_events_emitted_total{event_type} for
+// CountingEnqueuer counts commercial_billing_events_emitted_total{event_type} for
 // each event enqueued in the outbox. The count is taken at enqueue, inside
 // the business transaction, so a rolled-back transaction is counted too;
 // platform_outbox_* covers what was actually published.

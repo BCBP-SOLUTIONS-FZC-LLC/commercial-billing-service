@@ -120,8 +120,6 @@ func isDBUnavailable(err error) bool {
 }
 
 // sqlState returns the SQLSTATE of err, or "".
-func sqlState(err error) string { return pgcommon.SQLState(err) }
-
 // subscriptionNotFound is the 404 for a missing account, subscription or item:
 // a tenant without them has no subscription (§17 SUBSCRIPTION_NOT_FOUND).
 func subscriptionNotFound(what, id string) error {

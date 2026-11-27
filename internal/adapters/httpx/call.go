@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/problem"
 )
 
 // Billing's outbound identity (BIL-AUTH-4, CD-19): IAM maps the reserved
@@ -47,7 +49,7 @@ func Call(ctx context.Context, c *http.Client, method, url, tenantID, idemKey st
 	if err != nil {
 		return Response{}, err
 	}
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", "application/json, application/problem+json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -68,10 +70,11 @@ func Call(ctx context.Context, c *http.Client, method, url, tenantID, idemKey st
 	}
 	out := Response{Status: resp.StatusCode, Body: b}
 	if !out.OK() {
-		var p struct {
-			ErrorCode string `json:"errorCode"`
-		}
-		if json.Unmarshal(b, &p) == nil {
+		// The callee's RFC 9457 problem, parsed by platform-gincommon (BIL-API-6):
+		// branch on errorCode, never on title or detail. Decoded whatever the
+		// Content-Type, so a callee still answering application/json with an
+		// errorCode is read the same way.
+		if p, err := problem.Decode(bytes.NewReader(b)); err == nil {
 			out.ErrorCode = p.ErrorCode
 		}
 	}

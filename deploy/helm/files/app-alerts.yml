@@ -118,15 +118,20 @@ groups:
 
   - name: commercial_billing.bus
     rules:
+      # platform-events counts a row moved to outbox_dead_letters as
+      # platform_dlq_messages_total{operation="outbox_publish"} (registry,
+      # approved). The registry has no dead-letter backlog gauge, so the alert
+      # stays firing for 24 h after the last dead letter; the runbook confirms
+      # the table is empty before closing.
       - alert: BillingOutboxDeadLetter
-        expr: max(platform_outbox_dead_letters{service="commercial-billing"}) > 0
+        expr: sum(increase(platform_dlq_messages_total{service="commercial-billing",operation="outbox_publish"}[24h])) > 0
         labels:
           severity: sev2
           team: commercial
-          metric_status: proposed
+          metric_status: approved
         annotations:
           summary: A billing.events message reached the outbox dead letters
-          description: '{{ $value }} dead-lettered outbox row(s); IAM / Entitlements did not receive them.'
+          description: '{{ $value | printf "%.0f" }} billing.events row(s) dead-lettered in the last 24 h; IAM / Entitlements did not receive them.'
           runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/outbox-dead-letter.md
 
       - alert: BillingDLQNotEmpty

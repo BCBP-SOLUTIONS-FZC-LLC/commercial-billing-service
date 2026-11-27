@@ -13,16 +13,15 @@
 //
 // Every collector is registered on gincommon's registry and every scrape
 // and push reads gincommon.MetricsGatherer; domain, service and environment
-// are gincommon's central const labels. With adapters/observability this
-// is the only package allowed to name Prometheus types (depguard).
+// are gincommon's central const labels. Collectors are gincommon's own
+// types (gincommon.CounterVec, …), so no package names Prometheus types
+// (BIL-OPS-10, depguard).
 package metrics
 
 import (
 	"errors"
 	"strconv"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
@@ -73,16 +72,16 @@ var (
 
 // Metrics holds every §11.2 collector Billing owns.
 type Metrics struct {
-	purchaseToEvent, webhookSeconds, sagaSeconds                      *prometheus.HistogramVec
-	eventsEmitted, operatorActions, jobRuns                           *prometheus.CounterVec
-	webhooks, signatureFailures, rpAttempts, downgradesBlocked        *prometheus.CounterVec
-	repricing, seatChanges, deferred, deferredAmount, addonPurchases  *prometheus.CounterVec
-	paymentFailures, dunning, dispositions                            *prometheus.CounterVec
-	seatMismatches, unmatched                                         prometheus.Counter
-	backlog, inFlight, subscriptions, findings, paused, held, pending *prometheus.GaugeVec
-	certified                                                         *prometheus.GaugeVec
-	overdue                                                           prometheus.Gauge
-	dependency                                                        *prometheus.HistogramVec // shared platform_dependency_request_seconds
+	purchaseToEvent, webhookSeconds, sagaSeconds                      *gincommon.HistogramVec
+	eventsEmitted, operatorActions, jobRuns                           *gincommon.CounterVec
+	webhooks, signatureFailures, rpAttempts, downgradesBlocked        *gincommon.CounterVec
+	repricing, seatChanges, deferred, deferredAmount, addonPurchases  *gincommon.CounterVec
+	paymentFailures, dunning, dispositions                            *gincommon.CounterVec
+	seatMismatches, unmatched                                         gincommon.Counter
+	backlog, inFlight, subscriptions, findings, paused, held, pending *gincommon.GaugeVec
+	certified                                                         *gincommon.GaugeVec
+	overdue                                                           gincommon.Gauge
+	dependency                                                        *gincommon.HistogramVec // shared platform_dependency_request_seconds
 }
 
 var _ port.Metrics = (*Metrics)(nil)
@@ -90,20 +89,20 @@ var _ port.Metrics = (*Metrics)(nil)
 // New registers the collectors on reg (gincommon.MetricsRegisterer() in
 // the server; a fresh registry in jobs and tests). gincommon's metrics
 // identity must be initialised first (ObservabilityMiddlewares).
-func New(reg prometheus.Registerer) (*Metrics, error) {
+func New(reg gincommon.Registerer) (*Metrics, error) {
 	m := &Metrics{}
 	var errs []error
-	cv := func(name, help string, labels ...string) *prometheus.CounterVec {
+	cv := func(name, help string, labels ...string) *gincommon.CounterVec {
 		c, err := gincommon.NewCounterVec(reg, name, help, labels...)
 		errs = append(errs, err)
 		return c
 	}
-	gv := func(name, help string, labels ...string) *prometheus.GaugeVec {
+	gv := func(name, help string, labels ...string) *gincommon.GaugeVec {
 		g, err := gincommon.NewGaugeVec(reg, name, help, labels...)
 		errs = append(errs, err)
 		return g
 	}
-	hv := func(name, help string, buckets []float64, labels ...string) *prometheus.HistogramVec {
+	hv := func(name, help string, buckets []float64, labels ...string) *gincommon.HistogramVec {
 		h, err := gincommon.NewHistogramVec(reg, name, help, buckets, labels...)
 		errs = append(errs, err)
 		return h
@@ -143,15 +142,12 @@ func New(reg prometheus.Registerer) (*Metrics, error) {
 	errs = append(errs, err)
 	m.overdue, err = gincommon.NewGauge(reg, SagasOverdue, "Sagas not confirmed 30 minutes after payment (alert source).")
 	errs = append(errs, err)
-	// Tier 1 shared histogram: platform-events registers the same registry
-	// entry for SNS/SQS calls; reuse its collector when it is already there.
-	if h, err := gincommon.NewSharedHistogramVec(reg, DependencyRequestSeconds); err == nil {
-		m.dependency = h
-	} else if are := (prometheus.AlreadyRegisteredError{}); errors.As(err, &are) {
-		m.dependency, _ = are.ExistingCollector.(*prometheus.HistogramVec)
-	} else {
-		errs = append(errs, err)
-	}
+	// Tier 1 shared histogram. platform-events registers the same registry
+	// entry for SNS/SQS calls and reuses an identical collector already
+	// registered, so New must run before the event bus is built (cmd/server,
+	// cmd/jobs); then both share one series.
+	m.dependency, err = gincommon.NewSharedHistogramVec(reg, DependencyRequestSeconds)
+	errs = append(errs, err)
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
@@ -285,7 +281,7 @@ func (m *Metrics) SetSnapshot(s port.MetricsSnapshot) {
 	}
 }
 
-func setMap(g *prometheus.GaugeVec, values map[string]int) {
+func setMap(g *gincommon.GaugeVec, values map[string]int) {
 	g.Reset()
 	for k, n := range values {
 		g.WithLabelValues(k).Set(float64(n))

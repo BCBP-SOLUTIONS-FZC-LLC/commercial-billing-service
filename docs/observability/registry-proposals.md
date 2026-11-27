@@ -62,7 +62,7 @@ Alerts that read them carry `metric_status: proposed`.
 | `platform_http_requests_total`, `platform_http_request_duration_seconds` | platform-gincommon | Availability and latency SLOs (`slo-rules.yml`) |
 | `platform_event_propagation_seconds{queue, event_type}` | platform-events (consumers) | `CommercialPurchaseNotActive` (composed) |
 | `platform_queue_depth`, `platform_dlq_depth{queue}` | platform-events (queue-depth sampler) | `BillingDLQNotEmpty`, dashboard |
-| `platform_outbox_pending_events`, `platform_outbox_dead_letters` | platform-events (outbox runner) | `BillingOutboxDeadLetter`, dashboard |
+| `platform_outbox_pending_events`; outbox dead letters as `platform_dlq_messages_total{operation="outbox_publish"}` (approved) | platform-events (outbox runner) | `BillingOutboxDeadLetter`, dashboard |
 | `platform_build_info{version}` | platform-gincommon | release tracking |
 
 ## 3. Label vocabulary notes for the registry

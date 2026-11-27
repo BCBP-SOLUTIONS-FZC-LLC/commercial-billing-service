@@ -50,7 +50,7 @@ func (r *PlanChangeRepository) Insert(ctx context.Context, c domain.PlanChangeRe
 			c.AmountMinor, c.Currency, c.I18CheckedAt, c.BlockerCodes, c.RequestedBy, c.IdempotencyKey)
 		return err
 	})
-	if sqlState(err) == "23505" {
+	if pgcommon.IsUniqueViolation(err) {
 		return domain.NewError(domain.ErrPlanChangePending, "a plan change is already pending")
 	}
 	return err

@@ -30,10 +30,10 @@ func (r *ReconRepository) Queue(ctx context.Context, run port.ReconRun) error {
 			VALUES ($1::uuid, $2, $3, $4, $5, 'queued', $6::uuid)`, run.RunID, run.Provider, run.WindowStart, run.WindowEnd, run.AutoRepair, run.StartedBy)
 		return err
 	})
-	switch sqlState(err) {
-	case "23505":
+	switch {
+	case pgcommon.IsUniqueViolation(err):
 		return domain.NewError(domain.ErrReconciliationRunning, "a reconciliation run for this provider is queued or running")
-	case "23514":
+	case pgcommon.IsCheckViolation(err):
 		return domain.NewError(domain.ErrValidation, "the window must end after it starts and span at most 35 days")
 	}
 	return err

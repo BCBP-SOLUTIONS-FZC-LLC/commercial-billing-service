@@ -4,9 +4,9 @@
 // gincommon.InitTracingWithConfig), errors are recorded with
 // gincommon.RecordSpanError, and the trace id comes from
 // gincommon.SpanTraceID. Span attributes, links and the span id have no
-// gincommon helper yet, so this package — and adapters/metrics for the
-// registry — is the only place allowed to name OpenTelemetry or
-// Prometheus types (depguard in .golangci.yml).
+// gincommon helper yet, so this package is the only place allowed to name
+// OpenTelemetry types (BIL-OPS-10, depguard rule observability). No package
+// names Prometheus types (depguard rule metrics).
 package observability
 
 import (
