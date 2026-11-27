@@ -5,17 +5,22 @@ This directory holds the reference IAM policy for the service's IRSA role.
 - The application does not create the role; platform Terraform owns it.
 - Copy `policy.json` into the Terraform module (`policy.tf.example` shows the wiring), or apply it with `aws iam create-policy` / `put-role-policy`.
 
-The role is assumed by the ServiceAccount `commercial-billing` in namespace `billing` (`BIL-OPS-4`). Put its ARN in the environment's Helm values:
+The role is assumed by the ServiceAccount `commercial-billing` in namespace `billing` (`BIL-OPS-4`). Its ARN is not kept in any values file: the deploy pipeline sets the ServiceAccount annotation from the GitHub environment variable `BILLING_IRSA_ROLE_ARN` (`release.yml`, deploy-gate), which renders as
 
 ```yaml
 serviceAccount:
   annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/commercial-billing
+    eks.amazonaws.com/role-arn: arn:aws:iam::<account-id>:role/commercial-billing
 ```
 
-The same role is assumed by the migrate Job and every CronJob in `deploy/helm/templates/`, which all run as that ServiceAccount.
-- **The CronJobs** (`cmd/jobs`) make no AWS call. They use Postgres, the provider and the Pushgateway, and their events leave through the server's outbox relay.
-- **The migrate Job** uses Postgres only.
+For `APP_ENV` `staging` and `prod` the chart refuses to render when the annotation is missing, is not an IAM role ARN, or carries the placeholder account `000000000000`. The same applies to the SNS topic ARN and queue URLs (`BILLING_SNS_TOPIC_ARN`, `BILLING_TENANT_BILLING_QUEUE_URL`; `BILLING_USAGE_BILLING_QUEUE_URL` only when `USAGE_BILLING_CONSUMER_ENABLED` is `true`) and to `networkPolicy.postgresCIDRs` (`BILLING_POSTGRES_CIDRS`).
+
+**Network path (go-live check).** The server's NetworkPolicy admits HTTPS only to public addresses by default. If SNS, SQS, Glue or STS are reached through VPC interface endpoints (private addresses), set `networkPolicy.awsEndpointCIDRs` to the endpoints' subnets (`BILLING_AWS_ENDPOINT_CIDRS` in release.yml), or `networkPolicy.egressGateway` for a mesh egress gateway. Otherwise the server cannot resolve its Glue schemas at start-up and crash-loops.
+
+The pods set `automountServiceAccountToken: false`: the EKS pod identity webhook mounts the web-identity token (`aws-iam-token` projected volume) whatever that setting is, and the app never calls the Kubernetes API.
+
+- **The CronJobs** run as the same ServiceAccount (they need its mesh identity for Core and RP) but make no AWS call. They use Postgres, Core, RP, the provider and the Pushgateway, and their events leave through the server's outbox relay.
+- **The migrate Job** runs as its own ServiceAccount `commercial-billing-migrate` (a Helm hook, created before the Job and deleted after it, whether it succeeds or fails), which has no role: it uses Postgres only. Do not add it to the role's trust policy.
 
 ## What Billing needs
 

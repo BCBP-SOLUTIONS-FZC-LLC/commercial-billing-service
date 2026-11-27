@@ -12,7 +12,7 @@ metadata:
 spec:
   selector:
     matchLabels:
-      {{- include "commercial-billing.selectorLabels" . | nindent 6 }}
+      {{- include "commercial-billing.componentSelectorLabels" (dict "ctx" . "component" "server") | nindent 6 }}
   endpoints:
     - port: http-metrics
       path: /metrics

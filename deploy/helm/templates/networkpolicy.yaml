@@ -1,17 +1,20 @@
 {{- if .Values.networkPolicy.enabled }}
 {{- $np := .Values.networkPolicy }}
-# §10.2: default deny; admit only what Billing needs.
+{{- $fullname := include "commercial-billing.fullname" . }}
+# §10.2: default deny; admit only what Billing needs. Server pods only
+# (component=server); the CronJobs and the migrate Job have their own below.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "commercial-billing.fullname" . }}
+  name: {{ $fullname }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "commercial-billing.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
 spec:
   podSelector:
     matchLabels:
-      {{- include "commercial-billing.selectorLabels" . | nindent 6 }}
+      {{- include "commercial-billing.componentSelectorLabels" (dict "ctx" . "component" "server") | nindent 6 }}
   policyTypes: [Ingress, Egress]
   ingress:
     # Gateway: tenant, operator and webhook routes.
@@ -39,24 +42,15 @@ spec:
       ports:
         - { port: {{ .Values.service.metricsPort }}, protocol: TCP }
   egress:
-    # DNS.
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-      ports:
-        - { port: 53, protocol: UDP }
-        - { port: 53, protocol: TCP }
-    # Postgres via PgBouncer, and the direct RDS endpoint for migrations.
-    - {{- if $np.postgresCIDRs }}
-      to:
-        {{- range $np.postgresCIDRs }}
-        - ipBlock: { cidr: {{ . }} }
-        {{- end }}
-      {{- end }}
-      ports:
+    {{- include "commercial-billing.np.dns" . | nindent 4 }}
+    {{- include "commercial-billing.np.istiod" . | nindent 4 }}
+    # Postgres via PgBouncer (and the direct endpoint when RUN_MIGRATIONS=true).
+    # postgresCIDRs is required in staging and prod (the chart fails without
+    # it); empty in dev means any destination on these ports.
+    - ports:
         - { port: {{ $np.postgresPort }}, protocol: TCP }
         - { port: {{ $np.pgbouncerPort }}, protocol: TCP }
+      {{- include "commercial-billing.np.postgresTo" . | nindent 6 }}
     # Core (I-11, I-18), Realm Provisioner (RP-3, RP-4, RP-11), Audit Log (AL-5).
     - to:
         - namespaceSelector:
@@ -80,20 +74,76 @@ spec:
               app.kubernetes.io/name: {{ $np.entitlementsPodName }}
       ports:
         - { port: 8080, protocol: TCP }
-    # OTel collector and Pushgateway.
+    {{- include "commercial-billing.np.observability" . | nindent 4 }}
+    {{- include "commercial-billing.np.https" . | nindent 4 }}
+    {{- if $np.awsEndpointCIDRs }}
+    {{- include "commercial-billing.np.awsEndpoints" . | nindent 4 }}
+    {{- end }}
+{{- if .Values.cronjobs.jobs }}
+---
+# §13.2 CronJobs: no ingress. Egress: Postgres (PgBouncer), Core (I-11,
+# I-18: seat-renewal, seat-projection-check, downgrade-apply) and RP (RP-3:
+# saga-sweeper) over the mesh, Stripe, the Pushgateway and OTel. No AWS
+# (events leave through the server's outbox relay), no Entitlements, no
+# Audit Log (jobs only enqueue audit entries).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-cronjob
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cronjob
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "commercial-billing.componentSelectorLabels" (dict "ctx" . "component" "cronjob") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  egress:
+    {{- include "commercial-billing.np.dns" . | nindent 4 }}
+    {{- include "commercial-billing.np.istiod" . | nindent 4 }}
+    # Postgres via PgBouncer.
+    - ports:
+        - { port: {{ $np.postgresPort }}, protocol: TCP }
+        - { port: {{ $np.pgbouncerPort }}, protocol: TCP }
+      {{- include "commercial-billing.np.postgresTo" . | nindent 6 }}
+    # Core and Realm Provisioner.
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ $np.observabilityNamespace }}
+              kubernetes.io/metadata.name: {{ $np.iamNamespace }}
+          podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  {{- toYaml $np.jobIamPodNames | nindent 18 }}
       ports:
-        - { port: 4317, protocol: TCP }
-        - { port: 9091, protocol: TCP }
-    # HTTPS out: Stripe API and AWS (SNS, SQS, Glue, STS). Restricted to the
-    # mesh egress gateway / ServiceEntry allow-list by the platform.
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
-      ports:
-        - { port: 443, protocol: TCP }
+        - { port: 8080, protocol: TCP }
+    {{- include "commercial-billing.np.observability" . | nindent 4 }}
+    {{- include "commercial-billing.np.https" . | nindent 4 }}
+{{- end }}
+{{- if .Values.migrate.enabled }}
+---
+# §13.1 migrate hook Job: no ingress; DNS and the direct Postgres endpoint
+# only. (On a first install the hook runs before this policy exists.)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-migrate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commercial-billing.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "commercial-billing.componentSelectorLabels" (dict "ctx" . "component" "migrate") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  egress:
+    {{- include "commercial-billing.np.dns" . | nindent 4 }}
+    - ports:
+        - { port: {{ $np.postgresPort }}, protocol: TCP }
+      {{- include "commercial-billing.np.postgresTo" . | nindent 6 }}
+{{- end }}
 {{- end }}

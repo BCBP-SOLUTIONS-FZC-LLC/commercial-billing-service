@@ -4,7 +4,7 @@ description: Commercial Billing Service — subscriptions, conversion, seats, to
 type: application
 version: 0.7.0
 appVersion: "0.7.0"
-kubeVersion: ">=1.28.0-0"
+kubeVersion: ">=1.30.0-0"
 keywords:
   - commercial
   - billing

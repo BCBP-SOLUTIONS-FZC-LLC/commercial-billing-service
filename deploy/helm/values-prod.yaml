@@ -1,11 +1,14 @@
-# Production (live keys only here, BIL-OPS-7). Account ids are set by the
-# deploy pipeline (--set) from Terraform outputs.
+# Production (live keys only here, BIL-OPS-7). Account-specific values are
+# not kept here: the deploy pipeline (release.yml, deploy-gate) sets the IRSA
+# role ARN (serviceAccount.annotations), the SNS topic ARN, both queue URLs
+# and networkPolicy.postgresCIDRs from the production environment's GitHub
+# variables, and the chart refuses to render prod without them.
 env:
   APP_ENV: prod
   TENANT_APP_BASE_URL: https://app.bcbpsolutions.com
-  SNS_BILLING_EVENTS_TOPIC_ARN: arn:aws:sns:ap-south-1:000000000000:billing-events
-  SQS_TENANT_BILLING_QUEUE_URL: https://sqs.ap-south-1.amazonaws.com/000000000000/tenant-billing-q
-  SQS_USAGE_BILLING_QUEUE_URL: https://sqs.ap-south-1.amazonaws.com/000000000000/usage-billing-q
+  SNS_BILLING_EVENTS_TOPIC_ARN: ""
+  SQS_TENANT_BILLING_QUEUE_URL: ""
+  SQS_USAGE_BILLING_QUEUE_URL: ""
 externalSecret:
   secretPath: commercial/prod/billing
 gateway:

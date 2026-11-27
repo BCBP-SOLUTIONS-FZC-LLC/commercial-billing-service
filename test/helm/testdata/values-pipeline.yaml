@@ -1,0 +1,13 @@
+# Representative pipeline values for rendering the base values (APP_ENV
+# prod), staging and prod in helm-check and the chart tests; release.yml
+# supplies the real ones from GitHub environment variables. 111111111111 is
+# a test id, not an account.
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::111111111111:role/commercial-billing
+env:
+  SNS_BILLING_EVENTS_TOPIC_ARN: arn:aws:sns:ap-south-1:111111111111:billing-events
+  SQS_TENANT_BILLING_QUEUE_URL: https://sqs.ap-south-1.amazonaws.com/111111111111/tenant-billing-q
+  SQS_USAGE_BILLING_QUEUE_URL: https://sqs.ap-south-1.amazonaws.com/111111111111/usage-billing-q
+networkPolicy:
+  postgresCIDRs: [10.20.0.0/24, 10.20.1.0/24]

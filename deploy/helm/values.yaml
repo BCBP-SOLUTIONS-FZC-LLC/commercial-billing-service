@@ -16,7 +16,10 @@ serviceAccount:
   # ServiceAccount commercial-billing (CD-19): its SPIFFE identity is what
   # Core, RP and Entitlements admit (cluster.local/ns/billing/sa/commercial-billing).
   name: commercial-billing
-  annotations: {}    # eks.amazonaws.com/role-arn for SNS / SQS / Glue (IRSA); policy in deploy/iam/
+  # eks.amazonaws.com/role-arn: the IRSA role for SNS / SQS / Glue (policy in
+  # deploy/iam/). Required in staging and prod: the chart fails to render
+  # without it; the deploy pipeline sets it (release.yml, BILLING_IRSA_ROLE_ARN).
+  annotations: {}
 
 service:
   port: 8080
@@ -24,7 +27,11 @@ service:
 
 # Deployment (§13.1): 2 replicas minimum, spread across 3 AZs.
 replicaCount: 2
-terminationGracePeriodSeconds: 45   # HTTP drain 30 s + workers 5 s + pools 10 s
+# Shutdown: preStop sleep (endpoints leave the gateway and mesh), then
+# SIGTERM; the app's drain (HTTP, workers, pools) must fit in the rest:
+# terminationGracePeriodSeconds - preStopSleepSeconds = 50 s.
+terminationGracePeriodSeconds: 60
+preStopSleepSeconds: 10             # Kubernetes-native sleep action (k8s >= 1.30; distroless has no shell)
 topologySpread:
   enabled: true
   maxSkew: 1
@@ -61,12 +68,19 @@ autoscaling:
 podDisruptionBudget:
   minAvailable: 1
 
-# Istio sidecar (BIL-AUTH-3, §13.1): forward the verified client certificate
-# as X-Forwarded-Client-Cert. B-I1's caller identity comes only from that
-# header; without it every B-I1 call is 403. helm-check asserts this.
+# Istio (BIL-AUTH-3, §13.1). The server and the CronJobs run the sidecar as
+# a Kubernetes native sidecar (Istio >= 1.24, Kubernetes >= 1.29). The
+# sidecar's inbound listener appends the verified client certificate to
+# X-Forwarded-Client-Cert (APPEND_FORWARD, the sidecar default; ProxyConfig's
+# forwardClientCertDetails applies to gateways only); B-I1 reads its caller
+# from the last element. PeerAuthentication STRICT keeps plaintext callers
+# from supplying that element themselves.
+# staging and prod refuse to render with peerAuthentication,
+# authorizationPolicy or networkPolicy disabled (_helpers.tpl validate).
 istio:
-  forwardClientCertDetails: SANITIZE_SET
-  # Render AuthorizationPolicy (L7, mTLS identities). NetworkPolicy is always rendered.
+  peerAuthentication:
+    enabled: true
+  # Render AuthorizationPolicy (L7, mTLS identities).
   authorizationPolicy:
     enabled: true
   gatewayPrincipal: cluster.local/ns/gateway/sa/envoy-gateway
@@ -76,6 +90,7 @@ podAnnotations: {}
 podLabels: {}
 
 probes:
+  timeoutSeconds: 6   # above the app's 5 s dependency-check bound (router.go probeTimeout)
   startup:
     path: /healthz
     periodSeconds: 5
@@ -119,6 +134,9 @@ env:
   SNS_BILLING_EVENTS_TOPIC_ARN: ""
   GLUE_REGISTRY_NAME: billing-events
   SQS_TENANT_BILLING_QUEUE_URL: ""
+  # usage-billing-q stays off until UsagePeriodClosed is ratified (BL-OQ-24);
+  # the queue URL is required only when this is "true".
+  USAGE_BILLING_CONSUMER_ENABLED: "false"
   SQS_USAGE_BILLING_QUEUE_URL: ""
   SQS_MAX_RECEIVE_COUNT: "4"
   SQS_WAIT_TIME_SECONDS: "20"
@@ -163,15 +181,34 @@ env:
   OTEL_TRACES_SAMPLER_ARG: "0.2"
   PUSHGATEWAY_URL: http://pushgateway.observability.svc.cluster.local:9091
 
+# Plain values only the server gets, on top of env (none by default).
+serverEnv: {}
+
 # Secret keys (§10.5): never in values; OpenBao via External Secrets Operator.
+# Each workload gets only the keys its binary reads.
 secretKeys:
-  - DATABASE_URL
-  - PG_SYSTEM_PASSWORD
-  - PG_AUDIT_DRAINER_PASSWORD
-  - MIGRATION_DATABASE_URL
-  - STRIPE_API_KEY
-  - STRIPE_WEBHOOK_SECRETS
-  - LOG_HASH_SALT
+  # cmd/server. MIGRATION_DATABASE_URL is added only when env.RUN_MIGRATIONS
+  # is "true" (never in Kubernetes by default).
+  server:
+    - DATABASE_URL
+    - PG_SYSTEM_PASSWORD
+    - PG_AUDIT_DRAINER_PASSWORD    # the auditoutbox.Runner's pool
+    - STRIPE_API_KEY
+    - STRIPE_WEBHOOK_SECRETS       # B-W1 signature check
+    - LOG_HASH_SALT
+  # cmd/jobs: app and system pools, the provider, log hashing. The Stripe
+  # adapter refuses to build without a webhook secret, so jobs that call
+  # Stripe need STRIPE_WEBHOOK_SECRETS too. No audit drainer (jobs only
+  # enqueue), no migration DSN.
+  jobs:
+    - DATABASE_URL
+    - PG_SYSTEM_PASSWORD
+    - STRIPE_API_KEY
+    - STRIPE_WEBHOOK_SECRETS
+    - LOG_HASH_SALT
+  # cmd/migrate: the schema owner's direct DSN only, in its own Secret.
+  migrate:
+    - MIGRATION_DATABASE_URL
 
 externalSecret:
   enabled: true
@@ -184,11 +221,24 @@ externalSecret:
 # Used only when externalSecret.enabled is false (dev): a pre-created Secret.
 existingSecret: ""
 
-# Migrate hook Job (§13.1): pre-install / pre-upgrade, cmd/migrate.
+# Migrate hook Job (§13.1): pre-install / pre-upgrade, cmd/migrate. It runs
+# as its own ServiceAccount commercial-billing-migrate and reads its own
+# Secret commercial-billing-migrate-secrets, both hooks created just before
+# it (the release's ServiceAccount and Secret do not exist yet on a first
+# install). The ServiceAccount and Secret are deleted whether the Job
+# succeeds or fails (a failed Job is kept for its logs; Helm >= 3.19 is
+# needed for the failure case, release.yml pins it).
+
 migrate:
   enabled: true
   backoffLimit: 1
-  activeDeadlineSeconds: 900
+  # The whole Job (both attempts) stops before release.yml's helm
+  # --timeout=10m, so Helm sees the hook fail instead of timing out on it;
+  # MIGRATE_TIMEOUT (below it) lets cmd/migrate exit cleanly first.
+  activeDeadlineSeconds: 480
+  existingSecret: ""   # externalSecret disabled only: Secret with MIGRATION_DATABASE_URL (default existingSecret)
+  env:                 # plain values on top of env
+    MIGRATE_TIMEOUT: 7m
 
 # CronJobs (§13.2) — one binary, --job=<name>; names and schedules match
 # cmd/jobs (helm-check asserts it).
@@ -198,6 +248,13 @@ cronjobs:
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   activeDeadlineSeconds: 900
+  # Plain values on top of env for every CronJob: one job runs at a time per
+  # pod, so its pools stay small (ten CronJobs can overlap the server's
+  # connections on PgBouncer).
+  env:
+    PG_MAX_CONNS: "3"
+    PG_MIN_CONNS: "0"
+    PG_SYSTEM_MAX_CONNS: "2"
   jobs:
     saga-sweeper: "* * * * *"
     seat-renewal: "*/15 * * * *"
@@ -219,16 +276,38 @@ networkPolicy:
   bffPodLabels:
     app.kubernetes.io/name: bff-signup
   observabilityNamespace: observability     # OTel collector, Pushgateway
+  istioNamespace: istio-system               # istiod (sidecar xDS and certificates, 15012)
   iamNamespace: iam                          # Core, RP, Audit Log
   iamPodNames:
     - iam-org-membership
     - iam-realm-provisioner
     - iam-audit-log
+  # CronJobs: Core (I-11, I-18) and RP (RP-3 from saga-sweeper) only.
+  jobIamPodNames:
+    - iam-org-membership
+    - iam-realm-provisioner
   entitlementsNamespace: commercial
   entitlementsPodName: commercial-entitlements
-  postgresCIDRs: []        # RDS / PgBouncer subnets; empty = any (dev)
+  # RDS / PgBouncer subnets. Required in staging and prod (the chart fails
+  # without it; release.yml sets it from BILLING_POSTGRES_CIDRS); empty in
+  # dev means any destination on the Postgres ports.
+  postgresCIDRs: []
   postgresPort: 5432
   pgbouncerPort: 6432
+  # HTTPS (443) egress. The default rule admits public addresses only
+  # (0.0.0.0/0 minus RFC 1918): Stripe and the public AWS endpoints. Go-live
+  # check: when SNS, SQS, Glue or STS resolve to VPC interface endpoints, or
+  # outbound traffic leaves through an egress gateway, those addresses are
+  # private and the server cannot reach Glue at start-up (it crash-loops).
+  # awsEndpointCIDRs: the interface endpoints' subnets, server only (the
+  # CronJobs and the migrate Job do not call AWS). release.yml sets it from
+  # BILLING_AWS_ENDPOINT_CIDRS.
+  awsEndpointCIDRs: []
+  # Mesh egress gateway (Stripe and AWS through it), server and CronJobs;
+  # empty namespace = none.
+  egressGateway:
+    namespace: ""
+    podLabels: {}            # e.g. {istio: egressgateway}; empty = any pod in the namespace
 
 # Gateway API routes (§13.1): tenant, operator, webhook.
 gateway:
@@ -270,12 +349,43 @@ gateway:
       - { id: B-O16, method: POST, path: "/api/v1/operator/tenants/:id/invoices/:invoice_id/disposition" }
       - { id: B-O17, method: POST, path: "/api/v1/operator/billing/provider-certifications/:cert_id/review" }
   webhook:
+    # Per client IP (sourceCIDR Distinct, one bucket per IPv4 and per IPv6
+    # address), §10.3. Go-live check: the rate limit's client IP and
+    # allowedSourceCIDRs (clientCIDRs) are only the real caller's when the
+    # platform ClientTrafficPolicy trusts the load balancer's X-Forwarded-For
+    # hop (clientIPDetection.xForwardedFor.numTrustedHops). Otherwise every
+    # request carries the load balancer's address: one shared bucket, and an
+    # allow-list that admits all or nothing.
     rateLimitRPS: 50
+    # Source ranges admitted to B-W1; empty = any (the signature is the
+    # control, BIL-PAY-2). Stripe publishes its webhook source IPs at
+    # https://docs.stripe.com/ips (https://stripe.com/files/ips/ips_webhooks.json);
+    # set them per environment as /32 entries and update them when Stripe does.
+    allowedSourceCIDRs: []
 
 # §11.5 dashboard as a ConfigMap for Grafana's dashboard sidecar.
 dashboard:
   enabled: true
   namespace: ""     # empty: the release namespace
+
+# How Prometheus reaches /metrics (port service.metricsPort). LLD §13.1:
+# the platform's Prometheus runs outside the mesh, hence the default.
+#   plaintext  the metrics port alone is PERMISSIVE (every other port stays
+#              STRICT). A plaintext scrape has no peer identity, so the
+#              AuthorizationPolicy cannot match the monitoring namespace:
+#              it admits GET on the metrics port from monitoringCIDRs (the
+#              Prometheus pod CIDRs) when set, otherwise from any source,
+#              and the NetworkPolicy admits only the monitoring namespace
+#              on that port. The port serves /metrics only.
+#   mesh       Prometheus has an Istio identity (its own sidecar, or
+#              ServiceMonitor tlsConfig with the mesh certificates):
+#              STRICT on every port, authorized by namespace.
+# Go-live check: pick the mode the platform's Prometheus actually uses; a
+# wrong one gets every scrape refused (403 or TLS failure), which silences
+# every alert and the HPA's external metric.
+metrics:
+  scrapeMode: plaintext      # plaintext | mesh
+  monitoringCIDRs: []        # plaintext only: Prometheus source ranges, e.g. [10.0.32.0/20]
 
 serviceMonitor:
   enabled: true

@@ -5,8 +5,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "commercial-billing.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
 spec:
   minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
   selector:
     matchLabels:
-      {{- include "commercial-billing.selectorLabels" . | nindent 6 }}
+      {{- include "commercial-billing.componentSelectorLabels" (dict "ctx" . "component" "server") | nindent 6 }}

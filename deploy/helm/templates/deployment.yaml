@@ -1,3 +1,4 @@
+{{- include "commercial-billing.validate" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -5,6 +6,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "commercial-billing.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
@@ -12,20 +14,21 @@ spec:
   revisionHistoryLimit: 5
   selector:
     matchLabels:
-      {{- include "commercial-billing.selectorLabels" . | nindent 6 }}
+      {{- include "commercial-billing.componentSelectorLabels" (dict "ctx" . "component" "server") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "commercial-billing.selectorLabels" . | nindent 8 }}
+        {{- include "commercial-billing.componentSelectorLabels" (dict "ctx" . "component" "server") | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        # BIL-AUTH-3 (§13.1): the sidecar forwards the verified client
-        # certificate as X-Forwarded-Client-Cert; B-I1 reads its caller only
-        # from that header. helm-check asserts this annotation.
-        proxy.istio.io/config: |
-          forwardClientCertDetails: {{ .Values.istio.forwardClientCertDetails }}
+        # BIL-AUTH-3: the sidecar's inbound listener appends the verified
+        # client certificate to X-Forwarded-Client-Cert (Istio's sidecar
+        # default, APPEND_FORWARD); B-I1 reads the last element. The
+        # PeerAuthentication STRICT of this chart makes sure that element
+        # always comes from mTLS, never from a plaintext caller.
+        {{- include "commercial-billing.istioAnnotations" . | nindent 8 }}
         prometheus.io/scrape: "false"   # ServiceMonitor scrapes the metrics port
         {{- if not .Values.externalSecret.enabled }}
         checksum/secret-name: {{ include "commercial-billing.secretName" . | sha256sum | trunc 16 }}
@@ -35,7 +38,13 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "commercial-billing.serviceAccountName" . }}
-      automountServiceAccountToken: true   # IRSA web identity token
+      # No Kubernetes API token: the app never calls the API server. The EKS
+      # pod identity webhook mounts the IRSA web-identity token (aws-iam-token)
+      # and Istio its istio-token as their own projected volumes regardless.
+      automountServiceAccountToken: false
+      # preStop sleep (endpoint removal propagates to the gateway and the
+      # mesh), then SIGTERM: the app has the rest of the grace period to
+      # drain HTTP, workers and pools (§13.1).
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -50,7 +59,7 @@ spec:
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:
-              {{- include "commercial-billing.selectorLabels" . | nindent 14 }}
+              {{- include "commercial-billing.componentSelectorLabels" (dict "ctx" . "component" "server") | nindent 14 }}
       {{- end }}
       containers:
         - name: commercial-billing
@@ -65,22 +74,28 @@ spec:
               containerPort: {{ .Values.service.metricsPort }}
               protocol: TCP
           env:
-            {{- include "commercial-billing.env" . | nindent 12 }}
+            {{- include "commercial-billing.env" (dict "ctx" . "overrides" .Values.serverEnv "secretKeys" (include "commercial-billing.serverSecretKeys" . | fromJsonArray) "secretName" (include "commercial-billing.secretName" .)) | nindent 12 }}
+          lifecycle:
+            # Kubernetes-native sleep action (GA in 1.30): the image is
+            # distroless, there is no shell for an exec sleep.
+            preStop:
+              sleep:
+                seconds: {{ .Values.preStopSleepSeconds }}
           startupProbe:
             httpGet: { path: {{ .Values.probes.startup.path }}, port: http }
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
             failureThreshold: {{ .Values.probes.startup.failureThreshold }}
-            timeoutSeconds: 3
+            timeoutSeconds: {{ .Values.probes.timeoutSeconds }}
           livenessProbe:
             httpGet: { path: {{ .Values.probes.liveness.path }}, port: http }
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
-            timeoutSeconds: 3
+            timeoutSeconds: {{ .Values.probes.timeoutSeconds }}
           readinessProbe:
             httpGet: { path: {{ .Values.probes.readiness.path }}, port: http }
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
             failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
-            timeoutSeconds: 3
+            timeoutSeconds: {{ .Values.probes.timeoutSeconds }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
