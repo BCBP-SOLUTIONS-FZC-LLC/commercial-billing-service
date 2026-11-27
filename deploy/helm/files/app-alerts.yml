@@ -134,16 +134,215 @@ groups:
           description: '{{ $value | printf "%.0f" }} billing.events row(s) dead-lettered in the last 24 h; IAM / Entitlements did not receive them.'
           runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/outbox-dead-letter.md
 
+      # platform_dlq_depth is labelled with the SOURCE queue's name (registry
+      # semantic definition), not the DLQ's.
       - alert: BillingDLQNotEmpty
-        expr: max by (queue) (platform_dlq_depth{service="commercial-billing",queue=~"tenant-billing-q-dlq|usage-billing-q-dlq"}) > 0
+        expr: max by (queue) (platform_dlq_depth{service="commercial-billing",queue=~"tenant-billing-q|usage-billing-q"}) > 0
         labels:
           severity: sev3
           team: commercial
           metric_status: proposed
         annotations:
           summary: 'Messages in {{ $labels.queue }}'
-          description: '{{ $value }} message(s) dead-lettered on {{ $labels.queue }}.'
+          description: '{{ $value }} message(s) dead-lettered from {{ $labels.queue }}.'
           runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/consumer-dlq.md
+
+      # Main-queue backlog. platform-events samples ApproximateNumberOfMessages
+      # (SQS_QUEUE_DEPTH_INTERVAL, 60 s); no registry metric carries the
+      # oldest message's age (CloudWatch ApproximateAgeOfOldestMessage), so
+      # "waiting and nothing processed" stands in for age. usage-billing-q
+      # has no series while USAGE_BILLING_CONSUMER_ENABLED=false.
+      - alert: BillingQueueBacklog
+        expr: max by (queue) (platform_queue_depth{service="commercial-billing",queue=~"tenant-billing-q|usage-billing-q"}) > 100
+        for: 10m
+        labels:
+          severity: sev3
+          team: commercial
+          metric_status: proposed
+        annotations:
+          summary: 'More than 100 messages waiting on {{ $labels.queue }} for 10 minutes'
+          description: '{{ $value }} message(s) waiting on {{ $labels.queue }}; lifecycle events (and conversions) are delayed.'
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/queue-backlog.md
+
+      - alert: BillingQueueStalled
+        expr: |
+          max by (queue) (platform_queue_depth{service="commercial-billing",queue=~"tenant-billing-q|usage-billing-q"}) > 0
+            unless on (queue) sum by (queue) (increase(platform_messages_processed_total{service="commercial-billing",queue=~"tenant-billing-q|usage-billing-q"}[15m])) > 0
+        for: 15m
+        labels:
+          severity: sev2
+          team: commercial
+          metric_status: proposed
+        annotations:
+          summary: '{{ $labels.queue }} has messages but none processed for 15 minutes'
+          description: '{{ $value }} message(s) waiting and nothing processed; the oldest is at least 15 minutes old. TenantConverted on tenant-billing-q confirms sagas.'
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/queue-backlog.md
+
+      # Outbox lag: age of the oldest unpublished billing.events row
+      # (platform-events, every OUTBOX_GAUGE_INTERVAL). When the query fails
+      # the gauge keeps its last value and
+      # platform_outbox_errors_total{operation="oldest_pending"} counts the
+      # failure. Every replica reads the same table, hence max. Rows claimed
+      # by a pod that was killed stay leased for the claim lease (~10 min
+      # 20 s), so after a SIGKILL / OOM the alert can fire only once that
+      # lease has expired (outbox-lag.md).
+      - alert: BillingOutboxLag
+        expr: max(platform_outbox_oldest_pending_age_seconds{service="commercial-billing"}) > 300
+        for: 10m
+        labels:
+          severity: sev2
+          team: commercial
+          metric_status: proposed
+        annotations:
+          summary: billing.events rows unpublished for more than 5 minutes
+          description: 'Oldest pending outbox row is {{ $value | humanizeDuration }} old; IAM and Entitlements see purchases late.'
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/outbox-lag.md
+
+  - name: commercial_billing.runtime
+    rules:
+      # A supervised in-pod loop (outbox runner, SQS consumer, webhook
+      # processor, …) returned while the pod was not shutting down. It is
+      # restarted in-process with backoff (1 s doubling to 5 min) and
+      # liveness is NOT failed: a pod restart would not cure a
+      # deterministic failure and would take the API and B-W1 down with it.
+      # The gauge reads 0 between the stop and the restart; the alert
+      # stays for 10 min after the last stop so a restart loop is seen.
+      - alert: BillingBackgroundLoopStopped
+        expr: min by (loop) (min_over_time(commercial_billing_background_loop_running{service="commercial-billing"}[10m])) == 0
+        labels:
+          severity: sev3
+          team: commercial
+        annotations:
+          summary: 'Background loop {{ $labels.loop }} stopped unexpectedly'
+          description: The loop is restarted in-process with backoff (the pod keeps serving); check the log line "background loop stopped unexpectedly".
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/background-loop-stopped.md
+
+      # The exporter gauges (webhook backlog — the HPA metric —, sagas,
+      # pauses, held drafts) keep their last value when the snapshot query
+      # fails; this alert makes that staleness visible.
+      - alert: BillingMetricsSnapshotStale
+        expr: time() - max(commercial_billing_metrics_snapshot_last_success_timestamp_seconds{service="commercial-billing"}) > 300
+        for: 5m
+        labels:
+          severity: sev3
+          team: commercial
+        annotations:
+          summary: Billing's database-derived gauges are stale
+          description: 'Last successful snapshot {{ $value | humanizeDuration }} ago; backlog, saga and HPA readings are frozen.'
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/metrics-snapshot-stale.md
+
+  # CronJobs push their run to the Pushgateway (§13.2). A run that exits 0
+  # stamps commercial_billing_cron_job_last_success_timestamp_seconds; a
+  # failed run is POSTed and keeps the previous stamp. Thresholds are about
+  # three schedule intervals (one for the daily jobs, plus 2 h).
+  #
+  # Those rules need a stamp: a job that has never succeeded (a run refused
+  # for its configuration exits before it pushes anything) has no series and
+  # time() - max(...) yields nothing. BillingCronJobNeverSucceeded covers
+  # that from kube-state-metrics (cluster-wide, outside Billing's scrape;
+  # kube_* names are not Billing metrics and are not in the platform
+  # registry): a CronJob of Billing's that Kubernetes has scheduled at
+  # least once, with neither a Kubernetes-recorded success nor a pushed
+  # success stamp, for 15 min (jobTimeout 10 min + startingDeadlineSeconds
+  # 2 min). A fresh deploy does not page before the first schedule, since
+  # kube_cronjob_status_last_schedule_time only exists once a Job was
+  # created. The label_replace maps the pushed job_name onto the CronJob
+  # name (commercial-billing-<job>).
+  - name: commercial_billing.cronjobs
+    rules:
+      - alert: BillingCronJobNeverSucceeded
+        expr: |
+          max by (cronjob) (kube_cronjob_status_last_schedule_time{namespace="billing",cronjob="commercial-billing-saga-sweeper"})
+            unless on (cronjob) max by (cronjob) (kube_cronjob_status_last_successful_time{namespace="billing",cronjob="commercial-billing-saga-sweeper"})
+            unless on (cronjob) label_replace(max by (job_name) (commercial_billing_cron_job_last_success_timestamp_seconds{service="commercial-billing"}), "cronjob", "commercial-billing-$1", "job_name", "(.+)")
+        for: 15m
+        labels:
+          severity: sev2
+          team: commercial
+        annotations:
+          summary: 'CronJob {{ $labels.cronjob }} has run but never succeeded'
+          description: Overdue sagas are not alerted on (BIL-OPS-5) while saga-sweeper fails; look for "invalid configuration" / "job setup failed" in the Job's logs.
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/cronjob-not-succeeding.md
+
+      - alert: BillingCronJobNeverSucceeded
+        expr: |
+          max by (cronjob) (kube_cronjob_status_last_schedule_time{namespace="billing",cronjob=~"commercial-billing-.+",cronjob!="commercial-billing-saga-sweeper"})
+            unless on (cronjob) max by (cronjob) (kube_cronjob_status_last_successful_time{namespace="billing",cronjob=~"commercial-billing-.+"})
+            unless on (cronjob) label_replace(max by (job_name) (commercial_billing_cron_job_last_success_timestamp_seconds{service="commercial-billing"}), "cronjob", "commercial-billing-$1", "job_name", "(.+)")
+        for: 15m
+        labels:
+          severity: sev3
+          team: commercial
+        annotations:
+          summary: 'CronJob {{ $labels.cronjob }} has run but never succeeded'
+          description: The job has been scheduled and no run has exited 0; look for "invalid configuration" / "job setup failed" in the Job's logs.
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/cronjob-not-succeeding.md
+
+      - alert: BillingCronJobNotSucceeding
+        expr: time() - max by (job_name) (commercial_billing_cron_job_last_success_timestamp_seconds{service="commercial-billing",job_name="saga-sweeper"}) > 600
+        labels:
+          severity: sev2
+          team: commercial
+          cadence: "1m"
+        annotations:
+          summary: 'CronJob {{ $labels.job_name }} has not succeeded for {{ $value | humanizeDuration }}'
+          description: Overdue sagas are not alerted on (BIL-OPS-5) while saga-sweeper fails.
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/cronjob-not-succeeding.md
+
+      - alert: BillingCronJobNotSucceeding
+        expr: time() - max by (job_name) (commercial_billing_cron_job_last_success_timestamp_seconds{service="commercial-billing",job_name="purchase-expiry"}) > 1200
+        labels:
+          severity: sev3
+          team: commercial
+          cadence: "5m"
+        annotations:
+          summary: 'CronJob {{ $labels.job_name }} has not succeeded for {{ $value | humanizeDuration }}'
+          description: Abandoned purchases and 3-D Secure attempts are not expired.
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/cronjob-not-succeeding.md
+
+      - alert: BillingCronJobNotSucceeding
+        expr: time() - max by (job_name) (commercial_billing_cron_job_last_success_timestamp_seconds{service="commercial-billing",job_name=~"seat-renewal|downgrade-apply"}) > 2700
+        labels:
+          severity: sev3
+          team: commercial
+          cadence: "15m"
+        annotations:
+          summary: 'CronJob {{ $labels.job_name }} has not succeeded for {{ $value | humanizeDuration }}'
+          description: Renewal-time seat and downgrade changes may miss the renewal.
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/cronjob-not-succeeding.md
+
+      - alert: BillingCronJobNotSucceeding
+        expr: time() - max by (job_name) (commercial_billing_cron_job_last_success_timestamp_seconds{service="commercial-billing",job_name="seat-projection-check"}) > 5400
+        labels:
+          severity: sev3
+          team: commercial
+          cadence: "30m"
+        annotations:
+          summary: 'CronJob {{ $labels.job_name }} has not succeeded for {{ $value | humanizeDuration }}'
+          description: Seat drift between Core and Billing is not detected.
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/cronjob-not-succeeding.md
+
+      - alert: BillingCronJobNotSucceeding
+        expr: time() - max by (job_name) (commercial_billing_cron_job_last_success_timestamp_seconds{service="commercial-billing",job_name="renewal-repricing"}) > 10800
+        labels:
+          severity: sev3
+          team: commercial
+          cadence: "1h"
+        annotations:
+          summary: 'CronJob {{ $labels.job_name }} has not succeeded for {{ $value | humanizeDuration }}'
+          description: Price changes may not be scheduled before REPRICE_CUTOFF.
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/cronjob-not-succeeding.md
+
+      - alert: BillingCronJobNotSucceeding
+        expr: time() - max by (job_name) (commercial_billing_cron_job_last_success_timestamp_seconds{service="commercial-billing",job_name=~"pii-minimisation|outbox-prune|processed-events-prune|idempotency-prune"}) > 93600
+        labels:
+          severity: sev3
+          team: commercial
+          cadence: "daily"
+        annotations:
+          summary: 'CronJob {{ $labels.job_name }} has not succeeded for {{ $value | humanizeDuration }}'
+          description: A daily retention job missed its run; tables grow or PII is kept past its window.
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/cronjob-not-succeeding.md
 
   - name: commercial_billing.dependencies
     rules:
@@ -217,15 +416,18 @@ groups:
           runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/reconciliation-drift.md
 
       - alert: BillingSeatProjectionDrift
-        # §8.6.4: the same tenant twice in 24 h. The counter carries no tenant
-        # (no tenant_id labels, §11.2); two mismatches in 24 h fire this, and
-        # the SEV-3 log line "seat projection mismatch again within 24 h"
-        # names the tenant.
-        expr: sum(increase(commercial_billing_seat_projection_mismatches_total{service="commercial-billing"}[24h])) >= 2
+        # §8.6.4: the same tenant twice in 24 h. Each seat-projection-check
+        # run is a fresh process pushed to the Pushgateway, so a counter
+        # restarts at every push and increase() cannot see persistent drift;
+        # the job sets a per-run gauge instead (repeat="true": tenants
+        # already resynced in the previous 24 h). A clean run sets 0 and
+        # resolves it. The SEV-3 log line "seat projection mismatch again
+        # within 24 h" names the tenant (no tenant label, §11.2).
+        expr: max(commercial_billing_seat_projection_last_run_mismatches{service="commercial-billing",repeat="true"}) > 0
         labels:
           severity: sev3
           team: commercial
         annotations:
-          summary: Core's licensed_seats drifted from Billing's more than once in 24 h
-          description: '{{ $value | humanize }} mismatches in 24 h; check the repeat log line for the tenant.'
+          summary: Core's licensed_seats drifted from Billing's again within 24 h
+          description: '{{ $value | humanize }} tenant(s) drifted again in the last run; check the repeat log line for the tenant.'
           runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/seat-projection-drift.md

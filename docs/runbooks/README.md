@@ -12,6 +12,11 @@ Operational runbooks for `commercial-billing` (LLD §20). Every alert in
 | `BillingWebhookBacklog` | SEV-3 | [webhook-backlog.md](webhook-backlog.md) |
 | `BillingOutboxDeadLetter` | SEV-2 | [outbox-dead-letter.md](outbox-dead-letter.md) |
 | `BillingDLQNotEmpty` | SEV-3 | [consumer-dlq.md](consumer-dlq.md) |
+| `BillingQueueBacklog` / `BillingQueueStalled` | SEV-3 / SEV-2 | [queue-backlog.md](queue-backlog.md) |
+| `BillingOutboxLag` | SEV-2 | [outbox-lag.md](outbox-lag.md) |
+| `BillingBackgroundLoopStopped` | SEV-3 | [background-loop-stopped.md](background-loop-stopped.md) |
+| `BillingMetricsSnapshotStale` | SEV-3 | [metrics-snapshot-stale.md](metrics-snapshot-stale.md) |
+| `BillingCronJobNotSucceeding`, `BillingCronJobNeverSucceeded` | SEV-2 (`saga-sweeper`) / SEV-3 | [cronjob-not-succeeding.md](cronjob-not-succeeding.md) |
 | `BillingI18Unavailable` | SEV-3 | [i18-unavailable.md](i18-unavailable.md) |
 | `BillingProviderUnavailable` | SEV-2 | [provider-outage.md](provider-outage.md) |
 | `BillingProviderNotCertified` | SEV-2 | [certification-lapsed.md](certification-lapsed.md) |
@@ -19,6 +24,8 @@ Operational runbooks for `commercial-billing` (LLD §20). Every alert in
 | `BillingReconciliationDrift` | SEV-3 | [reconciliation-drift.md](reconciliation-drift.md) |
 | `BillingSeatProjectionDrift` | SEV-3 | [seat-projection-drift.md](seat-projection-drift.md) |
 | `BillingReversalDecisionNeeded` (log-based) | SEV-2 | [reversal-decision.md](reversal-decision.md) |
+| `BillingPaymentParked` (SEV-2) (log-based): payment on a superseded checkout, after the subscription ended, or for another amount or currency than its purchase | SEV-2 | [operator-review.md](operator-review.md) |
+| `BillingReviewTrigger` (log-based, `alert=BillingOperatorReviewNeeded`): refund or adjustment above `REVIEW_THRESHOLD_MINOR` | review, no page | [operator-review.md](operator-review.md) (first section) |
 | `BillingAvailabilityBudgetBurnFast` / `…Slow` | SEV-2 / SEV-3 | [slo-burn.md](slo-burn.md) |
 | `BillingSchemaRegistrationFailed`, `…BreakingChangeBlocked`, `…RegistrationSpike`, `…VersionChurn` (`schema-registry-alerts.yml`) | SEV-3 | [schema-registration.md](schema-registration.md) |
 | Provider certification (cmd/certify) | planned | [certification.md](certification.md) |

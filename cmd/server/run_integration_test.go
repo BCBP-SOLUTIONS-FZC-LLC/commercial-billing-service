@@ -148,7 +148,7 @@ func TestRunStagingLifecycle(t *testing.T) {
 		"TENANT_APP_BASE_URL":          "https://app.example.com",
 		"CORE_BASE_URL":                "http://127.0.0.1:1", "RP_BASE_URL": "http://127.0.0.1:1", "ENTITLEMENTS_BASE_URL": "http://127.0.0.1:1",
 		"STRIPE_API_KEY": "rk_test_coverage", "STRIPE_WEBHOOK_SECRETS": "whsec_coverage", "LOG_HASH_SALT": "salt",
-		"OTEL_EXPORTER_OTLP_ENDPOINT": "", "FEATURE_DIRECT_SIGNUP": "false",
+		"OTEL_EXPORTER_OTLP_ENDPOINT": "", "FEATURE_DIRECT_SIGNUP": "false", "USAGE_BILLING_CONSUMER_ENABLED": "true", "SHUTDOWN_DRAIN_DELAY": "0s",
 	} {
 		t.Setenv(k, v)
 	}
@@ -198,6 +198,21 @@ func TestRunStagingLifecycle(t *testing.T) {
 		!strings.Contains(body, "commercial_billing_provider_certified{") {
 		t.Errorf("metrics: %d (certified gauge present: %v)", code, strings.Contains(body, "commercial_billing_provider_certified"))
 	}
+	// platform-events' series are registered (events.InitMetrics): the
+	// outbox gauges §11.5 alerts read appear after the runner's first poll,
+	// and every supervised loop reports running.
+	for deadline := time.Now().Add(20 * time.Second); ; {
+		_, body := get(fmt.Sprintf("http://127.0.0.1:%d/metrics", metricsPort))
+		if strings.Contains(body, "platform_outbox_pending_events") && strings.Contains(body, `commercial_billing_background_loop_running{`) &&
+			!strings.Contains(body, "commercial_billing_background_loop_running{domain=\"commercial\",environment=\"staging\",loop=\"outbox\",service=\"commercial-billing\"} 0") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("platform-events / loop metrics missing:\n%s", body)
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 	if code, _ := get(fmt.Sprintf("http://127.0.0.1:%d/metrics", appPort)); code != http.StatusNotFound {
 		t.Errorf("metrics served on the API port: %d", code)
 	}
@@ -246,8 +261,9 @@ func TestBuildBusVariants(t *testing.T) {
 		t.Errorf("dev bus: outbox=%v consumers=%d lines=%v", b.outbox != nil, len(b.consumers), log.lines)
 	}
 	// Both loops start and stop cleanly with the workers' stop.
-	w := &workers{cancel: func() {}, done: make(chan struct{}), outbox: b.outbox, log: log}
-	close(w.done)
+	done := make(chan struct{})
+	close(done)
+	w := &workers{cancel: func() {}, done: done, outbox: b.outbox, log: log}
 	w.stop(time.Second)
 
 	// Staging: a Glue registry that does not know the schemas fails startup.

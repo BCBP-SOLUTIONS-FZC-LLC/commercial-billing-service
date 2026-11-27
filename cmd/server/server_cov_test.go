@@ -216,33 +216,52 @@ func TestExportSnapshot(t *testing.T) {
 	}
 }
 
-type fakeDLQ struct{ err error }
+type fakeDLQ struct {
+	err, then error
+	calls     int
+}
 
-func (f fakeDLQ) SendToDLQ(context.Context, string, []byte, map[string]string, string) error {
+func (f *fakeDLQ) SendToDLQ(context.Context, string, []byte, map[string]string, string) error {
 	return nil
 }
-func (f fakeDLQ) ResolveDLQ(context.Context, string) (string, error) { return "dlq", f.err }
+func (f *fakeDLQ) ResolveDLQ(context.Context, string) (string, error) {
+	f.calls++
+	if f.calls > 1 && f.then != nil {
+		return "", f.then
+	}
+	return "dlq", f.err
+}
 
 // requireDLQ: outside dev a queue without a usable RedrivePolicy refuses
-// startup; in dev, or on a transient lookup failure, it only warns.
+// startup; in dev that queue runs without DLQ forwarding; a transient
+// lookup failure is retried, then only warns with forwarding on.
 func TestRequireDLQ(t *testing.T) {
+	dlqStartupAttempts, dlqStartupBackoff = 3, time.Millisecond
+	t.Cleanup(func() { dlqStartupAttempts, dlqStartupBackoff = 3, 2*time.Second })
 	ctx := context.Background()
 	prod := config.Config{AppEnv: "prod"}
-	if err := requireDLQ(ctx, fakeDLQ{}, "q", prod, &recLog{}); err != nil {
-		t.Errorf("configured: %v", err)
+	if fwd, err := requireDLQ(ctx, &fakeDLQ{}, "q", prod, &recLog{}); err != nil || !fwd {
+		t.Errorf("configured: %v %v", fwd, err)
 	}
 	for _, e := range []error{events.ErrDLQNotConfigured, events.ErrDLQInvalidRedrivePolicy} {
-		if err := requireDLQ(ctx, fakeDLQ{err: fmt.Errorf("resolve: %w", e)}, "q", prod, &recLog{}); err == nil || !errors.Is(err, e) {
+		if _, err := requireDLQ(ctx, &fakeDLQ{err: fmt.Errorf("resolve: %w", e)}, "q", prod, &recLog{}); err == nil || !errors.Is(err, e) {
 			t.Errorf("prod %v: %v", e, err)
 		}
 	}
 	log := &recLog{}
-	if err := requireDLQ(ctx, fakeDLQ{err: events.ErrDLQNotConfigured}, "q", config.Config{AppEnv: "dev"}, log); err != nil || !log.has("could not resolve the DLQ") {
-		t.Errorf("dev: %v %v", err, log.lines)
+	if fwd, err := requireDLQ(ctx, &fakeDLQ{err: events.ErrDLQNotConfigured}, "q", config.Config{AppEnv: "dev"}, log); err != nil || fwd ||
+		!log.has("DLQ forwarding off") {
+		t.Errorf("dev: %v %v %v", fwd, err, log.lines)
 	}
 	log = &recLog{}
-	if err := requireDLQ(ctx, fakeDLQ{err: errors.New("throttled")}, "q", prod, log); err != nil || !log.has("could not resolve the DLQ") {
-		t.Errorf("transient: %v %v", err, log.lines)
+	f := &fakeDLQ{err: errors.New("throttled")}
+	if fwd, err := requireDLQ(ctx, f, "q", prod, log); err != nil || !fwd || !log.has("could not resolve the DLQ") || f.calls != 3 {
+		t.Errorf("transient: %v %v %d %v", fwd, err, f.calls, log.lines)
+	}
+	// A transient failure that turns out permanent on retry fails startup.
+	f = &fakeDLQ{err: errors.New("throttled"), then: events.ErrDLQNotConfigured}
+	if _, err := requireDLQ(ctx, f, "q", prod, &recLog{}); !errors.Is(err, events.ErrDLQNotConfigured) {
+		t.Errorf("transient then permanent: %v", err)
 	}
 }
 
@@ -256,13 +275,14 @@ func (c fakeConsumer) Stop() error               { return c.stopErr }
 func TestWorkersStop(t *testing.T) {
 	log := &recLog{}
 	canceled := false
-	w := &workers{cancel: func() { canceled = true }, done: make(chan struct{}),
-		consumers: []events.Consumer{fakeConsumer{stopErr: errors.New("stuck")}, fakeConsumer{}}, log: log}
+	done := make(chan struct{})
+	w := &workers{cancel: func() { canceled = true }, done: done,
+		consumers: []queueConsumer{{"a", fakeConsumer{stopErr: errors.New("stuck")}}, {"b", fakeConsumer{}}}, log: log}
 	start := time.Now()
 	w.stop(20 * time.Millisecond)
 	if !canceled || !log.has("error sqs consumer stop") || time.Since(start) < 20*time.Millisecond {
 		t.Errorf("canceled=%v lines=%v", canceled, log.lines)
 	}
-	close(w.done)
+	close(done)
 	w.stop(time.Hour) // returns at once when the processor is done
 }

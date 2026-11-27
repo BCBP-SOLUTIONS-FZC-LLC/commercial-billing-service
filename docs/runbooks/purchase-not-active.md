@@ -8,3 +8,4 @@
    - **Render high:** Usage & Metering — page its on-call.
 2. A purchase confirmed but not projected leaves `licensed_seats` behind; `seat-projection-check` repairs seats within 30 min (§8.6.4). Token add-ons are re-delivered by the outbox.
 3. Never re-charge: confirmations are idempotent per purchase id (BIL-ADD-2, BIL-SEAT-1).
+4. A purchase still `pending_payment` after a provider error (rev 0.59): Billing may not have recorded the invoice id. The paid callback matches it anyway (add-on by its metadata `purchase_id`; seats and upgrades by the proration invoice's subscription, `billing_reason` and amount), and `purchase-expiry` looks it up with `FindInvoice`. A paid invoice settles the purchase; it is never expired or failed. If the purchase stays pending, check [cronjob-not-succeeding.md](cronjob-not-succeeding.md) for `purchase-expiry` and the `failed` ledger rows in [webhook-backlog.md](webhook-backlog.md).

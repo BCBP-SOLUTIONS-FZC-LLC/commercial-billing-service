@@ -155,20 +155,17 @@ func TestBuildRunsEveryRunner(t *testing.T) {
 		}
 	}
 
-	// platform-audit allows one drainer runner per process: a second
-	// build with the drainer configured is refused.
+	// Jobs only enqueue audit entries (bootstrap.AuditEnqueueOnly): even
+	// with a drainer password set no drainer runner is built, so repeated
+	// builds never hit platform-audit's one-runner-per-process rule.
 	t.Setenv("PG_AUDIT_DRAINER_PASSWORD", "devpassword")
-	cfg, _ = config.Load()
+	cfg, _ = config.LoadFor(config.BinaryJobs)
 	for i := range 2 {
 		_, closeAudit, err := build(ctx, cfg, m, nopLog{})
-		if err == nil {
-			closeAudit()
-			if i == 1 {
-				t.Error("second audit runner accepted")
-			}
-		} else if !strings.Contains(err.Error(), "runner already exists") {
-			t.Errorf("build %d: %v", i, err)
+		if err != nil {
+			t.Fatalf("build %d: %v", i, err)
 		}
+		closeAudit()
 	}
 
 	// An unreachable database fails the build.

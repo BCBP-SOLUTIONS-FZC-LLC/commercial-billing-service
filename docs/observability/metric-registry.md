@@ -13,14 +13,17 @@ listed in their registries, not here.
 | Metric | Type | Tier | Labels | Meaning |
 |---|---|---|---|---|
 | `commercial_billing_addon_purchases_total` | counter | 3 service | `pack_code`, `result` | Token pack purchases, by pack and result. |
+| `commercial_billing_background_loop_running` | gauge | 3 service | `loop` | 1 while an in-pod background loop runs, 0 from an unexpected stop until it is restarted (backoff up to 5 min). |
 | `commercial_billing_collection_paused` | gauge | 3 service | `by` | Subscriptions with collection paused (CD-24), by origin. |
 | `commercial_billing_conversion_saga_duration_seconds` | histogram | 3 service | `kind` | Payment confirmed to TenantConverted, by saga kind. |
+| `commercial_billing_cron_job_last_success_timestamp_seconds` | gauge | 3 service | `job_name` | Unix time of the CronJob's last run that exited 0 (pushed by cmd/jobs). |
 | `commercial_billing_cross_tenant_job_runs_total` | counter | 3 service | `job_name`, `result` | Cross-tenant job runs (CronJobs and reconciliation), by job name and result (success \| partial \| failure). |
 | `commercial_billing_downgrades_blocked_total` | counter | 3 service | `blocker` | Downgrades blocked by I-18, by blocker. |
 | `commercial_billing_dunning_transitions_total` | counter | 3 service | `to` | Lapse-flow transitions, by target status. |
 | `commercial_billing_events_emitted_total` | counter | 3 service | `event_type` | billing.events events enqueued, by event type. |
 | `commercial_billing_invoice_dispositions_total` | counter | 3 service | `action` | B-O16 decisions, by action. |
 | `commercial_billing_invoices_held_for_review` | gauge | 3 service | `currency` | Drafts held during a collection pause with no B-O16 decision, by currency. |
+| `commercial_billing_metrics_snapshot_last_success_timestamp_seconds` | gauge | 3 service | — | Unix time of the last successful database snapshot behind the exporter gauges (staleness). |
 | `commercial_billing_operator_actions_total` | counter | 3 service | `action`, `outcome` | Operator route calls, by action (route id) and outcome. |
 | `commercial_billing_payment_failures_total` | counter | 3 service | `reason` | Payment declines, by mapped reason. |
 | `commercial_billing_proration_deferred_amount_minor_total` | counter | 3 service | `currency` | Sum of deferred_amount_minor not charged, by currency. |
@@ -34,6 +37,7 @@ listed in their registries, not here.
 | `commercial_billing_sagas_overdue` | gauge | 3 service | — | Sagas not confirmed 30 minutes after payment (alert source). |
 | `commercial_billing_scheduled_emissions_pending` | gauge | 3 service | `builder` | Pending delayed emissions (BIL-EVT-6), by builder. |
 | `commercial_billing_seat_changes_total` | counter | 3 service | `direction`, `result` | Seat changes, by direction and result. |
+| `commercial_billing_seat_projection_last_run_mismatches` | gauge | 3 service | `repeat` | Seat projection mismatches found by the last seat-projection-check run; repeat=true for a tenant already resynced in the previous 24 h (§8.6.4). |
 | `commercial_billing_seat_projection_mismatches_total` | counter | 3 service | — | Seat projection mismatches found (§8.6.4). |
 | `commercial_billing_subscriptions` | gauge | 3 service | `plan`, `provider`, `status` | Subscriptions, by status, plan and provider (exporter). |
 | `commercial_billing_unmatched_conversions_total` | counter | 3 service | — | TenantConverted events with no saga. |

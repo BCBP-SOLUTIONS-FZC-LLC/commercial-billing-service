@@ -91,6 +91,9 @@ func record(t *testing.T, m *metrics.Metrics, g prometheus.Gatherer) string {
 	m.SetSnapshot(port.MetricsSnapshot{WebhookBacklog: map[string]int{"received": 1}, SagasInFlight: map[string]int{"rp_convert_pending": 1},
 		SagasOverdue: 1, Subscriptions: map[[3]string]int{{"active", "pro", "stripe"}: 2}, CollectionPaused: map[string]int{"operator": 1},
 		InvoicesHeld: map[string]int{"USD": 1}, EmissionsPending: map[string]int{"seats_resync": 1}})
+	m.LoopRunning("outbox", true)
+	m.CronJobSucceeded("saga-sweeper", time.Unix(1_800_000_000, 0))
+	m.SeatProjectionRun(1, 0)
 	fams, err := g.Gather()
 	if err != nil {
 		t.Fatal(err)

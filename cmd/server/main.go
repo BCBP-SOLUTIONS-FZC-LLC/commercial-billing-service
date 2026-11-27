@@ -2,12 +2,18 @@
 // validates configuration (§12), builds the logger, tracing and metrics
 // (gincommon v2), opens the app pool (billing_app, RLS) and sysPool
 // (billing_system), serves the API on APP_PORT and metrics on METRICS_PORT,
-// and shuts down gracefully.
+// and shuts down gracefully within the budget in lifecycle.go.
 //
-// Wired so far: the provider registry and its refresh, B-W1 and the webhook
-// processor (Phase 3); the billing.events outbox publisher, the
-// tenant-billing-q / usage-billing-q consumers and the delayed-emission
-// worker (Phase 4). The saga worker and audit runner come in later phases.
+// In-pod work (§13.1): the provider registry and its refresh, B-W1 and the
+// webhook processor, the billing.events outbox publisher, the
+// tenant-billing-q consumer (usage-billing-q only with
+// USAGE_BILLING_CONSUMER_ENABLED, BL-OQ-24), the delayed-emission worker,
+// the saga worker, lifecycle follow-ups, reconciliation runs, the metrics
+// snapshot exporter and the platform-audit runner. Each runs supervised: an
+// unexpected stop is logged, alerted (BillingBackgroundLoopStopped) and
+// restarted in-process with backoff (lifecycle.go). Deterministic checks
+// (configuration, Glue schema versions, each queue's RedrivePolicy) run
+// before the listeners open, so a bad deploy fails startup instead.
 package main
 
 import (
@@ -18,7 +24,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"sync"
 	"syscall"
 	"time"
 
@@ -33,6 +38,7 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/bootstrap"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/config"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events/v2/pkg/events"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/logger"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
@@ -41,14 +47,6 @@ import (
 
 // buildVersion is injected with -ldflags at build time.
 var buildVersion = "dev"
-
-// Shutdown budget (terminationGracePeriodSeconds 45, §13.1): HTTP drain
-// within the request timeout, then pool drain.
-const (
-	httpDrainTimeout  = 30 * time.Second
-	workerStopTimeout = 5 * time.Second
-	poolDrainTimeout  = 10 * time.Second
-)
 
 func main() {
 	os.Exit(run())
@@ -68,12 +66,18 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "init logger: %v\n", err)
 		return 1
 	}
+	// Deferred first so it runs last: every log line of the shutdown (pool
+	// drain, tracer) is written before the logger and tracer flush.
+	defer func() {
+		if err := gincommon.Shutdown(log); err != nil {
+			fmt.Fprintf(os.Stderr, "flush logger/tracer: %v\n", err)
+		}
+	}()
 	// §12: refuse to start on any missing, malformed or out-of-range value.
 	if len(problems) > 0 {
 		for _, p := range problems {
 			log.Error("invalid configuration", map[string]any{"key": p.Key, "reason": p.Reason})
 		}
-		_ = gincommon.Shutdown(log)
 		return 1
 	}
 
@@ -120,6 +124,19 @@ func run() int {
 		log.Error("init billing metrics", map[string]any{"error": err.Error()})
 		return 1
 	}
+	// platform-events' platform_* series (queue and DLQ depth, outbox
+	// pending / oldest age, dead letters) that §11.5 alerts read; without
+	// this call the library's metrics are no-ops. After metrics.New, so the
+	// shared platform_dependency_request_seconds is reused.
+	evWarnings, err := events.InitMetrics(events.MetricsIdentity{Domain: identity["domain"], Service: identity["service"],
+		Environment: identity["environment"]}, gincommon.MetricsRegisterer())
+	for _, w := range evWarnings {
+		log.Warn("platform-events metric disabled", map[string]any{"metric": w.Metric, "error": w.Error()})
+	}
+	if err != nil {
+		log.Error("init platform-events metrics", map[string]any{"error": err.Error()})
+		return 1
+	}
 	// Spans and outbound-call metrics through gincommon (§11.2, §11.3).
 	app.SetTracer(observability.NewTracer(ginCfg.ServiceName))
 	httpx.SetObserver(billingMetrics.Dependency)
@@ -143,8 +160,14 @@ func run() int {
 		log.Error("connect database", map[string]any{"error": err.Error()})
 		return 1
 	}
-	defer pools.Close()
+	// Every pool closes once, bounded (DrainAndClose): on the graceful path
+	// inside gracefulStop, on an early return here, before the tracer and
+	// logger flush.
+	closer := newPoolCloser(log)
+	defer closer.closeWithin(poolDrainTimeout)
 	appPool, sysPool := pools.App, pools.System
+	closer.add("app", appPool)
+	closer.add("system", sysPool)
 
 	poolCheck := func(p *pgcommon.Pool) httpadapter.Pinger {
 		return httpadapter.PingerFunc(func(ctx context.Context) error {
@@ -173,9 +196,7 @@ func run() int {
 		log.Error("platform-audit", map[string]any{"error": err.Error()})
 		return 1
 	}
-	if auditP.Pool != nil {
-		defer auditP.Pool.Close()
-	}
+	closer.add("audit_drainer", auditP.Pool)
 
 	// Use cases (§8), then the event bus (§7): billing.events publisher (Glue
 	// schema versions are resolved here, so a deploy ahead of schema
@@ -191,19 +212,26 @@ func run() int {
 	eventBus.emissions.Events, eventBus.emissions.Metrics = eventBus.events, billingMetrics
 	svc.Events = eventBus.events
 
+	lc := newLifecycle(billingMetrics.LoopRunning)
+	var auditAlive []func() error
+	if auditP.Runner != nil {
+		auditAlive = append(auditAlive, auditP.Runner.Alive) // §13.1: liveness, never readiness
+	}
 	router := httpadapter.NewRouter(httpadapter.RouterConfig{
 		GinConfig: ginCfg,
 		Readiness: []httpadapter.Check{
+			lc.readiness(),
 			{Name: "database", Pinger: poolCheck(appPool)},
 			{Name: "sys_database", Pinger: poolCheck(sysPool)},
 		},
+		Liveness: []httpadapter.Check{lc.liveness(auditAlive...)},
 		Routes: []func(gin.IRouter){
 			webhookRoute(cfg, registry, sysPool, billingMetrics, log),
 			apiRoutes(cfg, ginCfg, appPool, svc, billingMetrics),
 			httpadapter.DocsRoutes(api.AsyncAPI),
 		},
 	})
-	bg := startWorkers(cfg, registry, appPool, sysPool, eventBus, svc, auditP.Runner, billingMetrics, log)
+	bg := startWorkers(cfg, registry, appPool, sysPool, eventBus, svc, auditP.Runner, billingMetrics, lc, log)
 
 	srv := &http.Server{
 		Addr:              ":" + strconv.Itoa(cfg.AppPort),
@@ -221,6 +249,9 @@ func run() int {
 		Addr:              ":" + strconv.Itoa(cfg.MetricsPort),
 		Handler:           metricsMux,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second, // above Prometheus' 10 s scrape timeout
+		IdleTimeout:       60 * time.Second,
 	}
 
 	quit := make(chan os.Signal, 1)
@@ -250,32 +281,26 @@ func run() int {
 		exit = 1
 	}
 
-	httpCtx, cancelHTTP := context.WithTimeout(context.Background(), httpDrainTimeout)
-	defer cancelHTTP()
-	for _, s := range []*http.Server{srv, metricsSrv} {
-		if err := s.Shutdown(httpCtx); err != nil {
-			log.Error("http shutdown", map[string]any{"addr": s.Addr, "error": err.Error()})
+	// Readiness off → drain delay → API listener ∥ background loops →
+	// pools → metrics listener; then (deferred) tracer → logger flush
+	// (budget in lifecycle.go).
+	shutdownHTTP := func(s *http.Server, timeout time.Duration) shutdownStep {
+		return func(ctx context.Context) {
+			hctx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			if err := s.Shutdown(hctx); err != nil {
+				log.Error("http shutdown", map[string]any{"addr": s.Addr, "error": err.Error()})
+			}
 		}
 	}
-
-	// Background loops stop after HTTP (no new ledger rows arrive) and
-	// before the pools drain.
-	bg.stop(workerStopTimeout)
-
-	poolCtx, cancelPool := context.WithTimeout(context.Background(), poolDrainTimeout)
-	defer cancelPool()
-	var wg sync.WaitGroup
-	for name, p := range map[string]*pgcommon.Pool{"app": appPool, "system": sysPool} {
-		wg.Go(func() {
-			if err := p.DrainAndClose(poolCtx); err != nil {
-				log.Error("pool drain", map[string]any{"pool": name, "error": err.Error()})
-			}
-		})
-	}
-	wg.Wait()
-
-	if err := gincommon.Shutdown(log); err != nil {
-		fmt.Fprintf(os.Stderr, "flush logger/tracer: %v\n", err)
-	}
+	gracefulStop(lc, cfg.ShutdownDrainDelay, log, shutdownPlan{
+		parallel: []shutdownStep{
+			shutdownHTTP(srv, httpDrainTimeout),
+			func(context.Context) { bg.stop(workerStopTimeout) },
+		},
+		pools:   closer.close,
+		metrics: shutdownHTTP(metricsSrv, metricsDrainTimeout),
+	})
+	log.Info("shutdown complete", map[string]any{"exit": exit})
 	return exit
 }

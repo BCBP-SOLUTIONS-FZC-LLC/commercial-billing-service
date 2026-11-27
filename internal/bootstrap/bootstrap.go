@@ -122,6 +122,17 @@ type AuditParts struct {
 // the library metrics, checks billing_app can enqueue, and builds the
 // runner on the billing_audit_drainer pool.
 func Audit(ctx context.Context, cfg config.Config, appPool *pgcommon.Pool, env string, log port.Logger) (*AuditParts, error) {
+	return buildAudit(ctx, cfg, appPool, env, log, true)
+}
+
+// AuditEnqueueOnly is Audit without the drainer pool and runner: CronJobs
+// only enqueue into pending_audit_entries and the server pods deliver, so
+// cmd/jobs needs no PG_AUDIT_DRAINER_PASSWORD (§12 per-binary secrets).
+func AuditEnqueueOnly(ctx context.Context, cfg config.Config, appPool *pgcommon.Pool, env string, log port.Logger) (*AuditParts, error) {
+	return buildAudit(ctx, cfg, appPool, env, log, false)
+}
+
+func buildAudit(ctx context.Context, cfg config.Config, appPool *pgcommon.Pool, env string, log port.Logger, drain bool) (*AuditParts, error) {
 	acfg, err := auditconfig.FromEnv("")
 	if err != nil {
 		return nil, fmt.Errorf("AUDIT_* configuration: %w", err)
@@ -138,6 +149,9 @@ func Audit(ctx context.Context, cfg config.Config, appPool *pgcommon.Pool, env s
 		return nil, err
 	}
 	out := &AuditParts{Writer: pgadapter.NewAuditWriter(enq)}
+	if !drain {
+		return out, nil
+	}
 	if cfg.PGAuditDrainerPassword == "" {
 		log.Warn("PG_AUDIT_DRAINER_PASSWORD unset; audit entries queue in pending_audit_entries and are not delivered (dev only)", nil)
 		return out, nil

@@ -81,7 +81,7 @@ func TestDefaultsMatchLLD(t *testing.T) {
 func TestProdRequiresDependencies(t *testing.T) {
 	_, ps := LoadFrom(envMap(map[string]string{"APP_ENV": "prod"}))
 	for _, key := range []string{
-		"SNS_BILLING_EVENTS_TOPIC_ARN", "SQS_TENANT_BILLING_QUEUE_URL", "SQS_USAGE_BILLING_QUEUE_URL",
+		"SNS_BILLING_EVENTS_TOPIC_ARN", "SQS_TENANT_BILLING_QUEUE_URL",
 		"TENANT_APP_BASE_URL", "CORE_BASE_URL", "RP_BASE_URL", "ENTITLEMENTS_BASE_URL",
 		"STRIPE_API_KEY", "STRIPE_WEBHOOK_SECRETS", "LOG_HASH_SALT",
 	} {

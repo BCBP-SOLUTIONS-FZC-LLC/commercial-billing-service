@@ -10,9 +10,15 @@
 // enforced only outside developer environments (local, dev, test), so a
 // developer can run the empty service before every dependency exists. In
 // staging and prod a missing required value is an error.
+//
+// Required secrets differ per binary (Binary): the server and the CronJob
+// binary each require only what they use, so the chart can mount each
+// workload's own secret set (cmd/migrate needs only MIGRATION_DATABASE_URL
+// and resolves the environment with ResolveEnv).
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -23,6 +29,26 @@ import (
 
 // Environments accepted for APP_ENV (§12).
 var validEnvs = map[string]bool{"local": true, "dev": true, "test": true, "staging": true, "prod": true}
+
+// Binary is the program loading the configuration.
+type Binary int
+
+// Binaries with their own required-secret sets (§12).
+const (
+	// BinaryServer is cmd/server: DATABASE_URL (pgcommon), PG_SYSTEM_PASSWORD,
+	// PG_AUDIT_DRAINER_PASSWORD, LOG_HASH_SALT, STRIPE_API_KEY and
+	// STRIPE_WEBHOOK_SECRETS (Stripe enabled), MIGRATION_DATABASE_URL only
+	// with RUN_MIGRATIONS=true.
+	BinaryServer Binary = iota
+	// BinaryJobs is cmd/jobs: DATABASE_URL, PG_SYSTEM_PASSWORD, LOG_HASH_SALT,
+	// STRIPE_API_KEY and STRIPE_WEBHOOK_SECRETS (Stripe enabled). No job
+	// verifies a webhook, but stripe.New refuses to build without a webhook
+	// secret, and without the adapter the jobs that call Stripe
+	// (seat-renewal, purchase-expiry, renewal-repricing, ...) fail. No audit
+	// drainer (the server pods deliver), no migration DSN, no SNS topic or
+	// SQS queues (jobs only enqueue into the outbox).
+	BinaryJobs
+)
 
 // IsDevLike reports whether env is a developer environment.
 func IsDevLike(env string) bool { return env == "local" || env == "dev" || env == "test" }
@@ -50,22 +76,31 @@ type Config struct {
 	PGAuditDrainerMaxConns  int
 	MigrationDatabaseURLSet bool
 
+	// ShutdownDrainDelay is how long the server keeps serving after SIGTERM
+	// with /readyz failing, so endpoints and the mesh stop routing to the
+	// pod before its listener closes (cmd/server shutdown budget).
+	ShutdownDrainDelay time.Duration
+
 	// Events.
-	SNSBillingEventsTopicARN  string
-	GlueRegistryName          string
-	SQSTenantBillingQueueURL  string
-	SQSUsageBillingQueueURL   string
-	SQSMaxReceiveCount        int
-	SQSWaitTimeSeconds        int
-	SQSVisibilityTimeout      time.Duration
-	MaxLifecycleEventSkew     time.Duration
-	OutboxPollInterval        time.Duration
-	OutboxBatchSize           int
-	OutboxMaxAttempts         int
-	OutboxRetentionDays       int
-	ProcessedEventsTTLDays    int
-	SeatsAfterConversionDelay time.Duration
-	EmissionPollInterval      time.Duration
+	SNSBillingEventsTopicARN string
+	GlueRegistryName         string
+	SQSTenantBillingQueueURL string
+	SQSUsageBillingQueueURL  string
+	// UsageBillingConsumerEnabled starts the usage-billing-q consumer. Off
+	// until Usage & Metering ratifies UsagePeriodClosed (BL-OQ-24); the
+	// queue URL is required only when it is on.
+	UsageBillingConsumerEnabled bool
+	SQSMaxReceiveCount          int
+	SQSWaitTimeSeconds          int
+	SQSVisibilityTimeout        time.Duration
+	MaxLifecycleEventSkew       time.Duration
+	OutboxPollInterval          time.Duration
+	OutboxBatchSize             int
+	OutboxMaxAttempts           int
+	OutboxRetentionDays         int
+	ProcessedEventsTTLDays      int
+	SeatsAfterConversionDelay   time.Duration
+	EmissionPollInterval        time.Duration
 
 	// Data lifecycle (§15.3).
 	PIIMinimiseOffboardedDays int
@@ -158,19 +193,34 @@ type loader struct {
 	strict   bool // required values enforced
 }
 
-// Load reads the process environment.
-func Load() (Config, []Problem) { return LoadFrom(os.Getenv) }
+// Load reads the process environment for the server.
+func Load() (Config, []Problem) { return LoadFor(BinaryServer) }
 
-// LoadFrom reads settings through getenv (tests pass a map lookup).
+// LoadFor reads the process environment for binary b.
+func LoadFor(b Binary) (Config, []Problem) { return LoadFromFor(os.Getenv, b) }
+
+// LoadFrom reads the server's settings through getenv (tests pass a map
+// lookup).
 func LoadFrom(getenv func(string) string) (Config, []Problem) {
+	return LoadFromFor(getenv, BinaryServer)
+}
+
+// LoadFromFor reads binary b's settings through getenv.
+func LoadFromFor(getenv func(string) string, b Binary) (Config, []Problem) {
 	l := &loader{getenv: getenv}
 	var c Config
+	server := b == BinaryServer
 
-	c.AppEnv = resolveEnv(getenv)
-	if !validEnvs[c.AppEnv] {
+	env, err := ResolveEnv(getenv)
+	c.AppEnv = env
+	switch {
+	case err != nil:
+		l.fail("APP_ENV", err.Error())
+		env = "prod" // fail closed: every required value is checked too
+	case !validEnvs[c.AppEnv]:
 		l.fail("APP_ENV", fmt.Sprintf("%q is not one of local|dev|test|staging|prod", c.AppEnv))
 	}
-	l.strict = !IsDevLike(c.AppEnv)
+	l.strict = !IsDevLike(env)
 
 	c.AppName = l.str("APP_NAME", "commercial-billing")
 	if c.AppName != "commercial-billing" {
@@ -185,6 +235,7 @@ func LoadFrom(getenv func(string) string) (Config, []Problem) {
 	c.RequestTimeout = l.durIn("REQUEST_TIMEOUT", 30*time.Second, 5*time.Second, 60*time.Second)
 	c.RunMigrations = l.boolean("RUN_MIGRATIONS", false)
 	c.MigrateTimeout = l.durIn("MIGRATE_TIMEOUT", 10*time.Minute, time.Minute, 30*time.Minute)
+	c.ShutdownDrainDelay = l.durIn("SHUTDOWN_DRAIN_DELAY", 2*time.Second, 0, 5*time.Second)
 
 	c.PGSystemUser = l.str("PG_SYSTEM_USER", "billing_system")
 	c.PGSystemPassword = l.secret("PG_SYSTEM_PASSWORD")
@@ -195,23 +246,35 @@ func LoadFrom(getenv func(string) string) (Config, []Problem) {
 	// The system and audit-drainer pools are pgcommon's environment config
 	// with these roles' credentials (§3.3); outside developer environments a
 	// missing password would silently run them as billing_app.
+	// Jobs never open the audit drainer pool (bootstrap.AuditEnqueueOnly).
 	if l.strict {
 		if c.PGSystemPassword == "" {
 			l.fail("PG_SYSTEM_PASSWORD", "required")
 		}
-		if c.PGAuditDrainerPassword == "" {
+		if server && c.PGAuditDrainerPassword == "" {
 			l.fail("PG_AUDIT_DRAINER_PASSWORD", "required")
 		}
 	}
 	c.MigrationDatabaseURLSet = strings.TrimSpace(getenv("MIGRATION_DATABASE_URL")) != ""
+	// The server needs a migration DSN only when it migrates at startup;
+	// otherwise only cmd/migrate (the hook Job) reads it.
+	if server && c.RunMigrations && l.strict && !c.MigrationDatabaseURLSet {
+		l.fail("MIGRATION_DATABASE_URL", "required with RUN_MIGRATIONS=true")
+	}
 
-	c.SNSBillingEventsTopicARN = l.required("SNS_BILLING_EVENTS_TOPIC_ARN")
+	// The event bus is the server's: jobs only enqueue into the outbox.
+	l.withRequired(server, func() {
+		c.SNSBillingEventsTopicARN = l.required("SNS_BILLING_EVENTS_TOPIC_ARN")
+		c.SQSTenantBillingQueueURL = l.requiredURL("SQS_TENANT_BILLING_QUEUE_URL", false)
+	})
 	if c.SNSBillingEventsTopicARN != "" && !strings.HasPrefix(c.SNSBillingEventsTopicARN, "arn:") {
 		l.fail("SNS_BILLING_EVENTS_TOPIC_ARN", "must be an ARN")
 	}
 	c.GlueRegistryName = l.str("GLUE_REGISTRY_NAME", "billing-events")
-	c.SQSTenantBillingQueueURL = l.requiredURL("SQS_TENANT_BILLING_QUEUE_URL", false)
-	c.SQSUsageBillingQueueURL = l.requiredURL("SQS_USAGE_BILLING_QUEUE_URL", false)
+	c.UsageBillingConsumerEnabled = l.boolean("USAGE_BILLING_CONSUMER_ENABLED", false)
+	l.withRequired(server && c.UsageBillingConsumerEnabled, func() {
+		c.SQSUsageBillingQueueURL = l.requiredURL("SQS_USAGE_BILLING_QUEUE_URL", false)
+	})
 	c.SQSMaxReceiveCount = l.intIn("SQS_MAX_RECEIVE_COUNT", 4, 1, 4)
 	c.SQSWaitTimeSeconds = l.intIn("SQS_WAIT_TIME_SECONDS", 20, 0, 20)
 	c.SQSVisibilityTimeout = l.durIn("SQS_VISIBILITY_TIMEOUT", 60*time.Second, 30*time.Second, 300*time.Second)
@@ -253,7 +316,7 @@ func LoadFrom(getenv func(string) string) (Config, []Problem) {
 	}
 	c.StripeWebhookSecrets = l.list("STRIPE_WEBHOOK_SECRETS", nil)
 	if stripeEnabled {
-		if len(c.StripeWebhookSecrets) == 0 && l.strict {
+		if len(c.StripeWebhookSecrets) == 0 && l.strict { // jobs too: the Stripe adapter requires one
 			l.fail("STRIPE_WEBHOOK_SECRETS", "required")
 		}
 		if len(c.StripeWebhookSecrets) > 2 {
@@ -362,13 +425,32 @@ func (l *loader) checkStripeKey(env, key string) {
 	}
 }
 
-func resolveEnv(getenv func(string) string) string {
+// ErrEnvUnsetInKubernetes refuses the "dev" default inside a cluster.
+var ErrEnvUnsetInKubernetes = errors.New("required in Kubernetes (KUBERNETES_SERVICE_HOST is set): the dev default would relax every startup check")
+
+// ResolveEnv is APP_ENV, else ENVIRONMENT, lower-cased; "dev" when both are
+// unset on a workstation. Inside Kubernetes (KUBERNETES_SERVICE_HOST set)
+// an unset environment fails closed with ErrEnvUnsetInKubernetes instead of
+// running with the relaxed developer checks.
+func ResolveEnv(getenv func(string) string) (string, error) {
 	for _, key := range []string{"APP_ENV", "ENVIRONMENT"} {
 		if v := strings.ToLower(strings.TrimSpace(getenv(key))); v != "" {
-			return v
+			return v, nil
 		}
 	}
-	return "dev"
+	if strings.TrimSpace(getenv("KUBERNETES_SERVICE_HOST")) != "" {
+		return "", ErrEnvUnsetInKubernetes
+	}
+	return "dev", nil
+}
+
+// withRequired runs read with required values enforced only when need is
+// true; values that are present are still validated.
+func (l *loader) withRequired(need bool, read func()) {
+	strict := l.strict
+	l.strict = strict && need
+	read()
+	l.strict = strict
 }
 
 func (l *loader) fail(key, reason string) {

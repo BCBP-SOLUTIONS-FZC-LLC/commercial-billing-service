@@ -44,6 +44,16 @@ func TestRunUnreachableDatabase(t *testing.T) {
 	}
 }
 
+// Fail closed: in Kubernetes with APP_ENV unset the hook Job refuses to run.
+func TestRunRefusesUnsetEnvInKubernetes(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+	t.Setenv("MIGRATION_DATABASE_URL", "postgres://billing_migrator:x@127.0.0.1:1/billing?sslmode=disable")
+	if got := run(); got != 1 {
+		t.Fatalf("exit %d, want 1", got)
+	}
+}
+
 func TestRunLoggerFailure(t *testing.T) {
 	clearEnv(t)
 	blocker := filepath.Join(t.TempDir(), "file")

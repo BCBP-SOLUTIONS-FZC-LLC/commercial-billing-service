@@ -1,6 +1,10 @@
 # Seat projection drift
 
-**Alert:** `BillingSeatProjectionDrift` (SEV-3): Core's `licensed_seats` differed from Billing's seat item more than once in 24 h. LLD §8.6.4, BIL-EVT-5.
+**Alert:** `BillingSeatProjectionDrift` (SEV-3): the last `seat-projection-check` run found a tenant whose `licensed_seats` in Core differed from Billing's seat item again within 24 h of a resync. LLD §8.6.4, BIL-EVT-5.
+
+Source: `commercial_billing_seat_projection_last_run_mismatches{repeat="true"}`, a per-run gauge pushed by the job (`repeat="false"` counts first-time mismatches). The next clean run sets it to 0 and resolves the alert. If the job itself is failing, see [cronjob-not-succeeding.md](cronjob-not-succeeding.md).
+
+**Go-live check:** the Pushgateway's ServiceMonitor (or scrape config) must use `honorLabels: true`. Otherwise the pushed `service` and `job` labels arrive as `exported_service` / `exported_job`, the `{service="commercial-billing"}` selector matches nothing and this alert can never fire. Check that `commercial_billing_seat_projection_last_run_mismatches{service="commercial-billing"}` returns series after the first run ([cronjob-not-succeeding.md](cronjob-not-succeeding.md#go-live-checks)).
 
 `seat-projection-check` (every 30 min) queues `TenantSeatsChanged {reason: "resync"}` for each mismatch older than `SEAT_RESYNC_AFTER`. A repeat means the resync did not stick.
 

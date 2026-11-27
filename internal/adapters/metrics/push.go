@@ -29,7 +29,19 @@ const textFormat = "text/plain; version=0.0.4; charset=utf-8"
 // The exposition is rendered by gincommon.MetricsHandler, the same handler
 // the server's /metrics serves, so the push names no Prometheus type
 // (BIL-OPS-10); it is a plain HTTP PUT of that text.
-func PushRun(pushURL, cronjob string) error {
+//
+// PUT replaces the whole group: use it for a run that succeeded (its
+// commercial_billing_cron_job_last_success_timestamp_seconds is set). A
+// failed run uses PushFailedRun.
+func PushRun(pushURL, cronjob string) error { return push(pushURL, cronjob, http.MethodPut) }
+
+// PushFailedRun pushes a failed run with POST: the Pushgateway replaces only
+// the families in the body and keeps the group's others, so the previous
+// run's last-success timestamp survives and BillingCronJobNotSucceeding
+// measures the time since the last success.
+func PushFailedRun(pushURL, cronjob string) error { return push(pushURL, cronjob, http.MethodPost) }
+
+func push(pushURL, cronjob, method string) error {
 	if pushURL == "" {
 		return nil
 	}
@@ -40,7 +52,7 @@ func PushRun(pushURL, cronjob string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), pushTimeout)
 	defer cancel()
 	target := strings.TrimRight(pushURL, "/") + "/metrics/job/" + url.PathEscape(cronjob)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, target, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("pushgateway request: %w", err)
 	}

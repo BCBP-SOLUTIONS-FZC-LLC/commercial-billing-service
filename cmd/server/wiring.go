@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -16,7 +17,6 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/bootstrap"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/config"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-audit/pkg/auditoutbox"
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events/v2/pkg/events"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events/v2/pkg/outbox"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
@@ -25,44 +25,49 @@ import (
 // workers holds the in-pod background loops (§13.1).
 type workers struct {
 	cancel    context.CancelFunc
-	done      chan struct{}
+	done      <-chan struct{} // closed when the webhook processor's supervision ended
 	outbox    *outbox.Runner
-	consumers []events.Consumer
+	consumers []queueConsumer
 	audit     *auditoutbox.Runner
 	log       port.Logger
 }
 
 // startWorkers starts the registry refresh, the webhook processor, the
-// outbox publisher, the SQS consumers and the delayed-emission worker.
+// outbox publisher, the SQS consumers and the delayed-emission worker,
+// each under lc's supervision: a loop that returns while the pod is not
+// shutting down drops its commercial_billing_background_loop_running gauge
+// (BillingBackgroundLoopStopped) and is restarted in-process with backoff;
+// liveness is not affected (lifecycle.go). The platform-audit runner is
+// single-use: it is not restarted, and its Alive check fails liveness.
 func startWorkers(cfg config.Config, reg *provider.Registry, appPool, sysPool *pgcommon.Pool, b *bus, svc *app.Service,
-	auditRunner *auditoutbox.Runner, m *metrics.Metrics, log port.Logger) *workers {
+	auditRunner *auditoutbox.Runner, m *metrics.Metrics, lc *lifecycle, log port.Logger) *workers {
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &workers{cancel: cancel, done: make(chan struct{}), outbox: b.outbox, consumers: b.consumers, audit: auditRunner, log: log}
-	if auditRunner != nil {
-		go func() {
-			if err := auditRunner.Start(ctx); err != nil && ctx.Err() == nil {
-				log.Error("audit runner", map[string]any{"error": err.Error()})
-			}
-		}()
+	w := &workers{cancel: cancel, outbox: b.outbox, consumers: b.consumers, audit: auditRunner, log: log}
+	run := func(name string, loop func(ctx context.Context) error) <-chan struct{} {
+		return lc.supervise(ctx, name, log, true, loop)
 	}
-	go pollLoop(ctx, cfg.SagaPollInterval, sagaBatch, svc.RunSagas, log, "saga worker")
-	go pollLoop(ctx, followUpInterval, sagaBatch, svc.RunLifecycleFollowUps, log, "lifecycle follow-up")
-	go pollLoop(ctx, reconPollInterval, 1, svc.RunReconciliation, log, "reconciliation run")
+	loop := func(f func(ctx context.Context)) func(ctx context.Context) error {
+		return func(ctx context.Context) error { f(ctx); return nil }
+	}
+	if auditRunner != nil {
+		lc.supervise(ctx, "audit-runner", log, false, auditRunner.Start)
+	}
+	run("saga-worker", loop(func(ctx context.Context) {
+		pollLoop(ctx, cfg.SagaPollInterval, sagaBatch, svc.RunSagas, log, "saga worker")
+	}))
+	run("lifecycle-follow-up", loop(func(ctx context.Context) {
+		pollLoop(ctx, followUpInterval, sagaBatch, svc.RunLifecycleFollowUps, log, "lifecycle follow-up")
+	}))
+	run("reconciliation", loop(func(ctx context.Context) {
+		pollLoop(ctx, reconPollInterval, 1, svc.RunReconciliation, log, "reconciliation run")
+	}))
 	if b.outbox != nil {
-		go func() {
-			if err := b.outbox.Start(ctx); err != nil {
-				log.Error("outbox runner", map[string]any{"error": err.Error()})
-			}
-		}()
+		run("outbox", b.outbox.Start)
 	}
 	for _, c := range b.consumers {
-		go func() {
-			if err := c.Start(ctx); err != nil && ctx.Err() == nil {
-				log.Error("sqs consumer stopped", map[string]any{"error": err.Error()})
-			}
-		}()
+		run("sqs:"+c.name, c.Start)
 	}
-	go b.emissions.Run(ctx, cfg.EmissionPollInterval)
+	run("emissions", loop(func(ctx context.Context) { b.emissions.Run(ctx, cfg.EmissionPollInterval) }))
 	proc := &app.WebhookProcessor{
 		Ledger:      pgadapter.NewLedgerRepository(sysPool),
 		Providers:   reg,
@@ -72,39 +77,54 @@ func startWorkers(cfg config.Config, reg *provider.Registry, appPool, sysPool *p
 		Log:         log,
 		Metrics:     m,
 	}
-	go exportSnapshot(ctx, pgadapter.NewSnapshotRepository(sysPool), m, cfg.SagaAlertAfter, log)
-	go func() {
-		defer close(w.done)
-		go reg.Run(ctx, cfg.ProviderRegistryRefresh, certifiedGauge(m))
-		proc.Run(ctx, cfg.WebhookPollInterval)
-	}()
+	run("metrics-snapshot", loop(func(ctx context.Context) {
+		exportSnapshot(ctx, pgadapter.NewSnapshotRepository(sysPool), m, cfg.SagaAlertAfter, log)
+	}))
+	run("provider-registry", loop(func(ctx context.Context) { reg.Run(ctx, cfg.ProviderRegistryRefresh, certifiedGauge(m)) }))
+	w.done = run("webhook-processor", loop(func(ctx context.Context) { proc.Run(ctx, cfg.WebhookPollInterval) }))
 	return w
 }
 
-// stop cancels the loops, drains the outbox runner's in-flight batch, and
-// waits up to timeout for the processor to return.
+// stop cancels the loops and stops the SQS consumers, the audit runner and
+// the outbox runner in parallel (each drains its in-flight work), waiting
+// at most timeout in total; the webhook processor's return is awaited in
+// the same window.
 func (w *workers) stop(timeout time.Duration) {
 	w.cancel()
+	var wg sync.WaitGroup
 	for _, c := range w.consumers {
-		if err := c.Stop(); err != nil {
-			w.log.Error("sqs consumer stop", map[string]any{"error": err.Error()})
-		}
+		wg.Go(func() {
+			if err := c.Stop(); err != nil {
+				w.log.Error("sqs consumer stop", map[string]any{"queue": c.name, "error": err.Error()})
+			}
+		})
 	}
 	if w.audit != nil {
-		sctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		if err := w.audit.Stop(sctx); err != nil {
-			w.log.Error("audit runner stop", map[string]any{"error": err.Error()})
-		}
+		wg.Go(func() {
+			sctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			if err := w.audit.Stop(sctx); err != nil {
+				w.log.Error("audit runner stop", map[string]any{"error": err.Error()})
+			}
+		})
 	}
 	if w.outbox != nil {
-		if err := w.outbox.Stop(); err != nil {
-			w.log.Error("outbox runner stop", map[string]any{"error": err.Error()})
-		}
+		wg.Go(func() {
+			if err := w.outbox.Stop(); err != nil {
+				w.log.Error("outbox runner stop", map[string]any{"error": err.Error()})
+			}
+		})
 	}
+	all := make(chan struct{})
+	go func() {
+		wg.Wait()
+		<-w.done
+		close(all)
+	}()
 	select {
-	case <-w.done:
+	case <-all:
 	case <-time.After(timeout):
+		w.log.Warn("background loops did not all stop within the shutdown budget", map[string]any{"timeout_ms": timeout.Milliseconds()})
 	}
 }
 

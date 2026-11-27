@@ -24,16 +24,33 @@ const (
 	outboxPublishTimeout = 10 * time.Second
 	sqsHandlerTimeout    = 20 * time.Second
 	queueDepthInterval   = 60 * time.Second
-	sqsDrainTimeout      = 15 * time.Second
+	sqsDrainTimeout      = 15 * time.Second // also the cap: shutdown budget (lifecycle.go)
+	outboxDrainTimeout   = 15 * time.Second // cap on OUTBOX_DRAIN_TIMEOUT (platform-events default 30 s)
 	dlqStartupTimeout    = 5 * time.Second
+)
+
+// dlqStartupAttempts and dlqStartupBackoff retry a transient DLQ lookup at
+// startup (≈ 3×5 s + 2×2 s, inside the startup probe's 120 s), so a
+// deterministic RedrivePolicy problem hidden behind one throttled call
+// still fails startup rather than the running consumer.
+var (
+	dlqStartupAttempts = 3
+	dlqStartupBackoff  = 2 * time.Second
 )
 
 // bus is everything on billing.events, tenant-billing-q and usage-billing-q.
 type bus struct {
 	events    port.EventEnqueuer
 	outbox    *outbox.Runner // nil in dev without a topic
-	consumers []events.Consumer
+	consumers []queueConsumer
 	emissions *app.EmissionWorker
+}
+
+// queueConsumer is one SQS consumer with its queue name (liveness and the
+// background-loop gauge name it).
+type queueConsumer struct {
+	name string
+	events.Consumer
 }
 
 // buildBus wires the event side of §7 through platform-events only: its
@@ -85,8 +102,8 @@ func sqsEnv(cfg config.Config) evconfig.SQSConfigEnv {
 	if env.HandlerTimeout == 0 {
 		env.HandlerTimeout = sqsHandlerTimeout
 	}
-	if env.DrainTimeout == 0 {
-		env.DrainTimeout = sqsDrainTimeout
+	if env.DrainTimeout == 0 || env.DrainTimeout > sqsDrainTimeout {
+		env.DrainTimeout = sqsDrainTimeout // Stop waits drain + 5 s; must fit the shutdown budget
 	}
 	if env.QueueDepthInterval == 0 {
 		env.QueueDepthInterval = queueDepthInterval // platform_queue_depth / platform_dlq_depth (BillingDLQNotEmpty)
@@ -126,6 +143,9 @@ func outboxRunner(ctx context.Context, cfg config.Config, appPool *pgcommon.Pool
 	if ob.PublishTimeout == 0 {
 		ob.PublishTimeout = outboxPublishTimeout
 	}
+	// Stop waits up to DrainTimeout for the batch in flight; an unfinished
+	// batch is re-claimed after its lease, so the cap only bounds shutdown.
+	ob.DrainTimeout = min(ob.DrainTimeout, outboxDrainTimeout)
 	if min := outboxClaimLease(ob.BatchSize, ob.PublishTimeout); ob.ClaimLeaseDuration < min {
 		ob.ClaimLeaseDuration = min
 	}
@@ -143,7 +163,7 @@ func outboxClaimLease(batchSize int, publishTimeout time.Duration) time.Duration
 // platform-events' consumer and DLQ publisher (they build their own SQS
 // clients from the loaded region and endpoint).
 func sqsConsumers(ctx context.Context, cfg config.Config, appPool *pgcommon.Pool, schemas *eventbus.Schemas,
-	conv app.ConversionConfirmer, log port.Logger) ([]events.Consumer, error) {
+	conv app.ConversionConfirmer, log port.Logger) ([]queueConsumer, error) {
 	env := sqsEnv(cfg)
 	evconfig.LogWarningsTo(log, env.Warnings)
 	dlq, err := events.NewSQSDLQPublisher(events.DLQConfig{Region: env.Region, EndpointURL: env.EndpointURL, ConsumerName: cfg.AppName, Logger: log})
@@ -165,44 +185,79 @@ func sqsConsumers(ctx context.Context, cfg config.Config, appPool *pgcommon.Pool
 		handler   events.Handler
 	}{
 		{"tenant-billing-q", cfg.SQSTenantBillingQueueURL, consumer.TenantBilling(lifecycle, schemas.ValidateConsumed, log)},
-		{"usage-billing-q", cfg.SQSUsageBillingQueueURL, consumer.UsageBilling(usage, schemas.ValidateConsumed, log)},
 	}
-	var out []events.Consumer
+	// usage-billing-q stays off until UsagePeriodClosed is ratified
+	// (BL-OQ-24, USAGE_BILLING_CONSUMER_ENABLED).
+	if cfg.UsageBillingConsumerEnabled {
+		queues = append(queues, struct {
+			name, url string
+			handler   events.Handler
+		}{"usage-billing-q", cfg.SQSUsageBillingQueueURL, consumer.UsageBilling(usage, schemas.ValidateConsumed, log)})
+	} else {
+		log.Info("usage-billing-q consumer disabled (USAGE_BILLING_CONSUMER_ENABLED=false, BL-OQ-24)", nil)
+	}
+	var out []queueConsumer
 	for _, q := range queues {
 		if q.url == "" {
 			log.Warn("queue URL unset; consumer not started (dev only)", map[string]any{"queue": q.name})
 			continue
 		}
-		if err := requireDLQ(ctx, dlq, q.url, cfg, log); err != nil {
+		forward, err := requireDLQ(ctx, dlq, q.url, cfg, log)
+		if err != nil {
 			return nil, err
 		}
 		qenv := env
 		qenv.QueueURL = q.url
-		opts := append(evconfig.SQSConsumerOptions(qenv),
-			events.WithConsumerCodec(events.GlueDecodeCodec{}), events.WithDLQForwarding(dlq))
-		c, err := events.NewSQSConsumer(evconfig.SQSConfigFromEnv(qenv, log), consumer.RouteRejectsToDLQ(q.handler, dlq, log), opts...)
+		opts := append(evconfig.SQSConsumerOptions(qenv), events.WithConsumerCodec(events.GlueDecodeCodec{}))
+		handler := q.handler
+		if forward {
+			// Start re-checks the RedrivePolicy and returns on a permanent
+			// failure; requireDLQ has ruled that out at startup.
+			opts = append(opts, events.WithDLQForwarding(dlq))
+			handler = consumer.RouteRejectsToDLQ(q.handler, dlq, log)
+		}
+		c, err := events.NewSQSConsumer(evconfig.SQSConfigFromEnv(qenv, log), handler, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("%s consumer: %w", q.name, err)
 		}
-		out = append(out, c)
+		out = append(out, queueConsumer{name: q.name, Consumer: c})
 	}
 	return out, nil
 }
 
-// requireDLQ refuses to start, outside dev, on a queue whose RedrivePolicy
-// is missing: dead-lettered messages would be lost. A transient lookup
-// failure only warns; forwards resolve the DLQ again.
-func requireDLQ(ctx context.Context, dlq events.DLQPublisher, queueURL string, cfg config.Config, log port.Logger) error {
-	rctx, cancel := context.WithTimeout(ctx, dlqStartupTimeout)
-	defer cancel()
-	_, err := dlq.ResolveDLQ(rctx, queueURL)
-	switch {
-	case err == nil:
-		return nil
-	case (errors.Is(err, events.ErrDLQNotConfigured) || errors.Is(err, events.ErrDLQInvalidRedrivePolicy)) && !config.IsDevLike(cfg.AppEnv):
-		return fmt.Errorf("queue %s has no usable RedrivePolicy: %w", queueURL, err)
-	default:
-		log.Warn("could not resolve the DLQ at startup; forwards resolve it again", map[string]any{"queue_url": queueURL, "error": err.Error()})
-		return nil
+// requireDLQ resolves the queue's DLQ before the listener opens (§7.1,
+// §13.1) and reports whether DLQ forwarding can be enabled. Outside dev a
+// missing or unusable RedrivePolicy refuses startup (dead-lettered messages
+// would be lost, and platform-events' consumer would stop at once on the
+// same check): the deploy fails instead of the running pods. In dev that
+// queue runs without DLQ forwarding, with a warning. A transient lookup
+// failure is retried (dlqStartupAttempts); if it persists the consumer
+// starts with forwarding on (forwards resolve the DLQ again) and a later
+// permanent failure is restarted and alerted by the supervisor.
+func requireDLQ(ctx context.Context, dlq events.DLQPublisher, queueURL string, cfg config.Config, log port.Logger) (bool, error) {
+	var err error
+	for attempt := 1; ; attempt++ {
+		rctx, cancel := context.WithTimeout(ctx, dlqStartupTimeout)
+		_, err = dlq.ResolveDLQ(rctx, queueURL)
+		cancel()
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, events.ErrDLQNotConfigured) || errors.Is(err, events.ErrDLQInvalidRedrivePolicy):
+			if !config.IsDevLike(cfg.AppEnv) {
+				return false, fmt.Errorf("queue %s has no usable RedrivePolicy: %w", queueURL, err)
+			}
+			log.Warn("queue has no usable RedrivePolicy; DLQ forwarding off for it (dev only)", map[string]any{"queue_url": queueURL, "error": err.Error()})
+			return false, nil
+		}
+		if attempt >= dlqStartupAttempts || ctx.Err() != nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(dlqStartupBackoff):
+		}
 	}
+	log.Warn("could not resolve the DLQ at startup; forwards resolve it again", map[string]any{"queue_url": queueURL, "error": err.Error()})
+	return true, nil //nolint:nilerr // a transient lookup failure must not refuse startup (logged above)
 }

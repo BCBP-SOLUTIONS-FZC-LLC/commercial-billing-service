@@ -21,6 +21,7 @@ package metrics
 import (
 	"errors"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
@@ -59,7 +60,13 @@ const (
 	InvoiceDispositionsTotal  = "commercial_billing_invoice_dispositions_total"
 	ScheduledEmissionsPending = "commercial_billing_scheduled_emissions_pending"
 	ProviderCertified         = "commercial_billing_provider_certified"
-	DependencyRequestSeconds  = "platform_dependency_request_seconds"
+	// Operability (rev 0.59 proposal): staleness, liveness and CronJob
+	// success signals that alerts read.
+	SnapshotLastSuccess        = "commercial_billing_metrics_snapshot_last_success_timestamp_seconds"
+	BackgroundLoopRunning      = "commercial_billing_background_loop_running"
+	CronJobLastSuccess         = "commercial_billing_cron_job_last_success_timestamp_seconds"
+	SeatProjectionLastRunDrift = "commercial_billing_seat_projection_last_run_mismatches"
+	DependencyRequestSeconds   = "platform_dependency_request_seconds"
 )
 
 // Buckets: purchase → event targets 60 s (§11.1); webhook processing < 10 s
@@ -79,9 +86,17 @@ type Metrics struct {
 	paymentFailures, dunning, dispositions                            *gincommon.CounterVec
 	seatMismatches, unmatched                                         gincommon.Counter
 	backlog, inFlight, subscriptions, findings, paused, held, pending *gincommon.GaugeVec
-	certified                                                         *gincommon.GaugeVec
-	overdue                                                           gincommon.Gauge
-	dependency                                                        *gincommon.HistogramVec // shared platform_dependency_request_seconds
+	certified, loops, cronSuccess, seatLastRun                        *gincommon.GaugeVec
+	overdue, snapshotOK                                               gincommon.Gauge
+
+	// snapMu guards the label sets the snapshot gauges currently expose, so
+	// a fresh reading deletes only the series that disappeared instead of
+	// Reset()ting the vector (a scrape between Reset and Set would miss the
+	// HPA's status="received" series).
+	snapMu     sync.Mutex
+	snapKeys   map[*gincommon.GaugeVec]map[string]bool
+	subKeys    map[[3]string]bool
+	dependency *gincommon.HistogramVec // shared platform_dependency_request_seconds
 }
 
 var _ port.Metrics = (*Metrics)(nil)
@@ -135,6 +150,9 @@ func New(reg gincommon.Registerer) (*Metrics, error) {
 	m.dispositions = cv(InvoiceDispositionsTotal, "B-O16 decisions, by action.", "action")
 	m.pending = gv(ScheduledEmissionsPending, "Pending delayed emissions (BIL-EVT-6), by builder.", "builder")
 	m.certified = gv(ProviderCertified, "1 when the loaded adapter version has a valid certification (BIL-PROV-1).", "provider", "adapter_version")
+	m.loops = gv(BackgroundLoopRunning, "1 while an in-pod background loop runs, 0 from an unexpected stop until it is restarted (backoff up to 5 min).", "loop")
+	m.cronSuccess = gv(CronJobLastSuccess, "Unix time of the CronJob's last run that exited 0 (pushed by cmd/jobs).", "job_name")
+	m.seatLastRun = gv(SeatProjectionLastRunDrift, "Seat projection mismatches found by the last seat-projection-check run; repeat=true for a tenant already resynced in the previous 24 h (§8.6.4).", "repeat")
 	var err error
 	m.seatMismatches, err = gincommon.NewCounter(reg, SeatProjectionMismatches, "Seat projection mismatches found (§8.6.4).")
 	errs = append(errs, err)
@@ -142,6 +160,9 @@ func New(reg gincommon.Registerer) (*Metrics, error) {
 	errs = append(errs, err)
 	m.overdue, err = gincommon.NewGauge(reg, SagasOverdue, "Sagas not confirmed 30 minutes after payment (alert source).")
 	errs = append(errs, err)
+	m.snapshotOK, err = gincommon.NewGauge(reg, SnapshotLastSuccess, "Unix time of the last successful database snapshot behind the exporter gauges (staleness).")
+	errs = append(errs, err)
+	m.snapKeys = map[*gincommon.GaugeVec]map[string]bool{}
 	// Tier 1 shared histogram. platform-events registers the same registry
 	// entry for SNS/SQS calls and reuses an identical collector already
 	// registered, so New must run before the event bus is built (cmd/server,
@@ -267,25 +288,85 @@ func (m *Metrics) ProviderCertified(provider, adapterVersion string, ok bool) {
 	m.certified.WithLabelValues(provider, adapterVersion).Set(v)
 }
 
-// SetSnapshot replaces the exporter gauges with a fresh database reading.
-func (m *Metrics) SetSnapshot(s port.MetricsSnapshot) {
-	setMap(m.backlog, s.WebhookBacklog)
-	setMap(m.inFlight, s.SagasInFlight)
-	setMap(m.paused, s.CollectionPaused)
-	setMap(m.held, s.InvoicesHeld)
-	setMap(m.pending, s.EmissionsPending)
+// Label values the snapshot gauges always expose, at 0 when nothing
+// matches: the HPA's external metric reads webhook_backlog{status=
+// "received"}, and a missing series would leave it unable to scale down.
+var (
+	backlogStatuses = []string{"received", "failed"}
+	sagaStates      = []string{"payment_confirmed", "rp_convert_pending", "awaiting_tenant_converted", "failed"}
+)
+
+// SetSnapshot replaces the exporter gauges with a fresh database reading
+// and stamps the last-success time. A failed reading leaves the gauges and
+// the stamp as they were, so staleness is visible as time() - stamp.
+func (m *Metrics) SetSnapshot(s port.MetricsSnapshot) { m.setSnapshotAt(s, time.Now()) }
+
+func (m *Metrics) setSnapshotAt(s port.MetricsSnapshot, at time.Time) {
+	m.snapMu.Lock()
+	defer m.snapMu.Unlock()
+	m.setMap(m.backlog, s.WebhookBacklog, backlogStatuses...)
+	m.setMap(m.inFlight, s.SagasInFlight, sagaStates...)
+	m.setMap(m.paused, s.CollectionPaused)
+	m.setMap(m.held, s.InvoicesHeld)
+	m.setMap(m.pending, s.EmissionsPending)
 	m.overdue.Set(float64(s.SagasOverdue))
-	m.subscriptions.Reset()
+	for k := range m.subKeys {
+		if _, ok := s.Subscriptions[k]; !ok {
+			m.subscriptions.DeleteLabelValues(k[0], k[1], k[2])
+		}
+	}
+	m.subKeys = map[[3]string]bool{}
 	for k, n := range s.Subscriptions {
 		m.subscriptions.WithLabelValues(k[0], k[1], k[2]).Set(float64(n))
+		m.subKeys[k] = true
 	}
+	m.snapshotOK.Set(float64(at.Unix()))
 }
 
-func setMap(g *gincommon.GaugeVec, values map[string]int) {
-	g.Reset()
-	for k, n := range values {
-		g.WithLabelValues(k).Set(float64(n))
+// setMap sets one value per label, known labels at 0 when absent, and
+// deletes the labels of the previous reading that are gone.
+func (m *Metrics) setMap(g *gincommon.GaugeVec, values map[string]int, known ...string) {
+	want := make(map[string]int, len(values)+len(known))
+	for _, k := range known {
+		want[k] = 0
 	}
+	for k, n := range values {
+		want[k] = n
+	}
+	for k := range m.snapKeys[g] {
+		if _, ok := want[k]; !ok {
+			g.DeleteLabelValues(k)
+		}
+	}
+	keys := make(map[string]bool, len(want))
+	for k, n := range want {
+		g.WithLabelValues(k).Set(float64(n))
+		keys[k] = true
+	}
+	m.snapKeys[g] = keys
+}
+
+// LoopRunning sets commercial_billing_background_loop_running for one loop.
+func (m *Metrics) LoopRunning(loop string, running bool) {
+	v := 0.0
+	if running {
+		v = 1
+	}
+	m.loops.WithLabelValues(loop).Set(v)
+}
+
+// CronJobSucceeded stamps the CronJob's last successful run (pushed with
+// the run's metrics; cmd/jobs).
+func (m *Metrics) CronJobSucceeded(job string, at time.Time) {
+	m.cronSuccess.WithLabelValues(job).Set(float64(at.Unix()))
+}
+
+// SeatProjectionRun records one seat-projection-check run: mismatches found
+// and, of those, tenants already resynced in the previous 24 h. Both series
+// are always set, 0 included, so a clean run clears the alert.
+func (m *Metrics) SeatProjectionRun(mismatches, repeats int) {
+	m.seatLastRun.WithLabelValues("false").Set(float64(mismatches - repeats))
+	m.seatLastRun.WithLabelValues("true").Set(float64(repeats))
 }
 
 func seconds(d time.Duration) float64 { return max(d.Seconds(), 0) }

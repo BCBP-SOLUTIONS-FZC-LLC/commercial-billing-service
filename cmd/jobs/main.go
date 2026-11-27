@@ -103,7 +103,7 @@ func run(args []string, exec func(name string) int) int {
 
 // execute builds the service and runs one job once.
 func execute(name string) int {
-	cfg, problems := config.Load()
+	cfg, problems := config.LoadFor(config.BinaryJobs)
 	if cfg.BuildVersion == "" {
 		cfg.BuildVersion = buildVersion
 	}
@@ -144,15 +144,36 @@ func execute(name string) int {
 	d, closeAll, err := build(ctx, cfg, jobMetrics, log)
 	if err != nil {
 		log.Error("job setup failed", map[string]any{"job": name, "error": err.Error()})
+		report(cfg.PushgatewayURL, name, exitFailed, "failure", jobMetrics, log)
 		return exitFailed
 	}
 	defer closeAll()
 	code, outcome := runJob(ctx, name, d, log)
-	jobMetrics.CrossTenantJobRun(name, outcome)
-	if err := metrics.PushRun(cfg.PushgatewayURL, name); err != nil {
+	report(cfg.PushgatewayURL, name, code, outcome, jobMetrics, log)
+	return code
+}
+
+// pushers are the two Pushgateway calls (tests replace them).
+var (
+	pushSucceeded = metrics.PushRun
+	pushFailed    = metrics.PushFailedRun
+)
+
+// report records the run and pushes it (§13.2). A run that exited 0
+// stamps commercial_billing_cron_job_last_success_timestamp_seconds and
+// replaces the job's Pushgateway group; a failed run is POSTed, which keeps
+// the previous success stamp, so BillingCronJobNotSucceeding measures the
+// time since the last success.
+func report(pushURL, name string, code int, outcome string, m *metrics.Metrics, log port.Logger) {
+	m.CrossTenantJobRun(name, outcome)
+	push := pushFailed
+	if code == exitOK {
+		m.CronJobSucceeded(name, time.Now())
+		push = pushSucceeded
+	}
+	if err := push(pushURL, name); err != nil {
 		log.Warn("job metrics not pushed", map[string]any{"job": name, "error": err.Error()})
 	}
-	return code
 }
 
 // runJob runs one job and logs its outcome with the
@@ -202,7 +223,7 @@ func build(ctx context.Context, cfg config.Config, m *metrics.Metrics, log port.
 	if _, err := registry.Refresh(ctx); err != nil {
 		log.Warn("provider registry: certification read failed; running work continues", map[string]any{"error": err.Error()})
 	}
-	auditP, err := bootstrap.Audit(ctx, cfg, appPool, cfg.AppEnv, log)
+	auditP, err := bootstrap.AuditEnqueueOnly(ctx, cfg, appPool, cfg.AppEnv, log)
 	if err != nil {
 		return fail(err)
 	}
