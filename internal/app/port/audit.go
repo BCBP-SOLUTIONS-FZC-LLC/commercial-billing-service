@@ -12,8 +12,8 @@ type AuditEntry struct {
 	TenantID        string // the entry's tenant, or the platform tenant
 	EntryType       string // e.g. billing.refund.issued
 	Action          string // e.g. refund.issued
-	ActorID         string // operator sub; "" = commercial-system
-	TargetType      string // subscription | invoice | saga | price_book | certification
+	ActorID         string // operator sub; "" or domain.CommercialSystemPrincipal = commercial-system (service account)
+	TargetType      string // subscription | invoice | saga | adjustment | price_book | certification | reconciliation_run
 	TargetID        string
 	SourceEventType string // e.g. RefundIssued (also the key's first part)
 	NaturalID       string // makes the key unique: the refund id, adjustment id, …

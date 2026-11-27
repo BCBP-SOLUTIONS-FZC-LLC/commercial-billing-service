@@ -553,6 +553,26 @@ func TestReversalCompletesAfterRP4WithoutCallingItAgain(t *testing.T) {
 	}
 }
 
+// A reversal completed without an operator (empty caller → commercial-system's
+// sentinel) is audited as the service account, not as a user with the
+// sentinel id (Audit Log §10.3: non-IAM producers use {service_account, …00c1}).
+func TestReversalWithoutOperatorAuditedAsServiceAccount(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant, sub := e.activeSubscription(t, "pro", 3)
+	exec(t, `UPDATE subscriptions SET converted_at = $2 WHERE billing_subscription_id = $1::uuid`, sub, e.now)
+	exec(t, `UPDATE billing_accounts SET iam_lifecycle = 'active' WHERE tenant_id = $1::uuid`, tenant)
+	exec(t, `UPDATE conversion_sagas SET state = 'confirmed', confirmed_at = now() WHERE billing_subscription_id = $1::uuid`, sub)
+	if _, err := e.svc.RevertConversion(ctx, app.Caller{}, tenant, app.ReversalRequest{Reason: "Early fraud warning on conversion payment"}); err != nil {
+		t.Fatal(err)
+	}
+	got := scalar[string](t, `SELECT entry->'actor'->>'type'||'/'||(entry->'actor'->>'id') FROM pending_audit_entries
+		WHERE tenant_id = $1 AND entry->>'entry_type' = 'billing.conversion.reverted'`, tenant)
+	if got != "service_account/"+domain.CommercialSystemPrincipal {
+		t.Fatalf("actor %s", got)
+	}
+}
+
 // B-O9 refund (§9.3.1): refusals; the saga is refund_pending from the first
 // commit; a stub without a paid conversion invoice closes as refunded at
 // once; with one, the refund is pending and the subscription ends

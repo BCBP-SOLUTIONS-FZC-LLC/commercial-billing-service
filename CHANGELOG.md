@@ -6,6 +6,16 @@ This service has never been deployed to any environment, and there is no release
 
 ## [Unreleased]
 
+### Fixed (2026-11-27 — Billing ↔ Audit Log compatibility, LLD rev 0.65)
+
+- Checked against `iam-audit-log` `main` at `e995889`. **No wire break**: all 12 AL-5 entry types are direct-write types in Audit Log's taxonomy; the six `billing.events` types are classified; identity, network and Glue decoding match.
+- **Events:** automated changes now always carry envelope `actor = …00c1`; the literal `commercial-system` is no longer sent (`port.SystemActor`, LLD §7.3.1).
+- **AL-5:** an entry whose actor is `…00c1` is written as `{service_account, …00c1}`, not as a user (e.g. a B-O8 reversal completed without an operator). `billing.adjustment.issued` targets `{adjustment, <adjustment_id>}` instead of `{subscription, <tenant_id>}`.
+- **Contract test:** Audit Log's `api/taxonomy.json` is vendored and `TestAuditEntryTypesAreDirectWriteInAuditLogTaxonomy` checks every `EntryType` literal in `internal/` against it.
+- **Docs:** LLD §7.3.1, §10.6, §18.3 list every bus and AL-5 type, target type and automated actor; open-items metadata specs match the code.
+- **Hand-off to Audit Log:** `billing-handoff-to-audit-log-compatibility.md` (AU-1 automated Billing events recorded as `iam_system`; AU-2 release and deploy `≥ e995889` before token add-ons; AU-3, AU-4 hygiene and docs).
+- **Audit Log's reply** (`audit-log-reply-to-billing-compatibility.md`, 2026-11-28): AU-1, AU-3, AU-4 done (#27); released as `v0.3.0` (`495b742`), not deployed. Billing re-checked at the tag (contract test passes, vendored files recorded at `495b742`); `FEATURE_TOKEN_ADDONS` stays `false` until `v0.3.0` is deployed.
+
 ### Changed (2026-11-27 — Realm Provisioner re-check after RP #65 and #66, LLD rev 0.64)
 
 - Re-checked against `iam-realm-provisioner` `main` at `d3f4e3c`. **Compatible; no Billing code change.** R-1 to R-6 are merged (RP #65): RP-4 detached and Billing-only, queue `billing-realm-q`, namespace `iam`, RP-3 plan enum, docs.

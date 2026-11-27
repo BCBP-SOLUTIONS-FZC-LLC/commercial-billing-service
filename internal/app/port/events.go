@@ -7,8 +7,10 @@ import (
 )
 
 // SystemActor is the envelope actor for changes no person made: webhook,
-// job and consumer-driven work (LLD §7.3.1).
-const SystemActor = "commercial-system"
+// job and consumer-driven work (LLD §7.3.1). It is commercial-system's
+// sentinel UUID (CD-19), the one spelling on every Billing event, so Audit
+// Log records it as {service_account, …00c1}.
+const SystemActor = domain.CommercialSystemPrincipal
 
 // EventMeta carries the envelope fields that describe who caused a change
 // (§7.3.1). Empty Actor / IPAddress default to the system values; UserAgent

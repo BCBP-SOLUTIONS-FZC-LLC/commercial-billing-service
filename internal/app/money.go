@@ -83,7 +83,7 @@ func (s *Service) issueAdjustment(ctx context.Context, c Caller, tenantID string
 			return err
 		}
 		return s.Audit.Write(ctx, port.AuditEntry{TenantID: tenantID, EntryType: "billing.adjustment.issued", Action: "adjustment." + r.Kind,
-			ActorID: c.UserID, TargetType: "subscription", TargetID: tenantID, SourceEventType: "AdjustmentIssued", NaturalID: adj.AdjustmentID,
+			ActorID: c.UserID, TargetType: "adjustment", TargetID: adj.AdjustmentID, SourceEventType: "AdjustmentIssued", NaturalID: adj.AdjustmentID,
 			OccurredAt: now, IPAddress: c.ClientIP, UserAgent: c.UserAgent,
 			Metadata: map[string]any{"kind": r.Kind, "amount_minor": r.Amount.AmountMinor, "currency": r.Amount.Currency, "reason": r.Reason}})
 	}); err != nil {
