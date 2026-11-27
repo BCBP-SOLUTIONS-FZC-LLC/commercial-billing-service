@@ -110,9 +110,12 @@ type Config struct {
 	ProrationBelowMinimum         string
 	MinChargeMinor                int64
 	AutoPauseOnOperatorSuspension bool
-	AutoRevertOnEFW               bool
-	ReviewThresholdMinor          int64
-	IdempotencyTTL                time.Duration
+	// OperatorPathLive opens the operator routes outside dev and test once
+	// IAM's operator path is live end to end (BIL-AUTH-6; CD-52 OP-G1..G4).
+	OperatorPathLive     bool
+	AutoRevertOnEFW      bool
+	ReviewThresholdMinor int64
+	IdempotencyTTL       time.Duration
 
 	// Outbound HTTP dependencies.
 	CoreBaseURL         string
@@ -276,6 +279,7 @@ func LoadFrom(getenv func(string) string) (Config, []Problem) {
 	c.ProrationBelowMinimum = l.oneOf("PRORATION_BELOW_MINIMUM", "free_until_renewal", "free_until_renewal", "charge_minimum")
 	c.MinChargeMinor = int64(l.intIn("MIN_CHARGE_MINOR", 200, 0, 1<<31-1))
 	c.AutoPauseOnOperatorSuspension = l.boolean("AUTO_PAUSE_ON_OPERATOR_SUSPENSION", true)
+	c.OperatorPathLive = l.boolean("OPERATOR_PATH_LIVE", false)
 	c.AutoRevertOnEFW = l.boolean("AUTO_REVERT_ON_EFW", false)
 	c.ReviewThresholdMinor = int64(l.intIn("REVIEW_THRESHOLD_MINOR", 100000, 0, 1<<31-1))
 	c.IdempotencyTTL = time.Duration(l.intIn("IDEMPOTENCY_TTL_HOURS", 72, 24, 168)) * time.Hour

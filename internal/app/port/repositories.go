@@ -70,6 +70,13 @@ type IdempotencyRepo interface {
 	Begin(ctx context.Context, r domain.IdempotencyRecord) (existing *domain.IdempotencyRecord, err error)
 	Complete(ctx context.Context, tenantID, scope, key string, statusCode int, body []byte) error
 	Release(ctx context.Context, tenantID, scope, key string) error
+	// Reclaim restarts a record whose lock expired with the same request
+	// hash, or one past expires_at (a new request, BIL-IDEM-3);
+	// reclaimed=false when neither holds (another request owns it).
+	Reclaim(ctx context.Context, r domain.IdempotencyRecord) (reclaimed bool, err error)
+	// Unlock keeps an in_flight record but lets the next request with the
+	// same key run it now (B-I1 after PAYMENT_ACTION_REQUIRED, §5.4.2).
+	Unlock(ctx context.Context, tenantID, scope, key string) error
 }
 
 // LedgerRepo stores provider callbacks before any domain write (BIL-PAY-1).

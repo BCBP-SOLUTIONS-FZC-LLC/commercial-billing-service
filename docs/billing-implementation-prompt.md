@@ -201,7 +201,7 @@ Build:
 - OTel tracing per §11.3, including span links over events;
 - structured logs per §11.4, with no PII and no card data;
 - `PrometheusRule` alerts per §11.5;
-- the Helm chart per §13.1: namespace `billing`; ServiceAccount and label `commercial-billing`; NetworkPolicy and Istio policies per §10.2, including egress to Entitlements on the one `GET`; HPA; PDB; migrate Job; CronJobs; the tenant and operator `HTTPRoute`s, with the operator route listing **B-O1 to B-O17**;
+- the Helm chart per §13.1: namespace `billing`; ServiceAccount and label `commercial-billing`; NetworkPolicy and Istio policies per §10.2, including egress to Entitlements on the one `GET`; HPA; PDB; migrate Job; CronJobs; the tenant and operator `HTTPRoute`s, with the operator route listing **B-O1 to B-O17**; the pod annotation `proxy.istio.io/config` with `forwardClientCertDetails: SANITIZE_SET` so the sidecar forwards `X-Forwarded-Client-Cert` (B-I1's caller identity, `BIL-AUTH-3`, LLD §13.1), asserted by `helm-check`; `OPERATOR_PATH_LIVE` in values (default `false`, `BIL-AUTH-6`);
 - runbooks under `docs/runbooks/` from §20.
 
 **Done when:** `helm-check` passes with the exact names; each alert has a runbook link; each metric is registered and tested.

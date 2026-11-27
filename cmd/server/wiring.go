@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	httpadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/http"
 	pgadapter "github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/postgres"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/provider"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/adapters/provider/manual"
@@ -19,6 +20,7 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events/v2/pkg/events"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-events/v2/pkg/outbox"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/gincommon"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-pgcommon/v2/pkg/pgcommon"
 )
 
@@ -119,3 +121,20 @@ func webhookRoute(cfg config.Config, reg *provider.Registry, sysPool *pgcommon.P
 	}
 	return h.Register
 }
+
+// apiRoutes mounts the tenant, internal and operator routes (§5). The use
+// cases are Phase 6's; until then every route authorizes, validates and
+// answers 501 naming its phase.
+func apiRoutes(cfg config.Config, ginCfg gincommon.Config, appPool *pgcommon.Pool) func(gin.IRouter) {
+	svc := app.Unimplemented{}
+	api := &httpadapter.APIConfig{
+		GinConfig: ginCfg, Tenant: svc, Internal: svc, Operator: svc,
+		Idem: &httpadapter.Idempotency{Repo: pgadapter.NewIdempotencyRepository(appPool), Tx: pgadapter.NewTxRunner(appPool),
+			TTL: cfg.IdempotencyTTL, Lock: idempotencyLock},
+		OperatorPathLive: cfg.OperatorPathLive, DevLike: config.IsDevLike(cfg.AppEnv), BFFCallerPrincipal: cfg.BFFCallerPrincipal,
+	}
+	return api.Register
+}
+
+// idempotencyLock is §9.2's in-flight lock.
+const idempotencyLock = 30 * time.Second
