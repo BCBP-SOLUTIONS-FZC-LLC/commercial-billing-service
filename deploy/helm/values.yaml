@@ -16,7 +16,7 @@ serviceAccount:
   # ServiceAccount commercial-billing (CD-19): its SPIFFE identity is what
   # Core, RP and Entitlements admit (cluster.local/ns/billing/sa/commercial-billing).
   name: commercial-billing
-  annotations: {}    # eks.amazonaws.com/role-arn for SNS / SQS / Glue (IRSA)
+  annotations: {}    # eks.amazonaws.com/role-arn for SNS / SQS / Glue (IRSA); policy in deploy/iam/
 
 service:
   port: 8080

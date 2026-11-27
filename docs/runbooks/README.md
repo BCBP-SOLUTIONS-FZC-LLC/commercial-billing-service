@@ -1,7 +1,7 @@
 # Billing runbooks
 
 Operational runbooks for `commercial-billing` (LLD §20). Every alert in
-`deploy/monitoring/app-alerts.yml` links to one of these pages (its
+`deploy/monitoring/app-alerts.yml` and `schema-registry-alerts.yml` links to one of these pages (its
 `runbook_url`); `make helm-check` fails if a linked page is missing.
 
 | Alert / situation | Severity | Runbook |
@@ -20,6 +20,7 @@ Operational runbooks for `commercial-billing` (LLD §20). Every alert in
 | `BillingSeatProjectionDrift` | SEV-3 | [seat-projection-drift.md](seat-projection-drift.md) |
 | `BillingReversalDecisionNeeded` (log-based) | SEV-2 | [reversal-decision.md](reversal-decision.md) |
 | `BillingAvailabilityBudgetBurnFast` / `…Slow` | SEV-2 / SEV-3 | [slo-burn.md](slo-burn.md) |
+| `BillingSchemaRegistrationFailed`, `…BreakingChangeBlocked`, `…RegistrationSpike`, `…VersionChurn` (`schema-registry-alerts.yml`) | SEV-3 | [schema-registration.md](schema-registration.md) |
 | Provider certification (cmd/certify) | planned | [certification.md](certification.md) |
 | Stripe key / webhook secret rotation | planned | [key-rotation.md](key-rotation.md) |
 | Disaster recovery (RTO 30 min, RPO 5 min) | — | [disaster-recovery.md](disaster-recovery.md) |

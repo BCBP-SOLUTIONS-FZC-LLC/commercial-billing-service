@@ -1,0 +1,88 @@
+# Alerting rules for the Glue Schema Registry pipeline
+# (.github/workflows/schema-registry.yml), registry billing-events.
+#
+# The metrics are not scraped from the service. `schema-gov metrics`
+# (platform-schemagov v0.4) builds them at the end of every registration
+# job and pushes them to the Pushgateway when the environment has the
+# PUSHGATEWAY_URL secret. Without it these rules never fire, and the failed
+# workflow run is the only signal.
+#
+# Labels on every series:
+#   environment  staging | production
+#   registry     billing-events
+#   job_status   success | failure | cancelled
+# glue_schema_version also carries schema (the event type) and status.
+#
+# Not ported from the IAM services: SchemaOrphanCountHigh. Billing runs no
+# prune or orphan scan, so glue_schema_registry_orphaned_schemas is always 0.
+#
+# Deploy as a PrometheusRule (kube-prometheus-stack) or a --rule-files entry
+# in the Prometheus that scrapes the Pushgateway. Checked by promtool in
+# make helm-check.
+groups:
+  - name: commercial_billing.schema_registry
+    rules:
+      # The diff step fails the job on a breaking change; this keeps the trail
+      # for the on-call channel. Fix: publish <Event>V2, dual-publish for one
+      # release, coordinate consumers (CONTRIBUTING.md, "Adding a domain event").
+      - alert: BillingSchemaBreakingChangeBlocked
+        expr: sum by (registry, environment) (glue_schema_registry_breaking_changes_blocked{registry="billing-events"}) > 0
+        labels:
+          severity: sev3
+          team: commercial
+        annotations:
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/schema-registration.md
+          summary: Breaking schema change blocked in {{ $labels.registry }} ({{ $labels.environment }})
+          description: >-
+            {{ $value | humanize }} breaking change(s) were blocked by the registry diff in
+            {{ $labels.registry }} ({{ $labels.environment }}). Nothing was registered. Publish a
+            new event type (…V2), dual-publish it for one release and coordinate the consumers
+            (LLD §7.6).
+
+      # The server refuses to start ahead of the registry (Glue codec,
+      # GetSchemaByDefinition), so a failed registration blocks the next
+      # deploy until it is fixed.
+      - alert: BillingSchemaRegistrationFailed
+        expr: min by (registry, environment) (glue_schema_registry_job_succeeded{registry="billing-events"}) == 0
+        labels:
+          severity: sev3
+          team: commercial
+        annotations:
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/schema-registration.md
+          summary: Schema registration failed for {{ $labels.registry }} ({{ $labels.environment }})
+          description: >-
+            The last schema-registry.yml run for {{ $labels.registry }} ({{ $labels.environment }})
+            did not succeed. A pod built from the current schemas will refuse to start there
+            until registration succeeds; release.yml's schema-verify job will also fail.
+            Check the workflow run, then re-run it (workflow_dispatch).
+
+      # Billing produces six event types; a run that processes more than that
+      # registered something that isn't Billing's (wrong GLUE registry, wrong
+      # staging directory).
+      - alert: BillingSchemaRegistrationSpike
+        expr: sum by (registry, environment) (glue_schema_registry_registrations_total{registry="billing-events"}) > 6
+        labels:
+          severity: sev3
+          team: commercial
+        annotations:
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/schema-registration.md
+          summary: Unexpected schema count in {{ $labels.registry }} ({{ $labels.environment }})
+          description: >-
+            {{ $value | humanize }} schemas were processed in one registration run for
+            {{ $labels.registry }} ({{ $labels.environment }}); Billing produces six. Check
+            make _stage-produced (.tmp/glue) and GLUE_REGISTRY_NAME before the next run.
+
+      # Each new version is consumer migration work; more than three in a week
+      # means the contract is not stable. Needs continuous Pushgateway scraping.
+      - alert: BillingSchemaVersionChurn
+        expr: delta(glue_schema_version{registry="billing-events"}[7d]) > 3
+        labels:
+          severity: sev3
+          team: commercial
+        annotations:
+          runbook_url: https://github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/blob/main/docs/runbooks/schema-registration.md
+          summary: Schema {{ $labels.schema }} gained {{ $value | humanize }} versions in 7 days
+          description: >-
+            {{ $labels.schema }} in {{ $labels.registry }} ({{ $labels.environment }}) received more
+            than three new versions in seven days. Batch the changes, or stabilise the contract
+            with a versioned event type.

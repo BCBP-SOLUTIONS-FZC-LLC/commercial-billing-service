@@ -1,0 +1,58 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PublishBillingEvents",
+      "Effect": "Allow",
+      "Action": [
+        "sns:Publish",
+        "sns:GetTopicAttributes"
+      ],
+      "Resource": [
+        "${billing_events_topic_arn}"
+      ]
+    },
+    {
+      "Sid": "ConsumeTenantAndUsageQueues",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl",
+        "sqs:ChangeMessageVisibility"
+      ],
+      "Resource": [
+        "${tenant_billing_queue_arn}",
+        "${usage_billing_queue_arn}"
+      ]
+    },
+    {
+      "Sid": "ForwardToDeadLetterQueues",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:SendMessage",
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl"
+      ],
+      "Resource": [
+        "${tenant_billing_queue_dlq_arn}",
+        "${usage_billing_queue_dlq_arn}"
+      ]
+    },
+    {
+      "Sid": "GlueSchemaRegistryReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "glue:GetRegistry",
+        "glue:GetSchema",
+        "glue:GetSchemaVersion",
+        "glue:GetSchemaByDefinition"
+      ],
+      "Resource": [
+        "${billing_registry_arn}",
+        "${billing_schema_arn_prefix}/*"
+      ]
+    }
+  ]
+}
