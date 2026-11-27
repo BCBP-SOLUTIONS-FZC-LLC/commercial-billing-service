@@ -5,7 +5,7 @@
 #   → staged as .tmp/glue/<EventType>.json (make _stage-produced: Glue names are the event types)
 #
 # Triggers:
-#   pull_request → main (schema files changed)  validate; diff against staging (read-only)
+#   pull_request, any base (schema files changed)  validate; diff against staging (read-only)
 #   push → main  (schema files changed)          validate → freeze check → diff → register → verify   (staging)
 #   release published                            same, production
 #   workflow_dispatch                            chosen environment
@@ -35,7 +35,8 @@ name: Glue Schema Registry
 
 "on":
   pull_request:
-    branches: [main]
+    # Every PR, whatever its base: the phase branches are stacked
+    # (feat/billing-phase-N → phase N-1), so a main-only filter skipped them.
     paths:
       - 'internal/adapters/eventbus/schemas/*.json'
       - 'api/asyncapi.yaml'

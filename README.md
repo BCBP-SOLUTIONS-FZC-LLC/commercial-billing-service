@@ -894,7 +894,7 @@ Seven workflows in `.github/workflows/`, modelled on the IAM services' pipeline:
 
 | Workflow | Trigger | What |
 |---|---|---|
-| `ci.yml` | PRs and pushes to `main`, dispatch | Orchestrator: `validate-test` ∥ `validate-quality` ∥ `build-image` → `trivy` ∥ `smoke` → `pr-summary` (PRs) / `push` (main) |
+| `ci.yml` | every PR (any base, so stacked phase PRs too), pushes to `main`, dispatch | Orchestrator: `validate-test` ∥ `validate-quality` ∥ `build-image` → `trivy` ∥ `smoke` → `pr-summary` (PRs) / `push` (main) |
 | `validate-test.yml` | called by `ci.yml`, `release.yml` | `make test` (race) → `make cover-all` (every suite, testcontainers) → coverage gate **≥ 96%** over `internal/` + `pkg/` → arch-lint → OpenAPI drift → AsyncAPI ↔ schema sync |
 | `validate-quality.yml` | called by `ci.yml`, `release.yml` | modules, workflow hygiene, fmt, tidy, vet, lint (all build tags), `make guards`, `make metrics-lint`, govulncheck, Dockerfile digest pins, `make helm-check` (Helm v3.21.4) |
 | `release.yml` | `v*` tags, dispatch | validate → build (tag on `main` and = HEAD, CHANGELOG entry, Linux binaries) → **provider-certification gate** (LLD §14.6) → schema verify (production Glue) → image (Trivy, SBOM, SLSA provenance, Cosign) → deploy gate (Helm, deployed digest = published digest, 5xx < 1% for 2 min, else `helm rollback`) → GitHub Release |

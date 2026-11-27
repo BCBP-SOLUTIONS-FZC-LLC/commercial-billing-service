@@ -26,7 +26,8 @@ name: CI
     branches: [main]
     paths-ignore: ['**.md']
   pull_request:
-    branches: [main]
+    # Every PR, whatever its base: the phase branches are stacked
+    # (feat/billing-phase-N → phase N-1), so a main-only filter skipped them.
     paths-ignore: ['**.md']
   workflow_dispatch:
 

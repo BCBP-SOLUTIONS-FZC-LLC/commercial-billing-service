@@ -16,7 +16,8 @@ name: Contract (live consumers)
   schedule:
     - cron: '17 3 * * *'
   pull_request:
-    branches: [main]
+    # Every PR, whatever its base: the phase branches are stacked
+    # (feat/billing-phase-N → phase N-1), so a main-only filter skipped them.
   workflow_dispatch:
 
 permissions:
