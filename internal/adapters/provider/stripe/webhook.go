@@ -182,10 +182,24 @@ var allowedObjectFields = map[string]bool{
 	"payment_status": true, "collection_method": true, "auto_advance": true, "pause_collection": true,
 }
 
+// allowedMetadataKeys are the only metadata keys kept (BIL-PCI-3, §4.2.15):
+// the ids Billing itself sets. Anything else a dashboard user or another
+// integration put in metadata is dropped.
+var allowedMetadataKeys = map[string]bool{
+	"tenant_id": true, "billing_subscription_id": true, "purpose": true, "purchase_id": true, "change_id": true,
+}
+
 func allowList(obj map[string]json.RawMessage) map[string]json.RawMessage {
 	out := make(map[string]json.RawMessage, len(obj))
 	for k, v := range obj {
 		if !allowedObjectFields[k] {
+			continue
+		}
+		if k == "metadata" {
+			if m := metadata(v); len(m) > 0 {
+				b, _ := json.Marshal(m)
+				out[k] = b
+			}
 			continue
 		}
 		if k == "customer" || k == "subscription" || k == "invoice" || k == "charge" || k == "payment_intent" {
@@ -224,10 +238,17 @@ func idOf(raw json.RawMessage) string {
 	return ""
 }
 
+// metadata returns the allow-listed metadata keys (BIL-PCI-3).
 func metadata(raw json.RawMessage) map[string]string {
+	all := map[string]json.RawMessage{}
 	m := map[string]string{}
-	if len(raw) > 0 {
-		_ = json.Unmarshal(raw, &m)
+	if len(raw) == 0 || json.Unmarshal(raw, &all) != nil {
+		return m
+	}
+	for k, v := range all {
+		if s := str(v); s != "" && allowedMetadataKeys[k] {
+			m[k] = s
+		}
 	}
 	return m
 }

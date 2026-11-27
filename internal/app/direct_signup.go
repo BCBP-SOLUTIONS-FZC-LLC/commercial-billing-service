@@ -197,7 +197,8 @@ func (s *Service) authorizeAndCharge(ctx context.Context, c Caller, r AuthorizeC
 			return ChargeResult{}, s.chargeFailed(ctx, prov, tenantID, subID, "", err)
 		}
 		providerSub = res.Ref.ProviderSubscriptionID
-		if err := s.Tx.RunInTenantTx(ctx, tenantID, func(ctx context.Context) error {
+		// A subscription write: under the tenant lock (BIL-CONC-1).
+		if err := s.locked(ctx, tenantID, func(ctx context.Context) error {
 			_, err := s.Subs.Update(ctx, subID, 0, func(x *domain.Subscription) { x.ProviderSubscriptionID = &providerSub })
 			return err
 		}); err != nil {

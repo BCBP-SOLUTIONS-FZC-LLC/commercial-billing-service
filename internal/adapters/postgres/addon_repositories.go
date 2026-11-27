@@ -60,14 +60,20 @@ func scanAddon(row pgcommon.Row) (domain.QuotaAddonPurchase, error) {
 	return p, err
 }
 
-// Insert implements port.AddonRepo.
+// Insert implements port.AddonRepo; uq_qap_key → port.ErrIdempotencyKeyTaken.
 func (r *AddonRepository) Insert(ctx context.Context, p domain.QuotaAddonPurchase) error {
-	return inTx(ctx, r.pool, func(q querier) error {
+	err := inTx(ctx, r.pool, func(q querier) error {
 		_, err := q.Exec(ctx, `INSERT INTO quota_addon_purchases (purchase_id, tenant_id, pack_code, pack_quantity, tokens_total,
 			amount_minor, currency, status, requested_by, idempotency_key) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9::uuid, $10)`,
 			p.PurchaseID, p.TenantID, p.PackCode, p.PackQuantity, p.TokensTotal, p.AmountMinor, p.Currency, p.Status, p.RequestedBy, p.IdempotencyKey)
 		return err
 	})
+	return keyTaken(err, "uq_qap_key")
+}
+
+// ByIdempotencyKey implements port.AddonRepo (locked).
+func (r *AddonRepository) ByIdempotencyKey(ctx context.Context, tenantID, key string) (domain.QuotaAddonPurchase, bool, error) {
+	return r.one(ctx, `WHERE tenant_id = $1::uuid AND idempotency_key = $2 FOR UPDATE`, tenantID, key)
 }
 
 // Get implements port.AddonRepo (locked).
@@ -128,4 +134,13 @@ func (r *AddonRepository) ConfirmedTokensSince(ctx context.Context, tenantID, pa
 			WHERE tenant_id = $1::uuid AND pack_code = $2 AND status = 'confirmed' AND confirmed_at >= $3`, tenantID, packCode, since).Scan(&n)
 	})
 	return n, err
+}
+
+// keyTaken maps a unique violation on a (tenant_id, idempotency_key)
+// constraint to port.ErrIdempotencyKeyTaken (§9.2: one row per key).
+func keyTaken(err error, constraint string) error {
+	if pgcommon.IsUniqueViolation(err) && pgcommon.ConstraintName(err) == constraint {
+		return port.ErrIdempotencyKeyTaken
+	}
+	return err
 }

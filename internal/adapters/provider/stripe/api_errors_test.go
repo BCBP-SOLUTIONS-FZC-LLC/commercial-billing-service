@@ -168,6 +168,7 @@ func TestStepFailuresMapToPortErrors(t *testing.T) {
 		{"ChargeOneOff/item", func(f *fakeStripe) {
 			f.on("POST", "/v1/invoices", 200, invoice("in_1", "draft", nil))
 			f.on("POST", "/v1/invoiceitems", 500, unavailable)
+			f.on("DELETE", "/v1/invoices/in_1", 200, map[string]any{"id": "in_1", "object": "invoice", "deleted": true})
 		}, func(a *Adapter) error {
 			_, err := a.ChargeOneOff(ctx, port.OneOffCharge{Customer: cus, Amount: usd5}, "k")
 			return err

@@ -549,6 +549,12 @@ func (p *provider) CreateHostedCheckout(_ context.Context, in port.CheckoutInput
 		p.call("CreateHostedCheckout", in.PriceRef+" "+key)
 }
 
+// ExpireCheckout: f scripts "Provider.ExpireCheckout" (for example
+// port.ErrCheckoutCompleted).
+func (p *provider) ExpireCheckout(_ context.Context, id, key string) error {
+	return p.call("ExpireCheckout", id+" "+key)
+}
+
 func (p *provider) AttachDefaultPaymentMethod(_ context.Context, _ port.CustomerRef, pm, key string) error {
 	return p.call("AttachDefaultPaymentMethod", pm+" "+key)
 }

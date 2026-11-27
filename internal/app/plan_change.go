@@ -226,15 +226,11 @@ func (s *Service) upgrade(ctx context.Context, c Caller, sub domain.Subscription
 	var declined port.ErrDeclined
 	switch {
 	case errors.As(err, &declined) || err == nil && res.Outcome.Status == port.PaymentDeclined:
-		_ = s.locked(ctx, sub.TenantID, func(ctx context.Context) error {
-			req.Status = domain.ChangeFailed
-			return s.Changes.Update(ctx, req)
-		})
 		code := declined.Code
 		if code == "" {
 			code = res.Outcome.DeclineCode
 		}
-		return out, domain.NewError(domain.ErrPaymentDeclined, "payment declined; the plan is unchanged").With("decline_reason", declineReason(code))
+		return s.upgradeDeclined(ctx, c, sub, req, out, res.Invoice.ProviderInvoiceID, deref(tp.ProviderPriceID), code)
 	case errors.As(err, &action) || err == nil && res.Outcome.Status == port.PaymentRequiresAction:
 		secret := action.ClientSecret
 		if secret == "" {
@@ -254,10 +250,9 @@ func (s *Service) upgrade(ctx context.Context, c Caller, sub domain.Subscription
 		out.Status, out.ClientAction = string(domain.ChangePendingPayment), ca
 		return out, nil
 	case err != nil:
-		_ = s.locked(ctx, sub.TenantID, func(ctx context.Context) error {
-			req.Status = domain.ChangeFailed
-			return s.Changes.Update(ctx, req)
-		})
+		// The outcome is unknown (the provider may have invoiced and charged):
+		// the request stays pending_payment; the callback or purchase-expiry
+		// (which looks the invoice up) settles it.
 		return out, providerErr(err)
 	}
 	if res.Invoice.ProviderInvoiceID != "" {
@@ -277,6 +272,106 @@ func (s *Service) upgrade(ctx context.Context, c Caller, sub domain.Subscription
 	})
 	out.Status, out.EffectiveAt = string(req.Status), req.EffectiveAt
 	return out, err
+}
+
+// upgradeDeclined is the declined upgrade (§8.4.1: request failed, plan
+// unchanged): the open proration invoice is voided outside the transaction
+// first, so a later collection cannot charge for a failed upgrade. If the
+// void fails the request stays pending_payment and purchase-expiry voids
+// it; if the invoice turns out paid the upgrade is applied.
+func (s *Service) upgradeDeclined(ctx context.Context, c Caller, sub domain.Subscription, req domain.PlanChangeRequest, out PlanChangeResult,
+	invoiceID, targetPriceRef, code string) (PlanChangeResult, error) {
+	if req.CreatedAt.IsZero() { // the intent just committed
+		req.CreatedAt = s.now()
+	}
+	inv, verr := s.closeInvoice(ctx, sub.Provider, nonEmpty(invoiceID), upgradeTarget(deref(sub.ProviderSubscriptionID), req, targetPriceRef),
+		"planchg:"+req.ChangeID+":void")
+	applied := false
+	_ = s.locked(ctx, sub.TenantID, func(ctx context.Context) error {
+		cur, found, err := s.Changes.Open(ctx, sub.TenantID)
+		if err != nil || !found || cur.ChangeID != req.ChangeID || cur.Status != domain.ChangePendingPayment {
+			return err
+		}
+		if err := s.recheckInvoice(ctx, sub.TenantID, req.ChangeID, &inv); err != nil {
+			return err
+		}
+		if inv.ID != "" {
+			cur.ProviderInvoiceID = &inv.ID
+		}
+		switch {
+		case inv.Paid:
+			if err := s.settleUpgrade(ctx, &cur, actorOf(c), "api:B-P4", nil, metaFor(c)); err != nil {
+				return err
+			}
+			req, applied = cur, true
+			return nil
+		case verr == nil:
+			cur.Status, cur.ClientAction = domain.ChangeFailed, nil
+		}
+		return s.Changes.Update(ctx, cur)
+	})
+	if applied {
+		out.Status, out.EffectiveAt = string(req.Status), req.EffectiveAt
+		return out, nil
+	}
+	return out, domain.NewError(domain.ErrPaymentDeclined, "payment declined; the plan is unchanged").With("decline_reason", declineReason(code))
+}
+
+// settleUpgrade applies a pending upgrade whose proration invoice is paid,
+// at the target plan's price now. Under the lock.
+func (s *Service) settleUpgrade(ctx context.Context, req *domain.PlanChangeRequest, actor, cause string, evRef *string, m port.EventMeta) error {
+	tp, err := s.upgradePrice(ctx, *req)
+	if err != nil {
+		return err
+	}
+	return s.applyPlanChange(ctx, req, tp, actor, cause, evRef, m)
+}
+
+// upgradePrice is the target plan's price an upgrade moves to now (the
+// subscription's interval and the seat item's currency). In a transaction.
+func (s *Service) upgradePrice(ctx context.Context, req domain.PlanChangeRequest) (domain.PlanPrice, error) {
+	sub, err := s.Subs.Get(ctx, req.BillingSubscriptionID)
+	if err != nil {
+		return domain.PlanPrice{}, err
+	}
+	item, err := s.Subs.Item(ctx, sub.BillingSubscriptionID)
+	if err != nil {
+		return domain.PlanPrice{}, err
+	}
+	cp, err := s.Prices.Get(ctx, item.PriceID)
+	if err != nil {
+		return domain.PlanPrice{}, err
+	}
+	tp, ok, err := s.Prices.PriceAt(ctx, req.ToPlan, sub.Interval, cp.Currency, sub.Provider, s.now())
+	if err != nil || !ok {
+		return domain.PlanPrice{}, errors.Join(err, domain.NewError(domain.ErrPriceNotAvailable, "target price missing"))
+	}
+	return tp, nil
+}
+
+// upgradeByProrationInvoice is the tenant's pending upgrade without an
+// invoice id that a proration invoice on its subscription pays (same
+// amount, a charged line at the target price); the invoice id is then
+// recorded on it. An invoice another purchase or plan change recorded is
+// never matched (BIL-PAY-6).
+func (s *Service) upgradeByProrationInvoice(ctx context.Context, tenantID string, cur domain.ProviderObjectState) (domain.PlanChangeRequest, bool, error) {
+	req, found, err := s.Changes.Open(ctx, tenantID)
+	if err != nil || !found || req.Status != domain.ChangePendingPayment || req.ProviderInvoiceID != nil || req.AmountMinor == nil {
+		return domain.PlanChangeRequest{}, false, err
+	}
+	sub, err := s.Subs.Get(ctx, req.BillingSubscriptionID)
+	if err != nil || !isProrationInvoice(cur, sub.ProviderSubscriptionID) || !invoiceAmountIs(cur, *req.AmountMinor, deref(req.Currency)) {
+		return domain.PlanChangeRequest{}, false, err
+	}
+	tp, err := s.upgradePrice(ctx, req)
+	if err != nil || !chargedLinesMatch(cur, 0, deref(tp.ProviderPriceID)) {
+		return domain.PlanChangeRequest{}, false, err
+	}
+	if claimed, err := s.invoiceClaimed(ctx, tenantID, cur.Ref.ID, req.ChangeID); err != nil || claimed {
+		return domain.PlanChangeRequest{}, false, err
+	}
+	req.ProviderInvoiceID = &cur.Ref.ID
+	return req, true, nil
 }
 
 // applyPlanChange moves the subscription to the target plan and price,
@@ -425,6 +520,13 @@ func (h UpgradeInvoicePaid) Handle(ctx context.Context, tenantID string, ev doma
 		return "", err
 	}
 	if !found {
+		// Billing did not record the invoice id (a provider error after the
+		// change): match the pending upgrade on the proration invoice.
+		if req, found, err = s.upgradeByProrationInvoice(ctx, tenantID, cur); err != nil {
+			return "", err
+		}
+	}
+	if !found {
 		if h.Next == nil {
 			return "", &port.IgnoredEvent{Reason: "no_handler"}
 		}
@@ -433,24 +535,10 @@ func (h UpgradeInvoicePaid) Handle(ctx context.Context, tenantID string, ev doma
 	if req.Status != domain.ChangePendingPayment {
 		return "", &port.IgnoredEvent{Reason: "change_not_pending"}
 	}
-	sub, err := s.Subs.Get(ctx, req.BillingSubscriptionID)
-	if err != nil {
-		return "", err
+	if req.AmountMinor != nil && !invoicePaysFor(cur, domain.Money{AmountMinor: *req.AmountMinor, Currency: deref(req.Currency)}) {
+		return "", s.parkMismatchedPayment(ctx, tenantID, port.PurchaseKindPlan, req.ChangeID, ev, cur) // BIL-PAY-7
 	}
-	item, err := s.Subs.Item(ctx, sub.BillingSubscriptionID)
-	if err != nil {
-		return "", err
-	}
-	cp, err := s.Prices.Get(ctx, item.PriceID)
-	if err != nil {
-		return "", err
-	}
-	tp, ok, err := s.Prices.PriceAt(ctx, req.ToPlan, sub.Interval, cp.Currency, sub.Provider, s.now())
-	if err != nil || !ok {
-		return "", errors.Join(err, domain.NewError(domain.ErrPriceNotAvailable, "target price missing"))
-	}
-	if err := s.applyPlanChange(ctx, &req, tp, domain.CommercialSystemPrincipal, "webhook:"+ev.EventType, eventRef(ev),
-		webhookMeta()); err != nil {
+	if err := s.settleUpgrade(ctx, &req, domain.CommercialSystemPrincipal, "webhook:"+ev.EventType, eventRef(ev), webhookMeta()); err != nil {
 		return "", err
 	}
 	s.metrics().PurchaseToEvent(port.PurchaseKindPlan, s.now().Sub(ev.ProviderCreatedAt))

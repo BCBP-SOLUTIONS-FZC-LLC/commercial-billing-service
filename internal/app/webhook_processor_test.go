@@ -154,6 +154,19 @@ func TestHandlerIgnoredAndRetry(t *testing.T) {
 	}
 }
 
+// A callback that needs an operator decision is parked: failed with no
+// next attempt (BIL-OPS-6), never retried into a domain write.
+func TestBIL_OPS_6_ParkedCallbackIsNotRetried(t *testing.T) {
+	park := handlerFunc(func(context.Context, string, domain.PaymentEvent, domain.ProviderObjectState) (string, error) {
+		return "", &port.ParkedEvent{Reason: "checkout_superseded"}
+	})
+	p, l, _ := setup([]domain.LedgerEntry{row("evt_p", "invoice_paid", strp("t1"), `{}`, 1)}, park, &fakeProvider{})
+	_, _ = p.ProcessBatch(context.Background())
+	if got := l.done["evt_p"]; got.status != domain.LedgerFailed || got.outcome != "failed:checkout_superseded" || got.next != nil {
+		t.Fatalf("parked: %+v", got)
+	}
+}
+
 func TestBackoff(t *testing.T) {
 	for attempt, want := range map[int]time.Duration{0: time.Second, 1: time.Second, 2: 2 * time.Second, 3: 4 * time.Second, 9: 256 * time.Second, 10: 5 * time.Minute, 30: 5 * time.Minute} {
 		if got := Backoff(attempt); got != want {

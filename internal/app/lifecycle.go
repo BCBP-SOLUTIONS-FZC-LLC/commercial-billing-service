@@ -310,6 +310,15 @@ func (h CycleInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain
 	start, hasPeriod := cur.Fields["line_period_start"].(time.Time)
 	end, _ := cur.Fields["line_period_end"].(time.Time)
 	now := s.now()
+	if sub.Status == domain.StatusCancelled && !firstInvoiceOfSubscription(cur) {
+		// §8.9: a cancelled subscription is reactivated only by the first
+		// invoice of the new provider subscription B-P14 creates. A late
+		// payment of an old open invoice of the deleted provider subscription
+		// (dunning exhausted) leaves no live provider subscription: the
+		// invoice is mirrored above (committed), no transition, no
+		// TenantReactivated.
+		return "applied:invoice_mirrored", nil
+	}
 	switch sub.Status {
 	case domain.StatusPastDue, domain.StatusCancelled:
 		from := sub.Status
@@ -364,6 +373,15 @@ func (h CycleInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain
 	case domain.StatusIncomplete, domain.StatusEnded:
 	}
 	return "", &port.IgnoredEvent{Reason: "subscription_" + string(sub.Status)}
+}
+
+// firstInvoiceOfSubscription reports whether the re-read invoice is a
+// provider subscription's first invoice (billing_reason
+// subscription_create), the one a B-P14 reactivation checkout produces.
+func firstInvoiceOfSubscription(cur domain.ProviderObjectState) bool {
+	reason, _ := cur.Fields["billing_reason"].(string)
+	kind, _ := cur.Fields["kind"].(string)
+	return reason == "subscription_create" || kind == string(domain.InvoiceSubscriptionCreate)
 }
 
 // ── B-P14 (§8.9) ───────────────────────────────────────────────────────────

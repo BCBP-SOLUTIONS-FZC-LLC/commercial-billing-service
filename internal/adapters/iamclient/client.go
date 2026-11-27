@@ -68,6 +68,12 @@ func coreError(route string, r httpx.Response, err error) error {
 		return e
 	case r.Status == http.StatusNotFound:
 		return domain.NewError(domain.ErrTenantNotKnownToIAM, "the tenant is not known to IAM")
+	case route == "I-18" && r.Status == http.StatusBadRequest:
+		// 400 invalid_target_plan: plans are enums on both sides, so this is
+		// a Billing bug → 500 INTERNAL (§5.4.1 B-P4 downgrade, §18.2).
+		e := domain.NewError(domain.ErrInternal, fmt.Sprintf("I-18 answered 400 %s", r.ErrorCode))
+		e.Cause = httpx.ErrUnexpected
+		return e
 	case !r.OK():
 		// 400 / 401 / 403: a Billing bug or an admission problem; never a
 		// silent allow.

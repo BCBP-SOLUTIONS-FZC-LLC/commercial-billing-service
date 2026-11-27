@@ -41,6 +41,11 @@ type SystemReader interface {
 // database errors (BIL-OPS-11).
 var ErrAccountExists = errors.New("billing account already exists")
 
+// ErrIdempotencyKeyTaken is a unique violation on a row's (tenant_id,
+// idempotency_key) (uq_qap_key, uq_adj_key, uq_ref_key): another row holds
+// the client key (§9.2 "one row per key").
+var ErrIdempotencyKeyTaken = errors.New("a row already holds this idempotency key")
+
 type AccountRepo interface {
 	// Create inserts the account; ErrAccountExists when one exists.
 	Create(ctx context.Context, a domain.BillingAccount) error
@@ -161,7 +166,10 @@ type InvoiceRepo interface {
 type MoneyRepo interface {
 	InsertAdjustment(ctx context.Context, a domain.Adjustment) error
 	SetAdjustmentRef(ctx context.Context, adjustmentID, providerRef string) error
+	// AdjustmentByKey / RefundByKey are the rows a B-O2 / B-O3 key created (locked).
+	AdjustmentByKey(ctx context.Context, tenantID, key string) (domain.Adjustment, bool, error)
 	InsertRefund(ctx context.Context, r domain.Refund) error
+	RefundByKey(ctx context.Context, tenantID, key string) (domain.Refund, bool, error)
 	RefundByProvider(ctx context.Context, providerRefundID string) (domain.Refund, bool, error)
 	RefundsForInvoice(ctx context.Context, invoiceID string) ([]domain.Refund, error)
 	UpdateRefund(ctx context.Context, r domain.Refund) error
@@ -245,6 +253,8 @@ type AddonRepo interface {
 	Insert(ctx context.Context, p domain.QuotaAddonPurchase) error
 	Get(ctx context.Context, purchaseID string) (domain.QuotaAddonPurchase, bool, error)
 	ByProviderInvoice(ctx context.Context, tenantID, providerInvoiceID string) (domain.QuotaAddonPurchase, bool, error)
+	// ByIdempotencyKey is the purchase a B-P20 key created (locked).
+	ByIdempotencyKey(ctx context.Context, tenantID, key string) (domain.QuotaAddonPurchase, bool, error)
 	List(ctx context.Context, tenantID, afterID string, limit int) ([]domain.QuotaAddonPurchase, error)
 	Update(ctx context.Context, p domain.QuotaAddonPurchase) error
 	ConfirmedTokensSince(ctx context.Context, tenantID, packCode string, since time.Time) (int64, error)

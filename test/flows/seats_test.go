@@ -73,7 +73,8 @@ func TestSeatPurchaseAsync(t *testing.T) {
 	h := app.FirstInvoicePaid{S: e.svc, Next: app.UpgradeInvoicePaid{S: e.svc, Next: app.SeatInvoicePaid{S: e.svc, Next: app.DowngradeOnCycle{S: e.svc}}}}
 	paid := domain.PaymentEvent{Provider: "stripe", ProviderEventID: "evt_sp", EventType: "invoice.paid", Kind: domain.KindInvoicePaid}
 	cur := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: "in_seatpur:" + res.PurchaseID}, Status: "paid",
-		Fields: map[string]any{"subscription": "sub_" + sub, "billing_reason": "subscription_update"}}
+		Fields: map[string]any{"subscription": "sub_" + sub, "billing_reason": "subscription_update", "currency": "USD",
+			"amount_paid_minor": scalar[int64](t, `SELECT amount_minor FROM seat_purchases WHERE purchase_id = $1`, res.PurchaseID)}}
 	if out, err := e.handle(t, tenant, h, paid, cur); err != nil || out != "applied:seat_purchase" {
 		t.Fatalf("paid: %s %v", out, err)
 	}

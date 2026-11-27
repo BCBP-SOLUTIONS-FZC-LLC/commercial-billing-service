@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 )
@@ -103,15 +105,18 @@ func (s *Service) startCheckout(ctx context.Context, c Caller, tenantID string, 
 	// BIL-CONC-2; billing_accounts needs the customer id, chk_ba_customer).
 	var acct domain.BillingAccount
 	var hasAccount bool
+	var prior domain.CheckoutSession
+	var hasPrior bool
 	if err := s.Tx.RunInTenantTx(ctx, tenantID, func(ctx context.Context) error {
 		a, err := s.Accounts.Get(ctx, tenantID)
-		if err == nil {
-			acct, hasAccount = a, true
-			return nil
-		}
 		if domain.HasCode(err, domain.ErrSubscriptionNotFound) {
 			return nil
 		}
+		if err != nil {
+			return err
+		}
+		acct, hasAccount = a, true
+		prior, hasPrior, err = s.Checkouts.Open(ctx, tenantID, domain.PurposeConversion)
 		return err
 	}); err != nil {
 		return CheckoutResult{}, err
@@ -142,14 +147,57 @@ func (s *Service) startCheckout(ctx context.Context, c Caller, tenantID string, 
 	}
 
 	// Transaction 1: account, incomplete subscription, seat item, session.
-	var (
-		result  CheckoutResult
-		reuse   bool
-		session domain.CheckoutSession
-		price   domain.PlanPrice
-	)
 	now := s.now()
-	err = s.locked(ctx, tenantID, func(ctx context.Context) error {
+	for attempt := 1; ; attempt++ {
+		// A replaced session is expired at the provider first, outside any
+		// transaction (BIL-CONC-2), so it can no longer be paid (§8.1.1).
+		expired, err := s.expireSuperseded(ctx, prov, prior, hasPrior, plan, interval, r.LicensedSeats)
+		if err != nil {
+			return CheckoutResult{}, err
+		}
+		out, err := s.checkoutTx1(ctx, c, tenantID, r, now, expired, acct, hasAccount, subID)
+		switch {
+		case errors.Is(err, errCheckoutRace) && attempt == 1:
+			// Another B-P2 opened a session since the first read: expire
+			// that one too, then try once more.
+			prior, hasPrior = out.blocking, true
+			continue
+		case errors.Is(err, errCheckoutRace):
+			return CheckoutResult{}, domain.NewError(domain.ErrConcurrentUpdate, "another checkout was started concurrently; retry")
+		case err != nil:
+			return CheckoutResult{}, err
+		}
+		return s.finishCheckout(ctx, prov, tenantID, out, r.LicensedSeats)
+	}
+}
+
+// errCheckoutRace is transaction 1 finding an open session, created since
+// B-P2's first read, that the provider may still accept.
+var errCheckoutRace = errors.New("an open checkout appeared concurrently")
+
+// checkoutTx1Out is what B-P2's transaction 1 decided.
+type checkoutTx1Out struct {
+	acct     domain.BillingAccount
+	subID    string
+	session  domain.CheckoutSession
+	price    domain.PlanPrice
+	blocking domain.CheckoutSession // with errCheckoutRace
+}
+
+// checkoutTx1 is B-P2's transaction 1 under the tenant lock: account,
+// incomplete subscription, seat item, session; or the reused open session.
+// expired names the session expireSuperseded expired at the provider; any
+// other open session the provider may still accept is returned as blocking
+// with errCheckoutRace, and nothing is written.
+func (s *Service) checkoutTx1(ctx context.Context, c Caller, tenantID string, r CheckoutRequest, now time.Time, expired string,
+	acct domain.BillingAccount, hasAccount bool, subID string) (checkoutTx1Out, error) {
+	plan, interval := domain.PlanCode(r.Plan), domain.BillingInterval(r.Interval)
+	var (
+		session  domain.CheckoutSession
+		price    domain.PlanPrice
+		blocking domain.CheckoutSession
+	)
+	err := s.locked(ctx, tenantID, func(ctx context.Context) error {
 		if !hasAccount {
 			// Re-read under the tenant lock: a concurrent first checkout may
 			// have created the account since the read above. Checking here,
@@ -190,10 +238,17 @@ func (s *Service) startCheckout(ctx context.Context, c Caller, tenantID string, 
 			return err
 		}
 		if hasOpen && open.SameRequest(plan, interval, r.LicensedSeats) && open.ExpiresAt.After(now) && open.BillingSubscriptionID != nil {
-			session, reuse, subID = open, true, *open.BillingSubscriptionID
+			session, subID = open, *open.BillingSubscriptionID
 			return nil
 		}
 		if hasOpen {
+			// Re-checked under the lock: a session the provider may still
+			// accept (another B-P2 created it since the first read) is not
+			// superseded before it is expired at the provider.
+			if open.SessionID != expired && open.ExpiresAt.After(now) && !strings.HasPrefix(open.ProviderSessionID, domain.PendingSessionPrefix) {
+				blocking = open
+				return errCheckoutRace
+			}
 			if err := s.Checkouts.SetStatus(ctx, open.SessionID, domain.SessionExpired); err != nil {
 				return err
 			}
@@ -215,25 +270,74 @@ func (s *Service) startCheckout(ctx context.Context, c Caller, tenantID string, 
 			ExpiresAt: now.Add(s.Settings.CheckoutTTL)}
 		return s.Checkouts.Insert(ctx, session)
 	})
-	if err != nil {
-		return result, err
-	}
-	total := MoneyFrom(domain.Money{AmountMinor: price.UnitAmountMinor * int64(r.LicensedSeats), Currency: price.Currency})
-	if reuse {
-		subID = *session.BillingSubscriptionID
-	}
+	return checkoutTx1Out{acct: acct, subID: subID, session: session, price: price, blocking: blocking}, err
+}
+
+// finishCheckout creates the hosted session outside any transaction and
+// records it in transaction 2.
+func (s *Service) finishCheckout(ctx context.Context, prov port.PaymentProvider, tenantID string, out checkoutTx1Out, seats int) (CheckoutResult, error) {
+	var result CheckoutResult
+	acct, session, subID, price := out.acct, out.session, out.subID, out.price
+	total := MoneyFrom(domain.Money{AmountMinor: price.UnitAmountMinor * int64(seats), Currency: price.Currency})
 	// Outside: the hosted session (idempotent on the subscription id).
-	hosted, err := s.createConversionCheckout(ctx, prov, acct, session, subID, price, r.LicensedSeats)
+	hosted, err := s.createConversionCheckout(ctx, prov, acct, session, subID, price, seats)
 	if err != nil {
 		return result, err
 	}
-	if err := s.Tx.RunInTenantTx(ctx, tenantID, func(ctx context.Context) error {
+	// Transaction 2 records the provider session, re-reading ours under the
+	// lock: a concurrent B-P2 may have superseded it while it was created.
+	// It is then expired at the provider instead of being handed out.
+	status := ""
+	if err := s.locked(ctx, tenantID, func(ctx context.Context) error {
+		cur, found, err := s.Checkouts.GetSession(ctx, session.SessionID)
+		if err != nil || !found {
+			return err
+		}
+		status = cur.Status
 		return s.Checkouts.SetProviderSession(ctx, session.SessionID, hosted.ProviderSessionID, hosted.ExpiresAt)
 	}); err != nil {
 		return result, err
 	}
+	switch status {
+	case domain.SessionOpen:
+	case domain.SessionCompleted: // a reused session the customer has just paid
+		return result, domain.NewError(domain.ErrSubscriptionAlreadyExists, "the checkout was completed; its payment is being confirmed")
+	default: // replaced (or removed) meanwhile: never hand it out
+		if err := prov.ExpireCheckout(ctx, hosted.ProviderSessionID, "bsub:"+subID+":expire"); err != nil && !errors.Is(err, port.ErrCheckoutCompleted) {
+			return result, providerErr(err)
+		}
+		return result, domain.NewError(domain.ErrConcurrentUpdate, "the checkout was replaced concurrently; retry")
+	}
 	return CheckoutResult{CheckoutSessionID: session.SessionID, CheckoutURL: hosted.URL, ExpiresAt: hosted.ExpiresAt,
 		BillingSubscriptionID: subID, Price: total}, nil
+}
+
+// expireSuperseded expires, at the provider, the open conversion session a
+// B-P2 with other content replaces, and returns its session id ("" when
+// nothing was expired). A session still being created ('pending:'
+// placeholder) has no provider id yet; its own B-P2 expires it when it
+// finds it superseded. A session the customer already completed is being
+// paid: 409 SUBSCRIPTION_ALREADY_EXISTS, nothing is replaced.
+func (s *Service) expireSuperseded(ctx context.Context, prov port.PaymentProvider, open domain.CheckoutSession, hasOpen bool,
+	plan domain.PlanCode, interval domain.BillingInterval, seats int) (string, error) {
+	switch {
+	case !hasOpen, strings.HasPrefix(open.ProviderSessionID, domain.PendingSessionPrefix), !open.ExpiresAt.After(s.now()):
+		return "", nil
+	case open.SameRequest(plan, interval, seats) && open.BillingSubscriptionID != nil:
+		return "", nil // reused, not replaced
+	}
+	key := "checkout:" + open.SessionID + ":expire"
+	if open.BillingSubscriptionID != nil {
+		key = "bsub:" + *open.BillingSubscriptionID + ":expire"
+	}
+	err := prov.ExpireCheckout(ctx, open.ProviderSessionID, key)
+	switch {
+	case errors.Is(err, port.ErrCheckoutCompleted):
+		return "", domain.NewError(domain.ErrSubscriptionAlreadyExists, "the earlier checkout was completed; its payment is being confirmed")
+	case err != nil:
+		return "", providerErr(err)
+	}
+	return open.SessionID, nil
 }
 
 // createConversionCheckout creates (or, for the same subscription, returns
@@ -299,14 +403,31 @@ func (h CheckoutCompleted) Handle(ctx context.Context, tenantID string, ev domai
 	if session.Status == domain.SessionCompleted {
 		return "", &port.IgnoredEvent{Reason: "already_completed"}
 	}
+	providerSub, _ := cur.Fields["subscription"].(string)
+	if session.Status == domain.SessionExpired && session.BillingSubscriptionID != nil && providerSub != "" {
+		// A session Billing superseded or expired was paid anyway. Parked for
+		// an operator (§8.1.1) only when its subscription is ended or linked
+		// to another provider subscription; a completion of the provider
+		// subscription already linked (invoice.paid was handled first and
+		// confirmed the payment) is a no-op, never a refund.
+		sub, err := s.Subs.Get(ctx, *session.BillingSubscriptionID)
+		if err != nil {
+			return "", err
+		}
+		switch {
+		case sub.ProviderSubscriptionID != nil && *sub.ProviderSubscriptionID == providerSub && sub.Status != domain.StatusEnded:
+			return "", &port.IgnoredEvent{Reason: "already_linked"}
+		case sub.Status == domain.StatusEnded, sub.ProviderSubscriptionID != nil:
+			return "", s.paymentNeedsDecision(ctx, tenantID, ev, *session.BillingSubscriptionID, "checkout_superseded")
+		}
+	}
 	if err := s.Checkouts.SetStatus(ctx, session.SessionID, domain.SessionCompleted); err != nil {
 		return "", err
 	}
-	providerSub, _ := cur.Fields["subscription"].(string)
 	if session.BillingSubscriptionID == nil || providerSub == "" {
 		return "applied:session_completed", nil
 	}
-	_, err = s.Subs.Update(ctx, *session.BillingSubscriptionID, 0, func(x *domain.Subscription) {
+	linked, err := s.Subs.Update(ctx, *session.BillingSubscriptionID, 0, func(x *domain.Subscription) {
 		// A reactivation replaces the deleted provider subscription (§8.9).
 		if x.ProviderSubscriptionID == nil || session.Purpose == domain.PurposeReactivation {
 			x.ProviderSubscriptionID = &providerSub
@@ -314,6 +435,18 @@ func (h CheckoutCompleted) Handle(ctx context.Context, tenantID string, ev domai
 	})
 	if err != nil {
 		return "", err
+	}
+	// The re-read session carries its first invoice (BIL-PAY-4). If that is
+	// already paid, the payment is confirmed here, whatever the order and
+	// fate of the invoice.paid callback (§9.4).
+	if paid, _ := cur.Fields["invoice_status"].(string); paid == "paid" && session.Purpose == domain.PurposeConversion &&
+		linked.Status == domain.StatusIncomplete && linked.Origin == domain.OriginTrialConversion &&
+		linked.ProviderSubscriptionID != nil && *linked.ProviderSubscriptionID == providerSub {
+		if err := s.confirmConversionPayment(ctx, linked, ev, cur.Fields["invoice_line_period_start"], cur.Fields["invoice_line_period_end"],
+			cur.Fields["invoice_line_quantity"]); err != nil {
+			return "", err
+		}
+		return "applied:conversion_payment", nil
 	}
 	return "applied:subscription_linked", nil
 }
@@ -377,15 +510,33 @@ func (h FirstInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain
 	if err != nil {
 		return "", err
 	}
-	if !found || sub.TenantID != tenantID {
+	if found && sub.TenantID != tenantID {
 		return "", &port.IgnoredEvent{Reason: "unknown_subscription"}
+	}
+	if !found {
+		// Out of order (§9.4): invoice.paid processed before
+		// checkout.session.completed linked the provider subscription.
+		if sub, err = h.resolveUnlinked(ctx, tenantID, ev, cur, providerSub); err != nil {
+			return "", err
+		}
 	}
 	if sub.Status != domain.StatusIncomplete || sub.Origin != domain.OriginTrialConversion {
 		return h.next(ctx, tenantID, ev, cur)
 	}
+	if err := s.confirmConversionPayment(ctx, sub, ev, cur.Fields["line_period_start"], cur.Fields["line_period_end"], cur.Fields["line_quantity"]); err != nil {
+		return "", err
+	}
+	return "applied:conversion_payment", nil
+}
+
+// confirmConversionPayment is §8.1.1 step 4 for an incomplete trial
+// conversion whose first invoice the provider reports paid (re-read,
+// BIL-SAGA-1): active, payment_confirmed_at, the provider's period, the
+// purchased quantity, history, saga in rp_convert_pending. No billing.events.
+func (s *Service) confirmConversionPayment(ctx context.Context, sub domain.Subscription, ev domain.PaymentEvent, periodStart, periodEnd, quantity any) error {
 	now := s.now()
-	start, _ := cur.Fields["line_period_start"].(time.Time)
-	end, _ := cur.Fields["line_period_end"].(time.Time)
+	start, _ := periodStart.(time.Time)
+	end, _ := periodEnd.(time.Time)
 	from := sub.Status
 	active, err := s.Subs.Transition(ctx, sub.BillingSubscriptionID, 0, domain.StatusActive, func(x *domain.Subscription) {
 		x.PaymentConfirmedAt = &now
@@ -394,26 +545,105 @@ func (h FirstInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain
 		}
 	})
 	if err != nil {
-		return "", err
+		return err
 	}
 	item, err := s.Subs.Item(ctx, sub.BillingSubscriptionID)
 	if err != nil {
-		return "", err
+		return err
 	}
-	if q, ok := intField(cur.Fields["line_quantity"]); ok && q > 0 && q != item.Quantity { // the purchased quantity wins
+	if q, ok := intField(quantity); ok && q > 0 && q != item.Quantity { // the purchased quantity wins
 		item.Quantity = q
 		if err := s.Subs.SetItem(ctx, item); err != nil {
-			return "", err
+			return err
 		}
 	}
 	if err := s.history(ctx, active, &from, "webhook:"+ev.EventType, domain.CommercialSystemPrincipal, eventRef(ev),
 		&[2]*int{nil, &item.Quantity}, nil); err != nil {
-		return "", err
+		return err
 	}
-	if err := s.startSaga(ctx, active, domain.SagaTrialConversion, now); err != nil {
-		return "", err
+	// The conversion's checkout session is completed with its payment, so
+	// purchase-expiry never expires a paid session (whichever of
+	// invoice.paid and checkout.session.completed comes first).
+	if open, found, err := s.Checkouts.Open(ctx, sub.TenantID, domain.PurposeConversion); err != nil {
+		return err
+	} else if found && open.BillingSubscriptionID != nil && *open.BillingSubscriptionID == sub.BillingSubscriptionID {
+		if err := s.Checkouts.SetStatus(ctx, open.SessionID, domain.SessionCompleted); err != nil {
+			return err
+		}
 	}
-	return "applied:conversion_payment", nil
+	return s.startSaga(ctx, active, domain.SagaTrialConversion, now)
+}
+
+// resolveUnlinked finds the Billing subscription of a paid invoice whose
+// provider subscription is not linked yet, through the
+// billing_subscription_id Billing set in the provider subscription's
+// metadata (§8.1.1), read from the re-read invoice (BIL-PAY-4). The tenant
+// comes from the customer mapping (BIL-PAY-3) and the read runs under the
+// tenant's RLS, so the metadata cannot reach another tenant's subscription.
+//   - an incomplete trial conversion with no provider subscription is linked
+//     here, and its payment is then confirmed;
+//   - an ended subscription (a superseded or expired checkout paid anyway)
+//     is parked for an operator decision;
+//   - a subscription linked to another provider subscription: the first
+//     invoice of a cancelled subscription's new provider subscription (a
+//     B-P14 reactivation whose checkout completion is not processed yet)
+//     waits for its link (retryable); any other invoice (a late payment on
+//     a provider subscription a reactivation replaced) is ignored with
+//     superseded_provider_subscription, never retried to SEV-3;
+//   - any other live subscription without a link (a direct signup not yet
+//     committed) waits for its link: retryable;
+//   - no usable metadata: every provider subscription Billing creates
+//     carries billing_subscription_id (conversion and reactivation
+//     checkouts, B-I1, B-O1), so none can ever be linked to this one (a
+//     dashboard-created subscription): ignored with unknown_subscription.
+func (h FirstInvoicePaid) resolveUnlinked(ctx context.Context, tenantID string, ev domain.PaymentEvent, cur domain.ProviderObjectState,
+	providerSub string) (domain.Subscription, error) {
+	s := h.S
+	notLinked := domain.NewError(domain.ErrSubscriptionNotFound, "the provider subscription is not linked yet; retried")
+	bsID, _ := cur.Fields["billing_subscription_id"].(string)
+	if bsID == "" || uuid.Validate(bsID) != nil {
+		return domain.Subscription{}, &port.IgnoredEvent{Reason: "unknown_subscription"}
+	}
+	sub, err := s.Subs.Get(ctx, bsID)
+	if domain.HasCode(err, domain.ErrSubscriptionNotFound) {
+		return sub, &port.IgnoredEvent{Reason: "unknown_subscription"}
+	}
+	if err != nil {
+		return sub, err
+	}
+	if sub.TenantID != tenantID {
+		return sub, &port.IgnoredEvent{Reason: "unknown_subscription"}
+	}
+	switch {
+	case sub.Status == domain.StatusIncomplete && sub.Origin == domain.OriginTrialConversion && sub.ProviderSubscriptionID == nil:
+		return s.Subs.Update(ctx, sub.BillingSubscriptionID, 0, func(x *domain.Subscription) { x.ProviderSubscriptionID = &providerSub })
+	case sub.Status == domain.StatusEnded:
+		return sub, s.paymentNeedsDecision(ctx, tenantID, ev, sub.BillingSubscriptionID, "paid_after_end")
+	case sub.ProviderSubscriptionID != nil && (sub.Status != domain.StatusCancelled || !firstInvoiceOfSubscription(cur)):
+		if s.Log != nil {
+			s.logger(ctx).Warn("invoice paid on a provider subscription Billing no longer links; not applied", map[string]any{
+				"tenant_id": tenantID, "billing_subscription_id": sub.BillingSubscriptionID, "provider": ev.Provider,
+				"provider_event_id": ev.ProviderEventID})
+		}
+		return sub, &port.IgnoredEvent{Reason: "superseded_provider_subscription"}
+	}
+	return sub, notLinked
+}
+
+// paymentNeedsDecision raises the operator alert for a provider payment
+// Billing must not apply (a superseded or expired checkout paid anyway) and
+// returns the ParkedEvent that leaves the ledger row failed:<reason> with no
+// retry (§8.15 step 4, BIL-OPS-6), like failed:unknown_customer. The
+// operator cancels the stray provider subscription and refunds its payment
+// in the provider dashboard; the row stays as the record of the incident (a
+// B-O13 replay parks it again, since Billing's subscription stays ended).
+func (s *Service) paymentNeedsDecision(ctx context.Context, tenantID string, ev domain.PaymentEvent, billingSubscriptionID, reason string) error {
+	if s.Log != nil {
+		s.logger(ctx).Error("provider payment on a checkout Billing replaced or ended; operator decision needed (SEV-2)", map[string]any{
+			"tenant_id": tenantID, "billing_subscription_id": billingSubscriptionID, "provider": ev.Provider,
+			"provider_event_id": ev.ProviderEventID, "reason": reason, "alert": "BillingPaymentParked", "severity": "SEV-2"})
+	}
+	return &port.ParkedEvent{Reason: reason}
 }
 
 func (h FirstInvoicePaid) next(ctx context.Context, tenantID string, ev domain.PaymentEvent, cur domain.ProviderObjectState) (string, error) {

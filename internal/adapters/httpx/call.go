@@ -10,6 +10,8 @@ import (
 	"net/http"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/problem"
+
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/pkg/requestctx"
 )
 
 // Billing's outbound identity (BIL-AUTH-4, CD-19): IAM maps the reserved
@@ -17,6 +19,8 @@ import (
 const (
 	SystemPrincipal = "commercial-system"
 	SystemRole      = "commercial-system"
+	// HeaderRequestID carries the correlation ID to the callee.
+	HeaderRequestID = "X-Request-ID"
 )
 
 // maxBody bounds a dependency's response body.
@@ -58,6 +62,11 @@ func Call(ctx context.Context, c *http.Client, method, url, tenantID, idemKey st
 	req.Header.Set("x-tenant-roles", SystemRole)
 	if idemKey != "" {
 		req.Header.Set("Idempotency-Key", idemKey)
+	}
+	// The inbound request's correlation ID, when the call serves one
+	// (background workers have none).
+	if id := requestctx.RequestID(ctx); id != "" {
+		req.Header.Set(HeaderRequestID, id)
 	}
 	resp, err := c.Do(req)
 	if err != nil {

@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/pkg/requestctx"
 )
 
 func init() { gin.SetMode(gin.TestMode) }
@@ -64,6 +66,22 @@ func TestHealthzFailsOnDeadLoop(t *testing.T) {
 	r := NewRouter(RouterConfig{GinConfig: testGin(), Liveness: []Check{{"audit_runner", down()}}})
 	if code, _ := get(t, r, "/healthz"); code != http.StatusServiceUnavailable {
 		t.Fatalf("want 503, got %d", code)
+	}
+}
+
+// gincommon's request ID reaches the request context, where httpx.Call
+// forwards it as X-Request-ID.
+func TestRequestIDOnRequestContext(t *testing.T) {
+	var seen string
+	r := NewRouter(RouterConfig{GinConfig: testGin(), Liveness: []Check{{"probe", PingerFunc(func(ctx context.Context) error {
+		seen = requestctx.RequestID(ctx)
+		return nil
+	})}}})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.Header.Set("X-Request-ID", "req-7")
+	r.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	if seen != "req-7" {
+		t.Fatalf("request ID on the context %q", seen)
 	}
 }
 

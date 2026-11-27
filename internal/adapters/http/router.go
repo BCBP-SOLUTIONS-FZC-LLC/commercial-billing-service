@@ -13,6 +13,8 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/logger"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/problem"
 	"github.com/gin-gonic/gin"
+
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/pkg/requestctx"
 )
 
 // defaultRequestTimeout is the gincommon request deadline when the config
@@ -22,6 +24,15 @@ const defaultRequestTimeout = 30 * time.Second
 // maxBodyBytes caps JSON request bodies. The webhook route sets its own limit
 // from WEBHOOK_MAX_BODY_BYTES (§8.15).
 const maxBodyBytes = 1 << 20
+
+// forwardRequestID puts gincommon's request ID on the request context, so
+// outbound calls made for this request (httpx.Call) send it as X-Request-ID.
+func forwardRequestID(c *gin.Context) {
+	if id := gincommon.RequestIDFromContext(c); id != "" {
+		c.Request = c.Request.WithContext(requestctx.WithRequestID(c.Request.Context(), id))
+	}
+	c.Next()
+}
 
 // Pinger is any dependency a probe checks.
 type Pinger interface {
@@ -87,6 +98,7 @@ func NewRouter(cfg RouterConfig) *Router {
 	// request deadline (innermost), §3.3. Every error response, a recovered
 	// panic included, is its application/problem+json.
 	r.Use(gincommon.ObservabilityMiddlewares(ginCfg)...)
+	r.Use(forwardRequestID)
 	// Unmatched paths and methods answer gincommon problems, not gin's text.
 	r.NoRoute(func(c *gin.Context) { gincommon.AbortWithProblem(c, problem.NewNotFoundError("no such route")) })
 	r.NoMethod(func(c *gin.Context) {

@@ -74,6 +74,11 @@ func (a *Adapter) UpdateCustomer(context.Context, port.CustomerRef, port.Custome
 func (a *Adapter) CreateHostedCheckout(context.Context, port.CheckoutInput, string) (port.HostedSession, error) {
 	return port.HostedSession{}, port.ErrUnsupported
 }
+
+// ExpireCheckout: the manual provider has no hosted sessions to expire.
+func (a *Adapter) ExpireCheckout(context.Context, string, string) error {
+	return port.ErrUnsupported
+}
 func (a *Adapter) CreatePaymentMethodSetup(context.Context, port.SetupInput, string) (port.HostedSession, error) {
 	return port.HostedSession{}, port.ErrUnsupported
 }
@@ -116,6 +121,12 @@ func (a *Adapter) PreviewPriceChange(context.Context, port.PriceChange) (port.Pr
 func (a *Adapter) ChargeOneOff(context.Context, port.OneOffCharge, string) (port.ChargeResult, error) {
 	return port.ChargeResult{}, port.ErrUnsupported
 }
+
+// FindInvoice implements port.PaymentProvider: manual has no provider
+// invoices, so there is never one to find.
+func (a *Adapter) FindInvoice(context.Context, port.InvoiceQuery) (port.InvoiceRef, bool, error) {
+	return port.InvoiceRef{}, false, nil
+}
 func (a *Adapter) GetInvoice(context.Context, port.InvoiceRef) (port.InvoiceView, error) {
 	return port.InvoiceView{}, port.ErrUnsupported
 }
@@ -126,6 +137,9 @@ func (a *Adapter) PayOpenInvoiceLink(context.Context, port.InvoiceRef) (port.URL
 	return port.URLWithExpiry{}, port.ErrUnsupported
 }
 func (a *Adapter) VoidInvoice(context.Context, port.InvoiceRef, string) error {
+	return port.ErrUnsupported
+}
+func (a *Adapter) DeleteDraftInvoice(context.Context, port.InvoiceRef) error {
 	return port.ErrUnsupported
 }
 func (a *Adapter) FinalizeInvoice(context.Context, port.InvoiceRef, string) error {

@@ -121,6 +121,7 @@ type fakeProvider struct {
 	fallback     bool
 	refundStatus string
 	recon        map[port.ReconKind][]domain.ProviderObjectState
+	expireErr    error
 }
 
 func (p *fakeProvider) record(c string) error {
@@ -147,6 +148,15 @@ func (p *fakeProvider) EnsureCustomer(_ context.Context, in port.CustomerInput, 
 func (p *fakeProvider) CreateHostedCheckout(_ context.Context, in port.CheckoutInput, key string) (port.HostedSession, error) {
 	return port.HostedSession{ProviderSessionID: "cs_" + in.Metadata["billing_subscription_id"], URL: "https://checkout.example/" + in.Metadata["billing_subscription_id"],
 		ExpiresAt: in.ExpiresAt}, p.record("CreateHostedCheckout " + key)
+}
+
+// ExpireCheckout answers expireErr when set (for example
+// port.ErrCheckoutCompleted).
+func (p *fakeProvider) ExpireCheckout(_ context.Context, id, key string) error {
+	if err := p.record("ExpireCheckout " + id + " " + key); err != nil {
+		return err
+	}
+	return p.expireErr
 }
 
 func (p *fakeProvider) AttachDefaultPaymentMethod(_ context.Context, _ port.CustomerRef, pm, key string) error {

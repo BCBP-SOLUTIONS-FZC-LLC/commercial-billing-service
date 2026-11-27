@@ -19,14 +19,31 @@ func NewMoneyRepository(appPool *pgcommon.Pool) *MoneyRepository {
 	return &MoneyRepository{pool: appPool}
 }
 
-// InsertAdjustment implements port.MoneyRepo.
+// InsertAdjustment implements port.MoneyRepo; uq_adj_key →
+// port.ErrIdempotencyKeyTaken.
 func (r *MoneyRepository) InsertAdjustment(ctx context.Context, a domain.Adjustment) error {
-	return inTx(ctx, r.pool, func(q querier) error {
+	err := inTx(ctx, r.pool, func(q querier) error {
 		_, err := q.Exec(ctx, `INSERT INTO adjustments (adjustment_id, tenant_id, kind, amount_minor, currency, description, reason,
 			actor_id, idempotency_key) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::uuid, $9)`,
 			a.AdjustmentID, a.TenantID, a.Kind, a.AmountMinor, a.Currency, a.Description, a.Reason, a.ActorID, a.IdempotencyKey)
 		return err
 	})
+	return keyTaken(err, "uq_adj_key")
+}
+
+// AdjustmentByKey implements port.MoneyRepo (locked).
+func (r *MoneyRepository) AdjustmentByKey(ctx context.Context, tenantID, key string) (domain.Adjustment, bool, error) {
+	var a domain.Adjustment
+	err := inTx(ctx, r.pool, func(q querier) error {
+		return q.QueryRow(ctx, `SELECT adjustment_id::text, tenant_id::text, kind, amount_minor, currency, description, reason, provider_ref,
+			actor_id::text, idempotency_key, created_at FROM adjustments WHERE tenant_id = $1::uuid AND idempotency_key = $2 FOR UPDATE`, tenantID, key).
+			Scan(&a.AdjustmentID, &a.TenantID, &a.Kind, &a.AmountMinor, &a.Currency, &a.Description, &a.Reason, &a.ProviderRef, &a.ActorID,
+				&a.IdempotencyKey, &a.CreatedAt)
+	})
+	if isNoRows(err) {
+		return a, false, nil
+	}
+	return a, err == nil, err
 }
 
 // SetAdjustmentRef implements port.MoneyRepo.
@@ -47,8 +64,27 @@ func scanRefund(row pgcommon.Row) (domain.Refund, error) {
 	return f, err
 }
 
-// InsertRefund implements port.MoneyRepo.
+// InsertRefund implements port.MoneyRepo; uq_ref_key →
+// port.ErrIdempotencyKeyTaken.
 func (r *MoneyRepository) InsertRefund(ctx context.Context, f domain.Refund) error {
+	return keyTaken(r.insertRefund(ctx, f), "uq_ref_key")
+}
+
+// RefundByKey implements port.MoneyRepo (locked).
+func (r *MoneyRepository) RefundByKey(ctx context.Context, tenantID, key string) (domain.Refund, bool, error) {
+	var f domain.Refund
+	err := inTx(ctx, r.pool, func(q querier) error {
+		var err error
+		f, err = scanRefund(q.QueryRow(ctx, `SELECT `+refundColumns+` FROM refunds WHERE tenant_id = $1::uuid AND idempotency_key = $2 FOR UPDATE`, tenantID, key))
+		return err
+	})
+	if isNoRows(err) {
+		return f, false, nil
+	}
+	return f, err == nil, err
+}
+
+func (r *MoneyRepository) insertRefund(ctx context.Context, f domain.Refund) error {
 	return inTx(ctx, r.pool, func(q querier) error {
 		_, err := q.Exec(ctx, `INSERT INTO refunds (refund_id, tenant_id, invoice_id, amount_minor, currency, category, reason, status,
 			addon_purchase_id, addon_tokens, actor_id, idempotency_key)

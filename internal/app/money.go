@@ -33,8 +33,35 @@ func (s *Service) issueAdjustment(ctx context.Context, c Caller, tenantID string
 	}
 	adj := domain.Adjustment{AdjustmentID: newID(), TenantID: tenantID, Kind: r.Kind, AmountMinor: r.Amount.AmountMinor, Currency: r.Amount.Currency,
 		Description: r.Description, Reason: r.Reason, ActorID: c.UserID, IdempotencyKey: keyOr(c, "adj:")}
-	if err := s.locked(ctx, tenantID, func(ctx context.Context) error { return s.Money.InsertAdjustment(ctx, adj) }); err != nil {
+	resumed := false
+	if err := s.locked(ctx, tenantID, func(ctx context.Context) error {
+		// §9.2 one row per key: a retry after a 5xx (the idempotency record
+		// was released) resumes the row and its provider key adj:<id>.
+		prev, found, err := s.Money.AdjustmentByKey(ctx, tenantID, adj.IdempotencyKey)
+		if err != nil {
+			return err
+		}
+		if found {
+			// The whole body: the description goes to the provider under the
+			// same key adj:<id>, so another one would be a provider
+			// idempotency mismatch (§9.2).
+			if prev.Kind != adj.Kind || prev.AmountMinor != adj.AmountMinor || prev.Currency != adj.Currency ||
+				prev.Description != adj.Description || prev.Reason != adj.Reason {
+				return domain.NewError(domain.ErrIdempotencyKeyReused, "Idempotency-Key was used with a different request")
+			}
+			adj, resumed = prev, true
+			return nil
+		}
+		return keyInUse(s.Money.InsertAdjustment(ctx, adj))
+	}); err != nil {
 		return AdjustmentResult{}, err
+	}
+	if resumed && adj.ProviderRef != nil { // done (the reference and the audit entry commit together)
+		return AdjustmentResult{AdjustmentID: adj.AdjustmentID, Kind: adj.Kind, Amount: r.Amount, ProviderRef: *adj.ProviderRef}, nil
+	}
+	if resumed && s.now().Sub(adj.CreatedAt) > providerKeyTTL {
+		// The provider key may have lapsed: replaying it could post twice.
+		return AdjustmentResult{}, domain.NewError(domain.ErrRequestInProgress, "the adjustment's outcome is unknown; reconcile it before retrying")
 	}
 	prov, err := s.provider(acct.Provider)
 	if err != nil {
@@ -117,9 +144,28 @@ func (s *Service) refund(ctx context.Context, c Caller, tenantID, invoiceID stri
 	f := domain.Refund{RefundID: newID(), TenantID: tenantID, InvoiceID: invoiceID, AmountMinor: amount, Currency: currency, Category: category,
 		Reason: reason, Status: domain.RefundPending, ActorID: actorOf(c), IdempotencyKey: keyOr(c, "refund:")}
 	var inv domain.Invoice
+	resumed := false
 	if err := s.locked(ctx, tenantID, func(ctx context.Context) error {
 		var found bool
 		var err error
+		// §9.2 one row per key: a retry after a 5xx (the idempotency record
+		// was released) resumes the row and its provider key refund:<id>.
+		prev, found, err := s.Money.RefundByKey(ctx, tenantID, f.IdempotencyKey)
+		if err != nil {
+			return err
+		}
+		if found {
+			// The whole body: the category picks the provider's refund reason
+			// under the same key refund:<id>, so another one would be a
+			// provider idempotency mismatch (§9.2).
+			if prev.InvoiceID != invoiceID || prev.AmountMinor != amount || prev.Currency != currency ||
+				prev.Category != category || prev.Reason != reason {
+				return domain.NewError(domain.ErrIdempotencyKeyReused, "Idempotency-Key was used with a different request")
+			}
+			f, resumed = prev, true
+			inv, _, err = s.Invoices.Get(ctx, invoiceID)
+			return err
+		}
 		if inv, found, err = s.Invoices.Get(ctx, invoiceID); err != nil {
 			return err
 		}
@@ -150,9 +196,14 @@ func (s *Service) refund(ctx context.Context, c Caller, tenantID, invoiceID stri
 				}
 			}
 		}
-		return s.Money.InsertRefund(ctx, f)
+		return keyInUse(s.Money.InsertRefund(ctx, f))
 	}); err != nil {
 		return f, err
+	}
+	if resumed && (f.ProviderRefundID != nil || s.now().Sub(f.CreatedAt) > providerKeyTTL) {
+		// Done, or too old to replay the provider key: stays pending and
+		// reconciliation flags it.
+		return f, nil
 	}
 	prov, err := s.provider(inv.Provider)
 	if err != nil {

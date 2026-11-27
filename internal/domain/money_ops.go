@@ -14,6 +14,7 @@ type Adjustment struct {
 	ProviderRef    *string
 	ActorID        string
 	IdempotencyKey string
+	CreatedAt      time.Time
 }
 
 // Refund is §4.2.17.

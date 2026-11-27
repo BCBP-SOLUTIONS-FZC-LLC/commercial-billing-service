@@ -189,7 +189,20 @@ func (s *Service) purchaseTokenAddon(ctx context.Context, c Caller, tenantID str
 	if p.IdempotencyKey == "" {
 		p.IdempotencyKey = "addon:" + p.PurchaseID
 	}
+	resumed := false
 	if err := s.locked(ctx, tenantID, func(ctx context.Context) error {
+		// §9.2 one row per key: a retry of this key (the first attempt failed
+		// with a 5xx, which releases the idempotency record) resumes its row,
+		// and so the provider key addon:<purchase_id>.
+		if prev, found, err := s.Addons.ByIdempotencyKey(ctx, tenantID, p.IdempotencyKey); err != nil {
+			return err
+		} else if found {
+			if prev.PackCode != p.PackCode || prev.PackQuantity != p.PackQuantity {
+				return domain.NewError(domain.ErrIdempotencyKeyReused, "Idempotency-Key was used with a different request")
+			}
+			p, resumed = prev, true
+			return nil
+		}
 		used, err := s.Addons.ConfirmedTokensSince(ctx, tenantID, pack.PackCode, monthStart(s.now()))
 		if err != nil {
 			return err
@@ -198,9 +211,12 @@ func (s *Service) purchaseTokenAddon(ctx context.Context, c Caller, tenantID str
 			rem, _ := domain.CapRemaining(pack.MonthlyCapTokens, used)
 			return domain.NewError(domain.ErrAddonCapReached, "the monthly add-on cap is reached").With("cap_remaining_tokens", rem)
 		}
-		return s.Addons.Insert(ctx, p)
+		return keyInUse(s.Addons.Insert(ctx, p))
 	}); err != nil {
 		return PurchaseView{}, err
+	}
+	if resumed && (p.Status != domain.PurchasePendingPayment || s.now().Sub(p.CreatedAt) > providerKeyTTL) {
+		return addonView(p), nil // settled, or too old to replay the provider key: the callback or purchase-expiry settles it
 	}
 
 	prov, err := s.provider(acct.Provider)
@@ -219,13 +235,7 @@ func (s *Service) purchaseTokenAddon(ctx context.Context, c Caller, tenantID str
 		if code == "" {
 			code = res.Outcome.DeclineCode
 		}
-		_ = s.locked(ctx, tenantID, func(ctx context.Context) error {
-			p.Status = domain.PurchaseFailed
-			return s.Addons.Update(ctx, p)
-		})
-		s.metrics().AddonPurchase(p.PackCode, "declined")
-		s.metrics().PaymentFailure(declineReason(code))
-		return PurchaseView{}, domain.NewError(domain.ErrPaymentDeclined, "payment declined").With("decline_reason", declineReason(code))
+		return s.addonDeclined(ctx, c, *acct, p, res.Invoice.ProviderInvoiceID, code)
 	case errors.As(err, &action) || err == nil && res.Outcome.Status == port.PaymentRequiresAction:
 		secret := action.ClientSecret
 		if secret == "" {
@@ -237,7 +247,20 @@ func (s *Service) purchaseTokenAddon(ctx context.Context, c Caller, tenantID str
 		// hosted invoice page (B-P23).
 		p.Status, p.ClientAction = domain.PurchaseRequiresAction, mustJSON(ClientAction{Type: "payment_session"})
 	case err != nil:
-		return PurchaseView{}, providerErr(err) // stays pending; the callback or purchase-expiry settles it
+		// Stays pending; the callback or purchase-expiry settles it. The
+		// invoice may exist (the error came after it was created): record it,
+		// so purchase-expiry voids or settles it (§8.7).
+		if id := res.Invoice.ProviderInvoiceID; id != "" {
+			_ = s.locked(ctx, tenantID, func(ctx context.Context) error {
+				cur, found, err := s.Addons.Get(ctx, p.PurchaseID)
+				if err != nil || !found || !cur.Status.Open() || cur.ProviderInvoiceID != nil {
+					return err
+				}
+				cur.ProviderInvoiceID = &id
+				return s.Addons.Update(ctx, cur)
+			})
+		}
+		return PurchaseView{}, providerErr(err)
 	}
 	if res.Invoice.ProviderInvoiceID != "" {
 		p.ProviderInvoiceID = &res.Invoice.ProviderInvoiceID
@@ -267,6 +290,58 @@ func (s *Service) purchaseTokenAddon(ctx context.Context, c Caller, tenantID str
 		return PurchaseView{}, err
 	}
 	return addonView(p), nil
+}
+
+// addonDeclined is §8.5.1 "declined → failed" for an add-on: the invoice
+// (created with auto_advance, so the provider would retry it) is voided
+// outside the transaction first, so a later collection cannot charge for a
+// failed purchase. If the void fails the purchase stays pending and
+// purchase-expiry voids it; if the invoice turns out paid the purchase is
+// confirmed.
+func (s *Service) addonDeclined(ctx context.Context, c Caller, acct domain.BillingAccount, p domain.QuotaAddonPurchase, invoiceID, code string) (PurchaseView, error) {
+	if p.CreatedAt.IsZero() { // the intent just committed
+		p.CreatedAt = s.now()
+	}
+	inv, verr := s.closeInvoice(ctx, acct.Provider, nonEmpty(invoiceID), addonTarget(acct, p), "addon:"+p.PurchaseID+":void")
+	confirmed := false
+	_ = s.locked(ctx, p.TenantID, func(ctx context.Context) error {
+		cur, found, err := s.Addons.Get(ctx, p.PurchaseID)
+		if err != nil || !found || !cur.Status.Open() {
+			return err
+		}
+		if err := s.recheckInvoice(ctx, p.TenantID, p.PurchaseID, &inv); err != nil {
+			return err
+		}
+		if inv.ID != "" {
+			cur.ProviderInvoiceID = &inv.ID
+		}
+		switch {
+		case inv.Paid:
+			if err := s.confirmAddon(ctx, &cur, metaFor(c)); err != nil {
+				return err
+			}
+			p, confirmed = cur, true
+			return nil
+		case verr == nil:
+			cur.Status, cur.ClientAction = domain.PurchaseFailed, nil
+		}
+		return s.Addons.Update(ctx, cur)
+	})
+	if confirmed {
+		return addonView(p), nil
+	}
+	s.metrics().AddonPurchase(p.PackCode, "declined")
+	s.metrics().PaymentFailure(declineReason(code))
+	return PurchaseView{}, domain.NewError(domain.ErrPaymentDeclined, "payment declined").With("decline_reason", declineReason(code))
+}
+
+// keyInUse maps a row whose client key another row already holds (a
+// concurrent attempt with the same key) to 409 REQUEST_IN_PROGRESS (§9.2).
+func keyInUse(err error) error {
+	if errors.Is(err, port.ErrIdempotencyKeyTaken) {
+		return domain.NewError(domain.ErrRequestInProgress, "a request with this Idempotency-Key is in progress")
+	}
+	return err
 }
 
 func mustJSON(v any) []byte {
@@ -405,6 +480,13 @@ func (h AddonInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain
 		return "", err
 	}
 	if !found {
+		// Billing did not record the invoice id (a provider error after the
+		// charge): match the purchase_id the invoice carries (§8.7).
+		if p, found, err = s.addonByMetadata(ctx, tenantID, cur); err != nil {
+			return "", err
+		}
+	}
+	if !found {
 		if h.Next == nil {
 			return "", &port.IgnoredEvent{Reason: "no_handler"}
 		}
@@ -413,9 +495,33 @@ func (h AddonInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain
 	if !p.Status.Open() {
 		return "", &port.IgnoredEvent{Reason: "purchase_" + string(p.Status)}
 	}
+	if !invoicePaysFor(cur, domain.Money{AmountMinor: p.AmountMinor, Currency: p.Currency}) {
+		// A 0 or partial invoice (an empty draft the provider finalised)
+		// never grants tokens (BIL-PAY-7).
+		return "", s.parkMismatchedPayment(ctx, tenantID, port.PurchaseKindTokenAddon, p.PurchaseID, ev, cur)
+	}
 	if err := s.confirmAddon(ctx, &p, webhookMeta()); err != nil {
 		return "", err
 	}
 	s.metrics().PurchaseToEvent(port.PurchaseKindTokenAddon, s.now().Sub(ev.ProviderCreatedAt))
 	return "applied:addon_purchase", nil
+}
+
+// addonByMetadata is the add-on purchase an invoice names in its metadata,
+// when Billing has no invoice id for it; the invoice id is then recorded on
+// it.
+func (s *Service) addonByMetadata(ctx context.Context, tenantID string, cur domain.ProviderObjectState) (domain.QuotaAddonPurchase, bool, error) {
+	id := metadataPurchaseID(cur)
+	if id == "" {
+		return domain.QuotaAddonPurchase{}, false, nil
+	}
+	p, found, err := s.Addons.Get(ctx, id)
+	if err != nil || !found || p.TenantID != tenantID || p.ProviderInvoiceID != nil && *p.ProviderInvoiceID != cur.Ref.ID {
+		return domain.QuotaAddonPurchase{}, false, err
+	}
+	if claimed, err := s.invoiceClaimed(ctx, tenantID, cur.Ref.ID, p.PurchaseID); err != nil || claimed {
+		return domain.QuotaAddonPurchase{}, false, err
+	}
+	p.ProviderInvoiceID = &cur.Ref.ID
+	return p, true, nil
 }

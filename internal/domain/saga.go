@@ -101,23 +101,25 @@ type RP3Answer struct {
 //	409 realm_already_dedicated                 → advance (a lost response; the 30-min alert covers it)
 //	409 operation_in_progress                   → retry
 //	502 conversion_failed / keycloak_unavailable → retry
-//	503, transport error, client timeout        → retry
+//	409 optimistic_lock_conflict                → retry (RP lost a concurrent write; same key)
+//	5xx, transport error, client timeout        → retry
 //	409 tenant_offboarded                       → fail
 //	400, 403, 404                               → fail
 //
-// Anything else is unexpected and fails the saga so an operator looks at
-// it, rather than retrying forever.
+// Anything else (other 409 codes such as realm_name_unavailable, other
+// 4xx) is unexpected and fails the saga so an operator looks at it, rather
+// than retrying forever.
 func ClassifyRP3(a RP3Answer) RP3Action {
 	switch {
 	case a.Status == 200:
 		return RP3Advance
 	case a.Status == 409 && a.ErrorCode == "realm_already_dedicated":
 		return RP3Advance
-	case a.Status == 409 && a.ErrorCode == "operation_in_progress":
+	case a.Status == 409 && (a.ErrorCode == "operation_in_progress" || a.ErrorCode == "optimistic_lock_conflict"):
 		return RP3Retry
 	case a.Status == 409 && a.ErrorCode == "tenant_offboarded":
 		return RP3Fail
-	case a.Status == 502, a.Status == 503, a.Status == 0:
+	case a.Status >= 500, a.Status == 0:
 		return RP3Retry
 	case a.Status == 400, a.Status == 403, a.Status == 404:
 		return RP3Fail

@@ -145,7 +145,7 @@ func TestPlanChangeRefusals(t *testing.T) {
 
 // §8.4.1 upgrade outcomes answered in the response (no error): declined →
 // failed with decline_reason; requires_action → pending_payment with the
-// client secret; a provider error → failed; pending → pending_payment
+// client secret; a provider error → stays pending_payment; pending → pending_payment
 // awaiting invoice.paid, which UpgradeInvoicePaid then applies.
 func TestUpgradeOutcomes(t *testing.T) {
 	ctx := context.Background()
@@ -166,8 +166,12 @@ func TestUpgradeOutcomes(t *testing.T) {
 	e.p.on("ChangePrice", answer{outcome: port.PaymentOutcome{Status: port.PaymentDeclined, DeclineCode: "insufficient_funds"}})
 	res, err := upgrade("k-up-dcl-01")
 	isCode(t, "declined", err, domain.ErrPaymentDeclined)
-	if ext(err, "decline_reason") != "insufficient_funds" || status(res.ChangeID) != "failed//" {
+	if ext(err, "decline_reason") != "insufficient_funds" || status(res.ChangeID) != "failed/in_planchg:"+res.ChangeID+"/" {
 		t.Fatalf("declined %v %s", ext(err, "decline_reason"), status(res.ChangeID))
+	}
+	// §8.5.1: the open proration invoice is voided, so it is never collected later.
+	if n := len(e.p.called("VoidInvoice in_planchg:" + res.ChangeID + " planchg:" + res.ChangeID + ":void")); n != 1 {
+		t.Fatalf("void %v", e.p.called("VoidInvoice"))
 	}
 
 	e.p.on("ChangePrice", answer{outcome: port.PaymentOutcome{Status: port.PaymentRequiresAction, ClientSecret: "pi_o_secret"}})
@@ -192,9 +196,12 @@ func TestUpgradeOutcomes(t *testing.T) {
 	e.p.on("ChangePrice", answer{err: errProvider})
 	res, err = upgrade("k-up-err-01")
 	isCode(t, "provider error", err, domain.ErrProviderUnavailable)
-	if got := status(res.ChangeID); got != "failed//" {
+	// The outcome is unknown (the provider may have charged): stays pending
+	// for the callback or purchase-expiry.
+	if got := status(res.ChangeID); got != "pending_payment//" {
 		t.Fatalf("provider error row %s", got)
 	}
+	failPending(t, tenant)
 
 	e.p.on("ChangePrice", answer{outcome: port.PaymentOutcome{Status: port.PaymentPending}})
 	res, err = upgrade("k-up-pnd-01")
@@ -213,7 +220,7 @@ func TestUpgradeOutcomes(t *testing.T) {
 	h := app.UpgradeInvoicePaid{S: e.svc}
 	ev := callback("evt_up_paid", "invoice.paid", domain.KindInvoicePaid)
 	cur := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: inv}, Status: "paid",
-		Fields: map[string]any{"subscription": "sub_" + sub, "billing_reason": "subscription_update"}}
+		Fields: paidFields(t, "plan_change_requests", res.ChangeID, "subscription", "sub_"+sub, "billing_reason", "subscription_update")}
 	other := cur
 	other.Ref.ID = "in_unrelated"
 	_, err = e.handle(tenant, h, ev, other)

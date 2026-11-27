@@ -340,7 +340,17 @@ func TestFirstInvoicePaidEdges(t *testing.T) {
 	delete(cur.Fields, "subscription") // not a subscription invoice, no next handler
 	_, err = e.handle(tenant, h, ev, cur)
 	ignored(t, err, "no_handler")
+	// A provider subscription without (usable) billing_subscription_id
+	// metadata was not created by Billing, so no Billing subscription can
+	// ever be linked to it: ignored, never retried to SEV-3 (rev 0.60);
+	// metadata naming no Billing subscription is ignored too.
 	ev, cur = firstPaid("unknown", int64(5))
+	_, err = e.handle(tenant, h, ev, cur)
+	ignored(t, err, "unknown_subscription")
+	cur.Fields["billing_subscription_id"] = "0193aaaa-0000-7000-8000-00000000dead"
+	_, err = e.handle(tenant, h, ev, cur)
+	ignored(t, err, "unknown_subscription")
+	cur.Fields["billing_subscription_id"] = "not-a-uuid"
 	_, err = e.handle(tenant, h, ev, cur)
 	ignored(t, err, "unknown_subscription")
 

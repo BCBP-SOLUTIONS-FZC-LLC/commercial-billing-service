@@ -43,15 +43,13 @@ func (s *Service) metrics() port.Metrics {
 
 // ── saga-sweeper (§8.2, BIL-OPS-5) ─────────────────────────────────────────
 
-// SweepSagas re-runs due sagas the in-pod worker missed and raises
-// BillingConversionSagaOverdue once per saga (alerted_at).
+// SweepSagas raises BillingConversionSagaOverdue once per saga (alerted_at)
+// and then re-runs due sagas the in-pod worker missed. The overdue check
+// runs first, so a hung Realm Provisioner (each attempt waits RP_TIMEOUT)
+// cannot push the BIL-OPS-5 page past the job's deadline; the re-runs get
+// what is left of it (sagaRunShare).
 func (s *Service) SweepSagas(ctx context.Context) (JobResult, error) {
 	var res JobResult
-	n, err := s.RunSagas(ctx, jobBatch)
-	if err != nil {
-		return res, err
-	}
-	res.Handled += n
 	unalerted, overdue, err := s.Jobs.OverdueSagas(ctx, s.now().Add(-s.Settings.SagaAlertAfter))
 	if err != nil {
 		return res, err
@@ -59,7 +57,8 @@ func (s *Service) SweepSagas(ctx context.Context) (JobResult, error) {
 	s.metrics().SagasOverdue(overdue)
 	for _, ref := range unalerted {
 		var marked bool
-		err := s.Tx.RunInTenantTx(ctx, ref.TenantID, func(ctx context.Context) error {
+		// The saga row is written: under the tenant lock (BIL-CONC-1).
+		err := s.locked(ctx, ref.TenantID, func(ctx context.Context) error {
 			var err error
 			marked, err = s.Jobs.MarkSagaAlerted(ctx, ref.SagaID)
 			return err
@@ -70,7 +69,28 @@ func (s *Service) SweepSagas(ctx context.Context) (JobResult, error) {
 		}
 		res.add(err)
 	}
+	runCtx, cancel := sagaRunContext(ctx)
+	defer cancel()
+	n, err := s.RunSagas(runCtx, jobBatch)
+	res.Handled += n
+	if err != nil && ctx.Err() == nil && runCtx.Err() == nil {
+		return res, err
+	}
 	return res, nil
+}
+
+// sagaRunShare is the part of the job's remaining time the saga re-runs
+// may use; the rest lets the job finish and report before its deadline.
+const sagaRunShare = 0.8
+
+// sagaRunContext bounds the saga re-runs by the job's deadline, if any.
+func sagaRunContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return context.WithCancel(ctx)
+	}
+	left := time.Until(deadline)
+	return context.WithTimeout(ctx, time.Duration(float64(left)*sagaRunShare))
 }
 
 // ── seat-renewal (§8.6.2, §8.6.3) ──────────────────────────────────────────
@@ -484,7 +504,7 @@ func (s *Service) reapplyRenewalQuantity(ctx context.Context, prov port.PaymentP
 // ── purchase-expiry (§13.2) ────────────────────────────────────────────────
 
 // ExpireStale expires abandoned seat and add-on purchases and upgrades
-// (voiding their open invoice), checkout sessions past expires_at (ending
+// (voiding their open invoice, or settling them when it is paid), checkout sessions past expires_at (ending
 // their incomplete subscription), and direct signups whose 3-D Secure was
 // abandoned (provider subscription cancelled). Previews expire with the
 // idempotency records (idempotency-prune).
@@ -517,38 +537,24 @@ func (s *Service) ExpireStale(ctx context.Context) (JobResult, error) {
 	return res, nil
 }
 
-// voidStale voids a stale purchase's open invoice; an invoice already paid
-// or voided is left (a late payment is settled by its callback).
-func (s *Service) voidStale(ctx context.Context, providerName string, invoiceID *string, key string) error {
-	if invoiceID == nil || *invoiceID == "" || providerName == manualProvider {
-		return nil
-	}
-	prov, err := s.provider(providerName)
-	if err != nil {
-		return err
-	}
-	cur, err := prov.FetchCurrent(ctx, domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: *invoiceID})
-	if err != nil {
-		return providerErr(err)
-	}
-	if cur.Status != "open" && cur.Status != "draft" {
-		return nil
-	}
-	if err := prov.VoidInvoice(ctx, port.InvoiceRef{ProviderInvoiceID: *invoiceID}, key); err != nil {
-		return providerErr(err)
-	}
-	return nil
-}
+// The purchase-expiry close-out (§8.5.1, §8.7, §8.4.1): closeInvoice looks
+// up an invoice Billing has no id for, voids it while open, and reports a
+// paid one. A paid purchase is settled as its callback would settle it,
+// never expired: the customer paid, so the seats, tokens or plan are
+// granted.
 
-func (s *Service) subProvider(ctx context.Context, tenantID, subID string) (string, error) {
-	var name string
+func (s *Service) subFor(ctx context.Context, tenantID, subID string) (domain.Subscription, error) {
+	var sub domain.Subscription
 	err := s.Tx.RunInTenantTx(ctx, tenantID, func(ctx context.Context) error {
-		sub, err := s.Subs.Get(ctx, subID)
-		name = sub.Provider
+		var err error
+		sub, err = s.Subs.Get(ctx, subID)
 		return err
 	})
-	return name, err
+	return sub, err
 }
+
+// expiryMeta is the envelope metadata of a change purchase-expiry settles.
+func expiryMeta() port.EventMeta { return port.EventMeta{Actor: domain.CommercialSystemPrincipal} }
 
 func (s *Service) expireSeatPurchase(ctx context.Context, w port.StaleWork) error {
 	var p domain.SeatPurchase
@@ -560,22 +566,39 @@ func (s *Service) expireSeatPurchase(ctx context.Context, w port.StaleWork) erro
 	}); err != nil || !found || !p.Status.Open() {
 		return err
 	}
-	name, err := s.subProvider(ctx, w.TenantID, p.BillingSubscriptionID)
+	sub, err := s.subFor(ctx, w.TenantID, p.BillingSubscriptionID)
 	if err != nil {
 		return err
 	}
-	if err := s.voidStale(ctx, name, p.ProviderInvoiceID, "seatpur:"+p.PurchaseID+":expire"); err != nil {
+	inv, err := s.closeInvoice(ctx, sub.Provider, p.ProviderInvoiceID, seatTarget(deref(sub.ProviderSubscriptionID), p), "seatpur:"+p.PurchaseID+":expire")
+	if err != nil {
 		return err
 	}
-	s.metrics().SeatChange("purchase", "expired")
-	return s.locked(ctx, w.TenantID, func(ctx context.Context) error {
+	outcome := ""
+	err = s.locked(ctx, w.TenantID, func(ctx context.Context) error {
+		outcome = ""
 		cur, found, err := s.SeatPurchases.Get(ctx, w.ID)
 		if err != nil || !found || !cur.Status.Open() {
 			return err
 		}
+		if err := s.recheckInvoice(ctx, w.TenantID, w.ID, &inv); err != nil {
+			return err
+		}
+		if inv.ID != "" {
+			cur.ProviderInvoiceID = &inv.ID
+		}
+		if inv.Paid {
+			outcome = "settled"
+			return s.confirmSeats(ctx, &cur, "job:purchase-expiry", domain.CommercialSystemPrincipal, nil, expiryMeta())
+		}
+		outcome = "expired"
 		cur.Status, cur.ClientAction = domain.PurchaseExpired, nil
 		return s.SeatPurchases.Update(ctx, cur)
 	})
+	if err == nil && outcome == "expired" {
+		s.metrics().SeatChange("purchase", "expired")
+	}
+	return err
 }
 
 func (s *Service) expireAddon(ctx context.Context, w port.StaleWork) error {
@@ -592,13 +615,23 @@ func (s *Service) expireAddon(ctx context.Context, w port.StaleWork) error {
 	}); err != nil || !found || !p.Status.Open() {
 		return err
 	}
-	if err := s.voidStale(ctx, acct.Provider, p.ProviderInvoiceID, "addon:"+p.PurchaseID+":expire"); err != nil {
+	inv, err := s.closeInvoice(ctx, acct.Provider, p.ProviderInvoiceID, addonTarget(acct, p), "addon:"+p.PurchaseID+":expire")
+	if err != nil {
 		return err
 	}
 	return s.locked(ctx, w.TenantID, func(ctx context.Context) error {
 		cur, found, err := s.Addons.Get(ctx, w.ID)
 		if err != nil || !found || !cur.Status.Open() {
 			return err
+		}
+		if err := s.recheckInvoice(ctx, w.TenantID, w.ID, &inv); err != nil {
+			return err
+		}
+		if inv.ID != "" {
+			cur.ProviderInvoiceID = &inv.ID
+		}
+		if inv.Paid {
+			return s.confirmAddon(ctx, &cur, expiryMeta())
 		}
 		cur.Status, cur.ClientAction = domain.PurchaseExpired, nil
 		return s.Addons.Update(ctx, cur)
@@ -607,19 +640,29 @@ func (s *Service) expireAddon(ctx context.Context, w port.StaleWork) error {
 
 func (s *Service) expireUpgrade(ctx context.Context, w port.StaleWork) error {
 	var req domain.PlanChangeRequest
+	var target domain.PlanPrice
 	var found bool
 	if err := s.Tx.RunInTenantTx(ctx, w.TenantID, func(ctx context.Context) error {
 		var err error
-		req, found, err = s.Changes.Open(ctx, w.TenantID)
-		return err
+		if req, found, err = s.Changes.Open(ctx, w.TenantID); err != nil || !found || req.ProviderInvoiceID != nil {
+			return err
+		}
+		// The target price narrows the lookup of an invoice Billing has no
+		// id for; without one the lookup matches on the amount only.
+		if tp, err := s.upgradePrice(ctx, req); err == nil {
+			target = tp
+		}
+		return nil
 	}); err != nil || !found || req.ChangeID != w.ID || req.Status != domain.ChangePendingPayment {
 		return err
 	}
-	name, err := s.subProvider(ctx, w.TenantID, req.BillingSubscriptionID)
+	sub, err := s.subFor(ctx, w.TenantID, req.BillingSubscriptionID)
 	if err != nil {
 		return err
 	}
-	if err := s.voidStale(ctx, name, req.ProviderInvoiceID, "planchg:"+req.ChangeID+":expire"); err != nil {
+	inv, err := s.closeInvoice(ctx, sub.Provider, req.ProviderInvoiceID, upgradeTarget(deref(sub.ProviderSubscriptionID), req, deref(target.ProviderPriceID)),
+		"planchg:"+req.ChangeID+":expire")
+	if err != nil {
 		return err
 	}
 	return s.locked(ctx, w.TenantID, func(ctx context.Context) error {
@@ -627,14 +670,60 @@ func (s *Service) expireUpgrade(ctx context.Context, w port.StaleWork) error {
 		if err != nil || !found || cur.ChangeID != w.ID || cur.Status != domain.ChangePendingPayment {
 			return err
 		}
+		if err := s.recheckInvoice(ctx, w.TenantID, w.ID, &inv); err != nil {
+			return err
+		}
+		if inv.ID != "" {
+			cur.ProviderInvoiceID = &inv.ID
+		}
+		if inv.Paid {
+			return s.settleUpgrade(ctx, &cur, domain.CommercialSystemPrincipal, "job:purchase-expiry", nil, expiryMeta())
+		}
 		cur.Status, cur.ClientAction = domain.ChangeFailed, nil
 		return s.Changes.Update(ctx, cur)
 	})
 }
 
 // expireCheckout is §8.1.3 without a callback: session expired; its
-// incomplete subscription ended (cancel_reason stays null).
+// incomplete subscription ended (cancel_reason stays null). The session is
+// first expired at the provider, outside any transaction (BIL-CONC-2), as
+// B-P2 does for a superseded one: a session the customer completed just
+// before expires_at (its callbacks still queued) is left open for
+// checkout.session.completed and invoice.paid, never expired under a paying
+// customer. The outcome is then committed under the lock with a re-read.
 func (s *Service) expireCheckout(ctx context.Context, w port.StaleWork) error {
+	var session domain.CheckoutSession
+	var acct domain.BillingAccount
+	var found bool
+	if err := s.Tx.RunInTenantTx(ctx, w.TenantID, func(ctx context.Context) error {
+		var err error
+		if session, found, err = s.Checkouts.GetSession(ctx, w.ID); err != nil || !found || session.Status != domain.SessionOpen {
+			return err
+		}
+		if !session.ProviderCreated() {
+			return nil
+		}
+		acct, err = s.Accounts.Get(ctx, w.TenantID)
+		return err
+	}); err != nil || !found || session.Status != domain.SessionOpen {
+		return err
+	}
+	if session.ProviderCreated() && acct.Provider != manualProvider {
+		prov, err := s.provider(acct.Provider)
+		if err != nil {
+			return err
+		}
+		key := "checkout:" + session.SessionID + ":expire"
+		if session.BillingSubscriptionID != nil {
+			key = "bsub:" + *session.BillingSubscriptionID + ":expire"
+		}
+		switch err := prov.ExpireCheckout(ctx, session.ProviderSessionID, key); {
+		case errors.Is(err, port.ErrCheckoutCompleted):
+			return nil // paid: its callbacks complete it
+		case err != nil:
+			return providerErr(err)
+		}
+	}
 	return s.locked(ctx, w.TenantID, func(ctx context.Context) error {
 		session, found, err := s.Checkouts.GetSession(ctx, w.ID)
 		if err != nil || !found || session.Status != domain.SessionOpen {
@@ -679,8 +768,19 @@ func (s *Service) expireSignup(ctx context.Context, w port.StaleWork) error {
 // CheckSeatProjection compares Core's licensed_seats (I-11) with Billing's
 // seat item and queues a TenantSeatsChanged {reason: resync} on a mismatch
 // older than SEAT_RESYNC_AFTER. A second mismatch in 24 h is SEV-3.
-func (s *Service) CheckSeatProjection(ctx context.Context) (JobResult, error) {
-	var res JobResult
+//
+// The run's totals go to a per-run gauge (seatProjectionRunMetrics) when
+// the metrics adapter has one: each CronJob run pushes a fresh process's
+// metrics to the Pushgateway, so a counter restarts at every push and
+// increase() never sees persistent drift; the gauge is what
+// BillingSeatProjectionDrift reads.
+func (s *Service) CheckSeatProjection(ctx context.Context) (res JobResult, err error) {
+	var mismatches, repeats int
+	defer func() {
+		if r, ok := s.metrics().(seatProjectionRunMetrics); ok {
+			r.SeatProjectionRun(mismatches, repeats)
+		}
+	}()
 	after := ""
 	for {
 		page, err := s.Jobs.LiveSubscriptions(ctx, after, jobBatch)
@@ -688,7 +788,14 @@ func (s *Service) CheckSeatProjection(ctx context.Context) (JobResult, error) {
 			return res, err
 		}
 		for _, l := range page {
-			res.add(s.checkProjection(ctx, l))
+			found, repeat, err := s.checkProjection(ctx, l)
+			if found {
+				mismatches++
+			}
+			if repeat {
+				repeats++
+			}
+			res.add(err)
 		}
 		if len(page) < jobBatch {
 			return res, nil
@@ -697,16 +804,25 @@ func (s *Service) CheckSeatProjection(ctx context.Context) (JobResult, error) {
 	}
 }
 
-func (s *Service) checkProjection(ctx context.Context, l port.LiveSubscription) error {
+// seatProjectionRunMetrics is the optional per-run gauge of
+// seat-projection-check (metrics.Metrics implements it).
+type seatProjectionRunMetrics interface {
+	SeatProjectionRun(mismatches, repeats int)
+}
+
+// checkProjection reports whether l's seats drifted from Core's and whether
+// the tenant was already resynced in the previous 24 h.
+func (s *Service) checkProjection(ctx context.Context, l port.LiveSubscription) (found, repeat bool, err error) {
 	now := s.now()
 	if l.ItemUpdatedAt.After(now.Add(-s.Settings.SeatResyncAfter)) {
-		return nil // a recent change may still be in flight
+		return false, false, nil // a recent change may still be in flight
 	}
 	usage, err := s.Core.SeatUsage(ctx, l.TenantID)
 	if err != nil {
-		return err
+		return false, false, err
 	}
-	return s.locked(ctx, l.TenantID, func(ctx context.Context) error {
+	err = s.locked(ctx, l.TenantID, func(ctx context.Context) error {
+		found, repeat = false, false // a retried transaction starts over
 		item, err := s.Subs.Item(ctx, l.BillingSubscriptionID)
 		if err != nil || item.Quantity == usage.LicensedSeats || item.UpdatedAt.After(now.Add(-s.Settings.SeatResyncAfter)) {
 			return err
@@ -715,6 +831,7 @@ func (s *Service) checkProjection(ctx context.Context, l port.LiveSubscription) 
 		if err != nil {
 			return err
 		}
+		found, repeat = true, recent > 0
 		s.metrics().SeatProjectionMismatch()
 		fields := map[string]any{"tenant_id": l.TenantID, "billing_seats": item.Quantity, "core_licensed_seats": usage.LicensedSeats}
 		if recent > 0 && s.Log != nil {
@@ -727,6 +844,10 @@ func (s *Service) checkProjection(ctx context.Context, l port.LiveSubscription) 
 			PayloadBuilder: domain.BuilderSeatsResync, RefID: l.BillingSubscriptionID, DueAt: now})
 		return err
 	})
+	if err != nil {
+		return false, false, err
+	}
+	return found, repeat, nil
 }
 
 // ── pii-minimisation (§15.3, BIL-OPS-9) ───────────────────────────────────

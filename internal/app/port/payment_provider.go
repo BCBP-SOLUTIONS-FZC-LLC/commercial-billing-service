@@ -23,6 +23,10 @@ type PaymentProvider interface {
 	EnsureCustomer(ctx context.Context, in CustomerInput, idemKey string) (CustomerRef, error)
 	UpdateCustomer(ctx context.Context, ref CustomerRef, in CustomerInput, idemKey string) error
 	CreateHostedCheckout(ctx context.Context, in CheckoutInput, idemKey string) (HostedSession, error)
+	// ExpireCheckout makes a hosted session unpayable (a superseded B-P2,
+	// §8.1.1). nil when the session is expired, now or already;
+	// ErrCheckoutCompleted when the customer already completed it.
+	ExpireCheckout(ctx context.Context, providerSessionID string, idemKey string) error
 	CreatePaymentMethodSetup(ctx context.Context, in SetupInput, idemKey string) (HostedSession, error)
 	ListPaymentMethods(ctx context.Context, ref CustomerRef) ([]PaymentMethodView, error)
 	AttachDefaultPaymentMethod(ctx context.Context, ref CustomerRef, pmRef string, idemKey string) error
@@ -51,7 +55,14 @@ type PaymentProvider interface {
 	InvoicePDFLink(ctx context.Context, ref InvoiceRef) (URLWithExpiry, error)
 	PayOpenInvoiceLink(ctx context.Context, ref InvoiceRef) (URLWithExpiry, error)
 	VoidInvoice(ctx context.Context, ref InvoiceRef, idemKey string) error
+	// DeleteDraftInvoice deletes a draft (never finalised) invoice; the
+	// provider voids only finalised ones. An invoice already gone is nil.
+	DeleteDraftInvoice(ctx context.Context, ref InvoiceRef) error
 	FinalizeInvoice(ctx context.Context, ref InvoiceRef, idemKey string) error // B-O16
+	// FindInvoice looks up an invoice Billing started but whose id it did
+	// not record (a provider error after the charge, §8.5.1, §8.7); found is
+	// false when the provider has none.
+	FindInvoice(ctx context.Context, q InvoiceQuery) (ref InvoiceRef, found bool, err error)
 	Refund(ctx context.Context, in RefundInput, idemKey string) (RefundResult, error)
 	CreditBalance(ctx context.Context, in BalanceAdjustment, idemKey string) (string, error)
 
@@ -96,6 +107,14 @@ type PaymentEventHandler interface {
 type IgnoredEvent struct{ Reason string }
 
 func (e *IgnoredEvent) Error() string { return "ignored: " + e.Reason }
+
+// ParkedEvent marks a callback Billing must not apply and an operator must
+// decide (for example a payment on a checkout Billing superseded): the
+// ledger row stays failed:<reason> with no retry (§8.15 step 4, BIL-OPS-6).
+// The handler's transaction is rolled back.
+type ParkedEvent struct{ Reason string }
+
+func (e *ParkedEvent) Error() string { return "parked: " + e.Reason }
 
 // ProviderCapabilities is declared by each adapter and verified by the
 // certification suite (§14.7).
@@ -331,6 +350,23 @@ type BalanceAdjustment struct {
 // InvoiceRef is a provider invoice id.
 type InvoiceRef struct{ ProviderInvoiceID string }
 
+// InvoiceQuery selects the invoice of one purchase. A one-off invoice
+// (token add-on) is matched on its metadata purchase_id among the
+// customer's invoices; the proration invoice of an immediate change (seats,
+// upgrade) on the subscription, billing reason "subscription update" and
+// Amount, with a charged line for Quantity (a seat purchase's seats after)
+// or PriceRef (an upgrade's target price) when set. Only invoices created
+// at or after CreatedSince are considered.
+type InvoiceQuery struct {
+	Customer     CustomerRef
+	Subscription SubscriptionRef
+	PurchaseID   string
+	Amount       *domain.Money
+	Quantity     int
+	PriceRef     string
+	CreatedSince time.Time
+}
+
 // InvoiceView is a provider invoice.
 type InvoiceView struct {
 	Ref                                      InvoiceRef
@@ -380,6 +416,7 @@ var (
 	ErrIdempotencyMismatch = errors.New("provider idempotency key reused with different parameters")
 	ErrNotFound            = errors.New("provider object not found")
 	ErrPriceMismatch       = errors.New("provider price does not match the price book row")
+	ErrCheckoutCompleted   = errors.New("hosted checkout session already completed")
 )
 
 // ErrDeclined is a declined payment with its mapped, non-sensitive code.

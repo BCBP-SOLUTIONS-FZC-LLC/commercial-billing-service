@@ -65,6 +65,15 @@ func TestPlanChangeCheck(t *testing.T) {
 			t.Errorf("%d: %v", status, err)
 		}
 	}
+	// 400 invalid_target_plan is a Billing bug → 500 INTERNAL (§5.4.1 B-P4),
+	// never 503: retrying cannot help. I-11's 400 stays fail-closed 503.
+	s400 := server(t, 400, `{"errorCode":"invalid_target_plan"}`, nil)
+	if _, err := NewCore(s400.URL, time.Second).PlanChangeCheck(context.Background(), tenant, domain.PlanStarter); !domain.HasCode(err, domain.ErrInternal) {
+		t.Errorf("I-18 400: %v", err)
+	}
+	if _, err := NewCore(s400.URL, time.Second).SeatUsage(context.Background(), tenant); !domain.HasCode(err, domain.ErrIAMUnavailable) {
+		t.Errorf("I-11 400: %v", err)
+	}
 	// Unreachable and timeout → 503.
 	if _, err := NewCore("http://127.0.0.1:1", time.Second).SeatUsage(context.Background(), tenant); !domain.HasCode(err, domain.ErrIAMUnavailable) {
 		t.Errorf("unreachable: %v", err)

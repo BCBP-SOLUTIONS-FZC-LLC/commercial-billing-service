@@ -4,6 +4,7 @@ package flows_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -177,6 +178,256 @@ func TestAbandonedCheckout(t *testing.T) {
 	}
 	if n := scalar[int](t, `SELECT count(*) FROM outbox_events WHERE tenant_id = $1`, tenant); n != 0 {
 		t.Fatalf("events %d", n)
+	}
+}
+
+// §9.4: invoice.paid processed before checkout.session.completed (Stripe
+// often creates it first, and BIL-PAY-5 only orders rows in processing) is
+// never a final ignored outcome. It resolves the subscription from the
+// billing_subscription_id Billing set in the provider subscription's
+// metadata, links it and confirms the payment; without usable metadata it
+// is ignored (no Billing subscription can ever match it). The later
+// completion is then a no-op link.
+func TestBIL_PAY_5_OutOfOrderConversionPayment(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant := newTenant()
+	res, err := e.svc.StartCheckout(ctx, owner, tenant, app.CheckoutRequest{Plan: "pro", Interval: "month", LicensedSeats: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := res.BillingSubscriptionID
+	ev, cur := firstInvoicePaid(sub, e.now.Truncate(time.Second), 5)
+
+	// No metadata: every provider subscription Billing creates carries
+	// billing_subscription_id, so none can ever be linked to this one
+	// (rev 0.60): ignored unknown_subscription, nothing written.
+	_, err = e.handle(t, tenant, app.FirstInvoicePaid{S: e.svc}, ev, cur)
+	var ignored *port.IgnoredEvent
+	if !errors.As(err, &ignored) || ignored.Reason != "unknown_subscription" {
+		t.Fatalf("unlinked without metadata: %v", err)
+	}
+	if st := scalar[string](t, `SELECT status::text FROM subscriptions WHERE billing_subscription_id = $1`, sub); st != "incomplete" {
+		t.Fatalf("status %s", st)
+	}
+
+	// With the metadata Billing set: linked and confirmed.
+	cur.Fields["billing_subscription_id"] = sub
+	if out, err := e.handle(t, tenant, app.FirstInvoicePaid{S: e.svc}, ev, cur); err != nil || out != "applied:conversion_payment" {
+		t.Fatalf("paid first: %s %v", out, err)
+	}
+	if st := scalar[string](t, `SELECT status::text||'/'||provider_subscription_id FROM subscriptions WHERE billing_subscription_id = $1`, sub); st != "active/sub_"+sub {
+		t.Fatalf("after invoice.paid %s", st)
+	}
+	if n := scalar[int](t, `SELECT count(*) FROM conversion_sagas WHERE billing_subscription_id = $1 AND state = 'rp_convert_pending'`, sub); n != 1 {
+		t.Fatalf("sagas %d", n)
+	}
+	// The confirmed payment completed the session (purchase-expiry can no
+	// longer expire it); the later checkout.session.completed is a no-op.
+	if st := scalar[string](t, `SELECT status FROM checkout_sessions WHERE billing_subscription_id = $1`, sub); st != "completed" {
+		t.Fatalf("session after invoice.paid %s", st)
+	}
+	e.now = e.now.Add(48 * time.Hour)
+	if _, err := e.svc.ExpireStale(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cev, ccur := checkoutCompleted(sub)
+	_, err = e.handle(t, tenant, app.CheckoutCompleted{S: e.svc}, cev, ccur)
+	if !errors.As(err, &ignored) || ignored.Reason != "already_completed" {
+		t.Fatalf("completed later: %v", err)
+	}
+	if n := scalar[int](t, `SELECT count(*) FROM conversion_sagas WHERE billing_subscription_id = $1`, sub); n != 1 {
+		t.Fatalf("%d sagas", n)
+	}
+	drainSagas(t, e)
+}
+
+// §8.1.1 / BIL-OPS-6: a checkout.session.completed for a session Billing
+// marked expired is parked (failed:checkout_superseded, SEV-2, the operator
+// cancels and refunds) only when the session's subscription is ended or
+// linked to another provider subscription. A completion of the provider
+// subscription already linked and paid (invoice.paid handled first, the
+// session expired by an earlier build of purchase-expiry) is a no-op:
+// never a refund of a live paying customer.
+func TestBIL_OPS_6_ExpiredSessionCompletionParkedOnlyWhenSuperseded(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant := newTenant()
+	res, err := e.svc.StartCheckout(ctx, owner, tenant, app.CheckoutRequest{Plan: "pro", Interval: "month", LicensedSeats: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := res.BillingSubscriptionID
+	ev, cur := firstInvoicePaid(sub, e.now.Truncate(time.Second), 3)
+	cur.Fields["billing_subscription_id"] = sub
+	if out, err := e.handle(t, tenant, app.FirstInvoicePaid{S: e.svc}, ev, cur); err != nil || out != "applied:conversion_payment" {
+		t.Fatalf("paid: %s %v", out, err)
+	}
+	mustNoErr(t, sql(ctx, `UPDATE checkout_sessions SET status = 'expired' WHERE billing_subscription_id = $1::uuid`, sub))
+
+	cev, ccur := checkoutCompleted(sub)
+	_, err = e.handle(t, tenant, app.CheckoutCompleted{S: e.svc}, cev, ccur)
+	var ignored *port.IgnoredEvent
+	if !errors.As(err, &ignored) || ignored.Reason != "already_linked" {
+		t.Fatalf("completion of the linked subscription: %v", err)
+	}
+	if st := scalar[string](t, `SELECT status::text FROM subscriptions WHERE billing_subscription_id = $1`, sub); st != "active" {
+		t.Fatalf("subscription %s", st)
+	}
+
+	// The same expired session completed with another provider subscription.
+	ccur.Fields["subscription"] = "sub_other"
+	_, err = e.handle(t, tenant, app.CheckoutCompleted{S: e.svc}, cev, ccur)
+	var parked *port.ParkedEvent
+	if !errors.As(err, &parked) || parked.Reason != "checkout_superseded" {
+		t.Fatalf("completion with another provider subscription: %v", err)
+	}
+	drainSagas(t, e)
+}
+
+// §8.15 / BIL-PAY-5: an invoice.paid of a provider subscription Billing no
+// longer links (a late payment on the subscription a B-P14 reactivation
+// replaced) is ignored with superseded_provider_subscription, not retried
+// to SEV-3; the first invoice of a cancelled subscription's new provider
+// subscription (the reactivation's checkout completion not processed yet)
+// still waits for its link (retryable).
+func TestBIL_PAY_5_UnlinkedInvoiceOfReplacedProviderSubscription(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant := newTenant()
+	res, err := e.svc.StartCheckout(ctx, owner, tenant, app.CheckoutRequest{Plan: "pro", Interval: "month", LicensedSeats: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := res.BillingSubscriptionID
+	ev, cur := firstInvoicePaid(sub, e.now.Truncate(time.Second), 2)
+	cur.Fields["billing_subscription_id"] = sub
+	if out, err := e.handle(t, tenant, app.FirstInvoicePaid{S: e.svc}, ev, cur); err != nil || out != "applied:conversion_payment" {
+		t.Fatalf("paid: %s %v", out, err)
+	}
+
+	late := cur
+	late.Ref.ID = "in_late"
+	late.Fields = map[string]any{"subscription": "sub_old", "billing_reason": "subscription_cycle", "billing_subscription_id": sub}
+	_, err = e.handle(t, tenant, app.FirstInvoicePaid{S: e.svc}, ev, late)
+	var ignored *port.IgnoredEvent
+	if !errors.As(err, &ignored) || ignored.Reason != "superseded_provider_subscription" {
+		t.Fatalf("late payment on a replaced provider subscription: %v", err)
+	}
+
+	mustNoErr(t, sql(ctx, `UPDATE subscriptions SET status = 'cancelled', cancelled_at = now(), cancel_reason = 'customer'
+		WHERE billing_subscription_id = $1::uuid`, sub))
+	react := late
+	react.Fields = map[string]any{"subscription": "sub_new", "billing_reason": "subscription_create", "billing_subscription_id": sub}
+	_, err = e.handle(t, tenant, app.FirstInvoicePaid{S: e.svc}, ev, react)
+	if errors.As(err, &ignored) || !domain.HasCode(err, domain.ErrSubscriptionNotFound) {
+		t.Fatalf("reactivation's first invoice before its link: %v", err)
+	}
+	drainSagas(t, e)
+}
+
+// drainSagas advances the sagas a test leaves due (RP-3 200), so a later
+// test's scripted RP-3 answers reach its own saga (the database is shared).
+func drainSagas(t *testing.T, e *env) {
+	t.Helper()
+	if _, err := e.svc.RunSagas(context.Background(), 100); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// checkout.session.completed whose re-read session shows its first invoice
+// already paid confirms the payment itself (BIL-PAY-4, §9.4), so a lost or
+// parked invoice.paid cannot leave a paid conversion incomplete; the later
+// invoice.paid starts no second saga (BIL-SAGA-2).
+func TestBIL_PAY_4_CheckoutCompletedWithPaidInvoice(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant := newTenant()
+	res, err := e.svc.StartCheckout(ctx, owner, tenant, app.CheckoutRequest{Plan: "pro", Interval: "month", LicensedSeats: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := res.BillingSubscriptionID
+	start := e.now.Truncate(time.Second)
+	cev, ccur := checkoutCompleted(sub)
+	ccur.Fields["invoice_status"], ccur.Fields["invoice_line_period_start"] = "paid", start
+	ccur.Fields["invoice_line_period_end"], ccur.Fields["invoice_line_quantity"] = start.AddDate(0, 1, 0), int64(6)
+	if out, err := e.handle(t, tenant, app.CheckoutCompleted{S: e.svc}, cev, ccur); err != nil || out != "applied:conversion_payment" {
+		t.Fatalf("completed: %s %v", out, err)
+	}
+	if st := scalar[string](t, `SELECT s.status::text||'/'||i.quantity FROM subscriptions s JOIN subscription_items i USING (billing_subscription_id)
+		WHERE s.billing_subscription_id = $1`, sub); st != "active/6" {
+		t.Fatalf("after completion %s", st)
+	}
+	ev, cur := firstInvoicePaid(sub, start, 6)
+	_, _ = e.handle(t, tenant, app.FirstInvoicePaid{S: e.svc}, ev, cur)
+	if n := scalar[int](t, `SELECT count(*) FROM conversion_sagas WHERE billing_subscription_id = $1`, sub); n != 1 {
+		t.Fatalf("%d sagas", n)
+	}
+	drainSagas(t, e)
+}
+
+// §8.1.1: a B-P2 with other content expires the open session at the
+// provider (outside the transaction, key from Billing ids) before replacing
+// it. A completion or payment of a session Billing replaced is never linked
+// to the ended subscription: the callback is parked for an operator
+// decision (failed, no retry). A session the customer already completed is
+// not replaced (409 SUBSCRIPTION_ALREADY_EXISTS).
+func TestBIL_CONC_2_SupersededCheckoutExpiredAtProvider(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant := newTenant()
+	first, err := e.svc.StartCheckout(ctx, owner, tenant, app.CheckoutRequest{Plan: "pro", Interval: "month", LicensedSeats: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Already completed at the provider → refused, nothing replaced.
+	e.stripe.expireErr = port.ErrCheckoutCompleted
+	if _, err := e.svc.StartCheckout(ctx, owner, tenant, app.CheckoutRequest{Plan: "enterprise", Interval: "year", LicensedSeats: 2}); !domain.HasCode(err, domain.ErrSubscriptionAlreadyExists) {
+		t.Fatalf("completed session replaced: %v", err)
+	}
+	if st := scalar[string](t, `SELECT status::text FROM subscriptions WHERE billing_subscription_id = $1`, first.BillingSubscriptionID); st != "incomplete" {
+		t.Fatalf("first subscription %s", st)
+	}
+	e.stripe.expireErr = nil
+	second, err := e.svc.StartCheckout(ctx, owner, tenant, app.CheckoutRequest{Plan: "enterprise", Interval: "year", LicensedSeats: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "ExpireCheckout cs_" + first.BillingSubscriptionID + " bsub:" + first.BillingSubscriptionID + ":expire"
+	if got := e.stripe.called("ExpireCheckout"); len(got) != 2 || got[1] != want {
+		t.Fatalf("expire calls %v, want %q", got, want)
+	}
+	// Same content again: reused, nothing expired.
+	if _, err := e.svc.StartCheckout(ctx, owner, tenant, app.CheckoutRequest{Plan: "enterprise", Interval: "year", LicensedSeats: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.stripe.called("ExpireCheckout"); len(got) != 2 {
+		t.Fatalf("reuse expired a session: %v", got)
+	}
+
+	// The replaced session completes anyway (a race at the provider).
+	cev, ccur := checkoutCompleted(first.BillingSubscriptionID)
+	_, err = e.handle(t, tenant, app.CheckoutCompleted{S: e.svc}, cev, ccur)
+	var parked *port.ParkedEvent
+	if !errors.As(err, &parked) || parked.Reason != "checkout_superseded" {
+		t.Fatalf("superseded completion: %v", err)
+	}
+	ev, cur := firstInvoicePaid(first.BillingSubscriptionID, e.now, 2)
+	cur.Fields["billing_subscription_id"] = first.BillingSubscriptionID
+	_, err = e.handle(t, tenant, app.FirstInvoicePaid{S: e.svc}, ev, cur)
+	if !errors.As(err, &parked) || parked.Reason != "paid_after_end" {
+		t.Fatalf("superseded payment: %v", err)
+	}
+	if st := scalar[string](t, `SELECT status::text||'/'||coalesce(provider_subscription_id, '') FROM subscriptions WHERE billing_subscription_id = $1`,
+		first.BillingSubscriptionID); st != "ended/" {
+		t.Fatalf("replaced subscription %s", st)
+	}
+	if st := scalar[string](t, `SELECT status::text FROM subscriptions WHERE billing_subscription_id = $1`, second.BillingSubscriptionID); st != "incomplete" {
+		t.Fatalf("replacement %s", st)
+	}
+	if n := scalar[int](t, `SELECT count(*) FROM conversion_sagas WHERE tenant_id = $1`, tenant); n != 0 {
+		t.Fatalf("sagas %d", n)
 	}
 }
 

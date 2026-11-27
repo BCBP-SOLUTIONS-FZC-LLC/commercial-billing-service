@@ -62,6 +62,34 @@ func TestCreateHostedCheckoutModes(t *testing.T) {
 	wantNoForm(t, r, "expires_at")
 }
 
+// A superseded B-P2 session is expired at Stripe (§8.1.1); a session that
+// is no longer open is re-read: expired is success, complete is
+// ErrCheckoutCompleted.
+func TestExpireCheckout(t *testing.T) {
+	ctx := context.Background()
+	f, a := newFakeStripe(t)
+	f.on("POST", "/v1/checkout/sessions/cs_1/expire", 200, map[string]any{"id": "cs_1", "object": "checkout.session", "status": "expired"})
+	if err := a.ExpireCheckout(ctx, "cs_1", "bsub:s1:expire"); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.only("POST", "/v1/checkout/sessions/cs_1/expire"); r.Idem != "bsub:s1:expire" {
+		t.Errorf("idempotency key %q", r.Idem)
+	}
+	for status, want := range map[string]error{"expired": nil, "complete": port.ErrCheckoutCompleted} {
+		f, a := newFakeStripe(t)
+		f.on("POST", "/v1/checkout/sessions/cs_2/expire", 400, apiErr("invalid_request_error", "checkout_session_not_open"))
+		f.on("GET", "/v1/checkout/sessions/cs_2", 200, map[string]any{"id": "cs_2", "object": "checkout.session", "status": status})
+		if err := a.ExpireCheckout(ctx, "cs_2", "k"); !errors.Is(err, want) || (want == nil && err != nil) {
+			t.Errorf("%s: %v, want %v", status, err, want)
+		}
+	}
+	f, a = newFakeStripe(t)
+	f.on("POST", "/v1/checkout/sessions/cs_3/expire", 500, unavailable)
+	if err := a.ExpireCheckout(ctx, "cs_3", "k"); !errors.Is(err, port.ErrProviderUnavailable) {
+		t.Errorf("outage: %v", err)
+	}
+}
+
 func TestCreatePaymentMethodSetupRequest(t *testing.T) {
 	f, a := newFakeStripe(t)
 	exp := fixedNow.Add(time.Hour)
@@ -350,7 +378,7 @@ func TestChargeOneOffByAmount(t *testing.T) {
 		t.Fatalf("got %+v %v", res, err)
 	}
 	ir := f.only("POST", "/v1/invoices")
-	wantForm(t, ir, "customer", "cus_1", "collection_method", "charge_automatically", "auto_advance", "true", "metadata[purpose]", "token_addon")
+	wantForm(t, ir, "customer", "cus_1", "collection_method", "charge_automatically", "auto_advance", "false", "metadata[purpose]", "token_addon")
 	wantNoForm(t, ir, "description")
 	item := f.only("POST", "/v1/invoiceitems")
 	wantForm(t, item, "customer", "cus_1", "invoice", "in_8", "amount", "1999", "currency", "aed")
@@ -485,6 +513,45 @@ func TestFetchCurrentFields(t *testing.T) {
 		if err != nil || st.Fields["subscription"] != "" || st.Fields["kind"] != string(domain.InvoiceManual) {
 			t.Fatalf("got %+v %v", st, err)
 		}
+	})
+	t.Run("invoice names its Billing subscription", func(t *testing.T) {
+		f, a := newFakeStripe(t)
+		f.on("GET", "/v1/invoices/in_2", 200, invoice("in_2", "paid", map[string]any{"billing_reason": "subscription_create",
+			"parent": map[string]any{"type": "subscription_details", "subscription_details": map[string]any{
+				"subscription": "sub_9", "metadata": map[string]any{"billing_subscription_id": "bs_1", "tenant_id": "t1"}}}}))
+		st, err := a.FetchCurrent(ctx, domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: "in_2"})
+		if err != nil || st.Fields["subscription"] != "sub_9" || st.Fields["billing_subscription_id"] != "bs_1" {
+			t.Fatalf("got %+v %v", st, err)
+		}
+	})
+	t.Run("invoice carries its total and charged lines (BIL-PAY-6, BIL-PAY-7)", func(t *testing.T) {
+		f, a := newFakeStripe(t)
+		f.on("GET", "/v1/invoices/in_3", 200, invoice("in_3", "paid", map[string]any{"billing_reason": "subscription_update",
+			"amount_paid": 4000, "total": 4600, "lines": map[string]any{"object": "list", "url": "/v1/invoices/in_3/lines", "data": []any{
+				map[string]any{"id": "il_1", "object": "line_item", "amount": -23000, "quantity": 10},
+				map[string]any{"id": "il_2", "object": "line_item", "amount": 27600, "quantity": 12,
+					"pricing": map[string]any{"type": "price_details", "price_details": map[string]any{"price": "price_pro"}}}}}}))
+		st, err := a.FetchCurrent(ctx, domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: "in_3"})
+		qs, _ := st.Fields["charged_line_quantities"].([]int64)
+		prices, _ := st.Fields["charged_line_prices"].([]string)
+		if err != nil || st.Fields["total_minor"] != int64(4600) || st.Fields["amount_paid_minor"] != int64(4000) ||
+			len(qs) != 1 || qs[0] != 12 || len(prices) != 1 || prices[0] != "price_pro" {
+			t.Fatalf("got %+v %v", st, err)
+		}
+	})
+	t.Run("subscription checkout session carries its first invoice", func(t *testing.T) {
+		f, a := newFakeStripe(t)
+		f.on("GET", "/v1/checkout/sessions/cs_2", 200, map[string]any{"id": "cs_2", "object": "checkout.session", "status": "complete",
+			"mode": "subscription", "subscription": "sub_2",
+			"invoice": invoice("in_7", "paid", map[string]any{"lines": list("/v1/invoices/in_7/lines", map[string]any{
+				"id": "il_1", "object": "line_item", "quantity": 4,
+				"period": map[string]any{"start": fixedNow.Unix(), "end": fixedNow.AddDate(0, 1, 0).Unix()}})})})
+		st, err := a.FetchCurrent(ctx, domain.ProviderObjectRef{Kind: domain.ObjectCheckoutSession, ID: "cs_2"})
+		if err != nil || st.Fields["invoice"] != "in_7" || st.Fields["invoice_status"] != "paid" || st.Fields["invoice_line_quantity"] != int64(4) ||
+			!st.Fields["invoice_line_period_start"].(time.Time).Equal(fixedNow) || st.Fields["subscription"] != "sub_2" {
+			t.Fatalf("got %+v %v", st, err)
+		}
+		wantForm(t, f.only("GET", "/v1/checkout/sessions/cs_2"), "expand[1]", "invoice")
 	})
 	t.Run("setup checkout session", func(t *testing.T) {
 		f, a := newFakeStripe(t)

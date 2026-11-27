@@ -133,6 +133,22 @@ func TestRP3AnswerHandling(t *testing.T) {
 	}
 }
 
+// RP's documented transient answers (internal_handler.go RP-3: 409
+// optimistic_lock_conflict, 500, 503 token_service_unavailable, a gateway
+// 504) keep the saga pending with backoff instead of failing it.
+func TestBIL_SAGA_1_RP3TransientAnswersRetry(t *testing.T) {
+	for _, a := range []RP3Answer{{409, "optimistic_lock_conflict"}, {500, ""}, {500, "INTERNAL"}, {503, "token_service_unavailable"}, {504, ""}} {
+		if got := ClassifyRP3(a); got != RP3Retry {
+			t.Errorf("%d %s → %s, want retry", a.Status, a.ErrorCode, got)
+		}
+	}
+	for _, a := range []RP3Answer{{409, "realm_name_unavailable"}, {409, "credential_replay_expired"}, {409, ""}} {
+		if got := ClassifyRP3(a); got != RP3Fail {
+			t.Errorf("%d %s → %s, want fail", a.Status, a.ErrorCode, got)
+		}
+	}
+}
+
 func TestBIL_SAGA_2_RP3Key(t *testing.T) {
 	if got := RP3IdempotencyKey("t1", "s1"); got != "convert:t1:s1" {
 		t.Fatalf("got %q", got)

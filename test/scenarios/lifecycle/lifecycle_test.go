@@ -312,6 +312,19 @@ func TestCycleInvoicePaidEdges(t *testing.T) {
 		domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectSubscription, ID: "sub_" + s2}, Status: "canceled"}); err != nil {
 		t.Fatal(err)
 	}
+	// A late payment of an old cycle invoice of the deleted provider
+	// subscription (dunning exhausted) does not reactivate (§8.9): the
+	// invoice is mirrored, no transition, no TenantReactivated.
+	stale := invoiceState("in_old_"+s2, s2, "paid", "subscription_cycle", start, int64(4))
+	if out, err := e.handle(t2, h, ev, stale); err != nil || out != "applied:invoice_mirrored" {
+		t.Fatalf("old invoice: %s %v", out, err)
+	}
+	if status(t, s2) != "cancelled" || len(events(t, t2)) != 1 {
+		t.Fatalf("old invoice reactivated: %s %v", status(t, s2), events(t, t2))
+	}
+	if got := scalar[string](t, `SELECT status::text FROM invoices WHERE provider_invoice_id = $1`, "in_old_"+s2); got != "paid" {
+		t.Fatalf("old invoice mirror %s", got)
+	}
 	react := invoiceState("in_re_"+s2, s2, "paid", "subscription_create", e.now, int64(6))
 	for _, c := range []struct {
 		name string

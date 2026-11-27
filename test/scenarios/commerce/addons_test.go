@@ -97,6 +97,12 @@ func TestAddonPurchaseOutcomes(t *testing.T) {
 	if ext(err, "decline_reason") != "card_declined" || row("k-add-dcl01") != "failed//false" {
 		t.Fatalf("declined %v %s", ext(err, "decline_reason"), row("k-add-dcl01"))
 	}
+	// The invoice (auto_advance) is voided so the provider never collects it
+	// for a failed purchase (§8.5.1, §8.7).
+	dcl := scalar[string](t, `SELECT purchase_id::text FROM quota_addon_purchases WHERE idempotency_key = 'k-add-dcl01'`)
+	if n := len(e.p.called("VoidInvoice in_addon:" + dcl + " addon:" + dcl + ":void")); n != 1 {
+		t.Fatalf("void %v", e.p.called("VoidInvoice"))
+	}
 	_, err = buy(withKey(owner, "k-add-dcl02"))
 	isCode(t, "declined outcome", err, domain.ErrPaymentDeclined)
 	if ext(err, "decline_reason") != "processing_error" || row("k-add-dcl02") != "failed//false" {
@@ -145,7 +151,7 @@ func TestAddonPurchaseOutcomes(t *testing.T) {
 	e.p.on("ChargeOneOff", answer{before: func(key string) {
 		id, inv := strings.TrimPrefix(key, "addon:"), "in_"+key
 		exec(t, `UPDATE quota_addon_purchases SET provider_invoice_id = $2 WHERE purchase_id = $1::uuid`, id, inv)
-		cur := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: inv}, Status: "paid", Fields: map[string]any{}}
+		cur := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: inv}, Status: "paid", Fields: paidFields(t, "quota_addon_purchases", id)}
 		if out, err := e.handle(tenant, app.AddonInvoicePaid{S: e.svc}, callback("evt_add_race_"+id, "invoice.paid", domain.KindInvoicePaid), cur); err != nil || out != "applied:addon_purchase" {
 			t.Errorf("racing callback %s %v", out, err)
 		}
@@ -219,7 +225,7 @@ func TestAddonReadsAndCallback(t *testing.T) {
 
 	h := app.AddonInvoicePaid{S: e.svc}
 	ev := callback("evt_add_paid", "invoice.paid", domain.KindInvoicePaid)
-	cur := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: "in_addon:" + ids[1]}, Status: "paid", Fields: map[string]any{}}
+	cur := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: "in_addon:" + ids[1]}, Status: "paid", Fields: paidFields(t, "quota_addon_purchases", ids[1])}
 	other := cur
 	other.Ref.ID = "in_unrelated"
 	_, err = e.handle(tenant, h, ev, other)

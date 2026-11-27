@@ -13,26 +13,28 @@ import (
 )
 
 // BIL-OPS-5: an overdue saga raises BillingConversionSagaOverdue (SEV-2)
-// once; a failure selecting due or overdue sagas fails the run.
+// once; a failure selecting overdue sagas fails the run before any alert;
+// a failure selecting due sagas fails the run after the alert (the overdue
+// check runs first).
 func TestSagaSweeperAlertsOnceAndFailsOnSelection(t *testing.T) {
 	e := newEnv(t)
 	tenant, sub := e.active("pro", 3)
 	e.exec(`UPDATE conversion_sagas SET state = 'awaiting_tenant_converted', confirmed_at = NULL,
 		payment_confirmed_at = now() - interval '1 hour', alerted_at = NULL WHERE billing_subscription_id = $1`, sub)
-	e.f.fail("Sagas.Due", 0)
-	e.runErr(e.svc.SweepSagas)
-	e.f.clear()
 	e.f.fail("Jobs.OverdueSagas", 0)
 	e.runErr(e.svc.SweepSagas)
 	e.f.clear()
 	if n := scalar[int](t, `SELECT count(*) FROM conversion_sagas WHERE tenant_id = $1 AND alerted_at IS NOT NULL`, tenant); n != 0 {
 		t.Fatal("alerted by a failed run")
 	}
+	e.f.fail("Sagas.Due", 0)
+	e.runErr(e.svc.SweepSagas)
+	e.f.clear()
+	if !e.log.has("ERROR BillingConversionSagaOverdue") {
+		t.Fatal("SEV-2 not logged before the saga re-runs")
+	}
 
 	e.run(e.svc.SweepSagas)
-	if !e.log.has("ERROR BillingConversionSagaOverdue") {
-		t.Fatal("SEV-2 not logged")
-	}
 	if e.met.get("sagas_overdue:1") == 0 {
 		t.Fatalf("gauge %v", e.met.counts)
 	}
@@ -76,9 +78,17 @@ func TestSeatProjectionFailuresAndRepeatedMismatch(t *testing.T) {
 	if resyncs() != 1 || !e.log.has("WARN seat projection mismatch; resync queued") {
 		t.Fatalf("first mismatch: %d resyncs", resyncs())
 	}
+	// The per-run gauge BillingSeatProjectionDrift reads: one mismatch, no
+	// repeat; then the repeat within 24 h.
+	if e.met.get("seat_projection_run:1:0") != 1 {
+		t.Fatalf("first run gauge %v", e.met.counts)
+	}
 	e.run(e.svc.CheckSeatProjection)
 	if !e.log.has("ERROR seat projection mismatch again within 24 h") {
 		t.Fatal("second mismatch not SEV-3")
+	}
+	if e.met.get("seat_projection_run:1:1") != 1 {
+		t.Fatalf("repeat run gauge %v", e.met.counts)
 	}
 }
 

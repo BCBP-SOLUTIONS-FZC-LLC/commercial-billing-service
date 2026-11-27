@@ -162,13 +162,7 @@ func (s *Service) purchaseSeats(ctx context.Context, c Caller, tenantID string, 
 		if code == "" {
 			code = res.Outcome.DeclineCode
 		}
-		_ = s.locked(ctx, tenantID, func(ctx context.Context) error {
-			p.Status = domain.PurchaseFailed
-			return s.SeatPurchases.Update(ctx, p)
-		})
-		s.metrics().SeatChange("purchase", "declined")
-		s.metrics().PaymentFailure(declineReason(code))
-		return PurchaseView{}, domain.NewError(domain.ErrPaymentDeclined, "payment declined; no seats added").With("decline_reason", declineReason(code))
+		return s.seatsDeclined(ctx, c, sub, p, res.Invoice.ProviderInvoiceID, code)
 	case errors.As(err, &action) || err == nil && res.Outcome.Status == port.PaymentRequiresAction:
 		secret := action.ClientSecret
 		if secret == "" {
@@ -210,6 +204,48 @@ func (s *Service) purchaseSeats(ctx context.Context, c Caller, tenantID string, 
 		return PurchaseView{}, err
 	}
 	return seatView(p), nil
+}
+
+// seatsDeclined is §8.5.1 "declined → failed": the open proration invoice
+// is voided outside the transaction first (the pending update then lapses),
+// so a later collection cannot charge for a failed purchase. If the void
+// fails the purchase stays pending and purchase-expiry voids it; if the
+// invoice turns out paid the purchase is confirmed.
+func (s *Service) seatsDeclined(ctx context.Context, c Caller, sub domain.Subscription, p domain.SeatPurchase, invoiceID, code string) (PurchaseView, error) {
+	if p.CreatedAt.IsZero() { // the intent just committed
+		p.CreatedAt = s.now()
+	}
+	inv, verr := s.closeInvoice(ctx, sub.Provider, nonEmpty(invoiceID), seatTarget(deref(sub.ProviderSubscriptionID), p), "seatpur:"+p.PurchaseID+":void")
+	confirmed := false
+	_ = s.locked(ctx, p.TenantID, func(ctx context.Context) error {
+		cur, found, err := s.SeatPurchases.Get(ctx, p.PurchaseID)
+		if err != nil || !found || !cur.Status.Open() {
+			return err
+		}
+		if err := s.recheckInvoice(ctx, p.TenantID, p.PurchaseID, &inv); err != nil {
+			return err
+		}
+		if inv.ID != "" {
+			cur.ProviderInvoiceID = &inv.ID
+		}
+		switch {
+		case inv.Paid:
+			if err := s.confirmSeats(ctx, &cur, "api:B-P7", actorOf(c), nil, metaFor(c)); err != nil {
+				return err
+			}
+			p, confirmed = cur, true
+			return nil
+		case verr == nil:
+			cur.Status, cur.ClientAction = domain.PurchaseFailed, nil
+		}
+		return s.SeatPurchases.Update(ctx, cur)
+	})
+	if confirmed {
+		return seatView(p), nil
+	}
+	s.metrics().SeatChange("purchase", "declined")
+	s.metrics().PaymentFailure(declineReason(code))
+	return PurchaseView{}, domain.NewError(domain.ErrPaymentDeclined, "payment declined; no seats added").With("decline_reason", declineReason(code))
 }
 
 // confirmSeats is §8.5 step 4: purchase confirmed, seat item quantity,
@@ -324,6 +360,13 @@ func (h SeatInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain.
 		return "", err
 	}
 	if !found {
+		// Billing did not record the invoice id (a provider error after the
+		// change): match the open purchase on the proration invoice.
+		if p, found, err = s.seatByProrationInvoice(ctx, tenantID, cur); err != nil {
+			return "", err
+		}
+	}
+	if !found {
 		if h.Next == nil {
 			return "", &port.IgnoredEvent{Reason: "no_handler"}
 		}
@@ -332,12 +375,37 @@ func (h SeatInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain.
 	if !p.Status.Open() {
 		return "", &port.IgnoredEvent{Reason: "purchase_" + string(p.Status)}
 	}
+	if p.DeferralReason == nil && !invoicePaysFor(cur, domain.Money{AmountMinor: p.AmountMinor, Currency: p.Currency}) {
+		return "", s.parkMismatchedPayment(ctx, tenantID, port.PurchaseKindSeats, p.PurchaseID, ev, cur) // BIL-PAY-7
+	}
 	if err := s.confirmSeats(ctx, &p, "webhook:"+ev.EventType, domain.CommercialSystemPrincipal, eventRef(ev),
 		webhookMeta()); err != nil {
 		return "", err
 	}
 	s.metrics().PurchaseToEvent(port.PurchaseKindSeats, s.now().Sub(ev.ProviderCreatedAt))
 	return "applied:seat_purchase", nil
+}
+
+// seatByProrationInvoice is the open seat purchase without an invoice id
+// that a proration invoice on the tenant's subscription pays (same amount,
+// a charged line for the seats after); the invoice id is then recorded on
+// it. An invoice another purchase or plan change recorded is never matched
+// (BIL-PAY-6).
+func (s *Service) seatByProrationInvoice(ctx context.Context, tenantID string, cur domain.ProviderObjectState) (domain.SeatPurchase, bool, error) {
+	sub, found, err := s.Subs.Live(ctx, tenantID)
+	if err != nil || !found || !isProrationInvoice(cur, sub.ProviderSubscriptionID) {
+		return domain.SeatPurchase{}, false, err
+	}
+	p, found, err := s.SeatPurchases.Open(ctx, sub.BillingSubscriptionID)
+	if err != nil || !found || p.ProviderInvoiceID != nil || p.DeferralReason != nil || !invoiceAmountIs(cur, p.AmountMinor, p.Currency) ||
+		!chargedLinesMatch(cur, p.SeatsAfter, "") {
+		return domain.SeatPurchase{}, false, err
+	}
+	if claimed, err := s.invoiceClaimed(ctx, tenantID, cur.Ref.ID, p.PurchaseID); err != nil || claimed {
+		return domain.SeatPurchase{}, false, err
+	}
+	p.ProviderInvoiceID = &cur.Ref.ID
+	return p, true, nil
 }
 
 // ── Scheduled reduction (§8.6.1) ───────────────────────────────────────────

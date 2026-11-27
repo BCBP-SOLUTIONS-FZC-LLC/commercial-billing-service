@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/pkg/requestctx"
 )
 
 // A callee's error is read through platform-gincommon's problem decoder
@@ -37,5 +39,24 @@ func TestCallReadsProblemErrorCode(t *testing.T) {
 				t.Errorf("Accept = %q", accept)
 			}
 		})
+	}
+}
+
+// The inbound request's correlation ID is forwarded as X-Request-ID; a call
+// without one (a background worker) sends none.
+func TestCallForwardsRequestID(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("X-Request-ID"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	for _, ctx := range []context.Context{requestctx.WithRequestID(context.Background(), "req-42"), context.Background()} {
+		if _, err := Call(ctx, New("test", time.Second), http.MethodGet, srv.URL, "t1", "", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(got) != 2 || got[0] != "req-42" || got[1] != "" {
+		t.Fatalf("X-Request-ID sent %q", got)
 	}
 }

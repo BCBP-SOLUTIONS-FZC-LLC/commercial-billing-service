@@ -426,6 +426,8 @@ type provider struct {
 	mu            sync.Mutex
 	calls         []string
 	invoiceStatus string                // FetchCurrent of an invoice (default "open")
+	invoicePaid   map[string]int64      // amount paid by invoice id; default: what its purchase charged (in_<provider key>)
+	expireErr     error                 // ExpireCheckout's answer (default nil: expired)
 	change        []port.PaymentOutcome // ChangePrice / ChangeQuantity / ChargeOneOff outcomes (default paid)
 }
 
@@ -469,9 +471,32 @@ func (p *provider) FetchCurrent(ctx context.Context, obj domain.ProviderObjectRe
 		if st == "" {
 			st = "open"
 		}
-		return domain.ProviderObjectState{Ref: obj, Status: st}, nil
+		return domain.ProviderObjectState{Ref: obj, Status: st, Fields: map[string]any{"currency": "USD", "amount_paid_minor": p.paidAmount(ctx, obj.ID)}}, nil
 	}
 	return p.Provider.FetchCurrent(ctx, obj)
+}
+
+// paidAmount is what invoice id paid: invoicePaid[id], else the amount of
+// the purchase or plan change its id names ("in_seatpur:<id>",
+// "in_addon:<id>", "in_planchg:<id>"), else 0.
+func (p *provider) paidAmount(ctx context.Context, id string) int64 {
+	p.mu.Lock()
+	v, ok := p.invoicePaid[id]
+	p.mu.Unlock()
+	if ok {
+		return v
+	}
+	for prefix, q := range map[string]string{
+		"in_seatpur:": `SELECT amount_minor FROM seat_purchases WHERE purchase_id = $1::uuid`,
+		"in_addon:":   `SELECT amount_minor FROM quota_addon_purchases WHERE purchase_id = $1::uuid`,
+		"in_planchg:": `SELECT amount_minor FROM plan_change_requests WHERE change_id = $1::uuid`,
+	} {
+		if rest, found := strings.CutPrefix(id, prefix); found {
+			v, _ := testkit.Scalar[int64](ctx, db, q, strings.SplitN(rest, ":", 2)[0])
+			return v
+		}
+	}
+	return 0
 }
 
 func (p *provider) ScheduleAtPeriodEnd(_ context.Context, in port.PeriodEndChange, key string) (port.ScheduleRef, error) {
@@ -539,6 +564,19 @@ func (p *provider) CreateHostedCheckout(_ context.Context, in port.CheckoutInput
 	return port.HostedSession{ProviderSessionID: "cs_" + in.Metadata["billing_subscription_id"], URL: "https://checkout.example/x", ExpiresAt: in.ExpiresAt}, nil
 }
 
+func (p *provider) ExpireCheckout(_ context.Context, id, key string) error {
+	p.rec("ExpireCheckout " + id + " " + key)
+	if err := p.f.hit("prov.ExpireCheckout"); err != nil {
+		return err
+	}
+	return p.expireErr
+}
+
+func (p *provider) DeleteDraftInvoice(_ context.Context, ref port.InvoiceRef) error {
+	p.rec("DeleteDraftInvoice " + ref.ProviderInvoiceID)
+	return p.f.hit("prov.DeleteDraftInvoice")
+}
+
 func (p *provider) CreatePaymentMethodSetup(_ context.Context, in port.SetupInput, key string) (port.HostedSession, error) {
 	p.rec("CreatePaymentMethodSetup " + key)
 	return port.HostedSession{ProviderSessionID: "cs_setup_" + key, URL: "https://checkout.example/setup", ExpiresAt: in.ExpiresAt}, nil
@@ -596,10 +634,13 @@ func (m *metrics) get(k string) int {
 	return m.counts[k]
 }
 
-func (m *metrics) SeatChange(d, o string)                    { m.inc("seat_change:" + d + ":" + o) }
-func (m *metrics) DowngradeBlocked(b string)                 { m.inc("downgrade_blocked:" + b) }
-func (m *metrics) RepricingScheduled(d string)               { m.inc("repricing:" + d) }
-func (m *metrics) SeatProjectionMismatch()                   { m.inc("seat_projection_mismatch") }
+func (m *metrics) SeatChange(d, o string)      { m.inc("seat_change:" + d + ":" + o) }
+func (m *metrics) DowngradeBlocked(b string)   { m.inc("downgrade_blocked:" + b) }
+func (m *metrics) RepricingScheduled(d string) { m.inc("repricing:" + d) }
+func (m *metrics) SeatProjectionMismatch()     { m.inc("seat_projection_mismatch") }
+func (m *metrics) SeatProjectionRun(found, repeats int) {
+	m.inc(fmt.Sprintf("seat_projection_run:%d:%d", found, repeats))
+}
 func (m *metrics) SagasOverdue(n int)                        { m.inc(fmt.Sprintf("sagas_overdue:%d", n)) }
 func (m *metrics) PurchaseToEvent(k string, _ time.Duration) { m.inc("purchase_to_event:" + k) }
 func (m *metrics) WebhookProcessed(_, kind, status string, _ time.Duration) {

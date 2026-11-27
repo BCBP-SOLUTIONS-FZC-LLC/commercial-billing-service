@@ -106,8 +106,13 @@ func TestSeatPurchaseOutcomes(t *testing.T) {
 	e.p.on("ChangeQuantity", answer{outcome: port.PaymentOutcome{Status: port.PaymentDeclined, DeclineCode: "expired_card"}})
 	_, err = buy(withKey(owner, "k-seat-dcl1"), 1)
 	isCode(t, "declined", err, domain.ErrPaymentDeclined)
-	if ext(err, "decline_reason") != "expired_card" || row("k-seat-dcl1") != "failed//" {
+	dcl := scalar[string](t, `SELECT purchase_id::text FROM seat_purchases WHERE idempotency_key = 'k-seat-dcl1'`)
+	if ext(err, "decline_reason") != "expired_card" || row("k-seat-dcl1") != "failed/in_seatpur:"+dcl+"/" {
 		t.Fatalf("declined %v %s", ext(err, "decline_reason"), row("k-seat-dcl1"))
+	}
+	// §8.5.1: the open proration invoice is voided (the pending update lapses).
+	if n := len(e.p.called("VoidInvoice in_seatpur:" + dcl + " seatpur:" + dcl + ":void")); n != 1 {
+		t.Fatalf("void %v", e.p.called("VoidInvoice"))
 	}
 
 	e.p.on("ChangeQuantity", answer{outcome: port.PaymentOutcome{Status: port.PaymentRequiresAction, ClientSecret: "pi_seat"}})
@@ -158,7 +163,7 @@ func TestSeatPurchaseOutcomes(t *testing.T) {
 		id, inv := strings.TrimPrefix(key, "seatpur:"), "in_"+key
 		exec(t, `UPDATE seat_purchases SET provider_invoice_id = $2 WHERE purchase_id = $1::uuid`, id, inv)
 		cur := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: inv}, Status: "paid",
-			Fields: map[string]any{"subscription": "sub_" + sub, "billing_reason": "subscription_update"}}
+			Fields: paidFields(t, "seat_purchases", id, "subscription", "sub_"+sub, "billing_reason", "subscription_update")}
 		if out, err := e.handle(tenant, app.SeatInvoicePaid{S: e.svc}, callback("evt_race_"+id, "invoice.paid", domain.KindInvoicePaid), cur); err != nil || out != "applied:seat_purchase" {
 			t.Errorf("racing callback %s %v", out, err)
 		}
@@ -220,7 +225,7 @@ func TestSeatReadsAndCallback(t *testing.T) {
 	h := app.SeatInvoicePaid{S: e.svc}
 	ev := callback("evt_seat_paid", "invoice.paid", domain.KindInvoicePaid)
 	cur := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: "in_seatpur:" + ids[1]}, Status: "paid",
-		Fields: map[string]any{"subscription": "sub_" + sub, "billing_reason": "subscription_update"}}
+		Fields: paidFields(t, "seat_purchases", ids[1], "subscription", "sub_"+sub, "billing_reason", "subscription_update")}
 	other := cur
 	other.Ref.ID = "in_unrelated"
 	_, err = e.handle(tenant, h, ev, other)

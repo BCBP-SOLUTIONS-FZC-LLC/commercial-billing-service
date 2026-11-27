@@ -138,9 +138,10 @@ func TestBIL_PCI_3_PayloadAllowList(t *testing.T) {
 	a := newTestAdapter(t, false)
 	obj := map[string]any{
 		"id": "in_1", "object": "invoice", "status": "paid", "amount_paid": 6900, "currency": "usd",
-		"customer":               map[string]any{"id": "cus_1", "email": "owner@example.com", "name": "Ada"},
-		"customer_email":         "owner@example.com",
-		"metadata":               map[string]any{"tenant_id": "t1", "billing_subscription_id": "s1"},
+		"customer":       map[string]any{"id": "cus_1", "email": "owner@example.com", "name": "Ada"},
+		"customer_email": "owner@example.com",
+		"metadata": map[string]any{"tenant_id": "t1", "billing_subscription_id": "s1", "purpose": "conversion",
+			"contact_email": "owner@example.com", "note": "Ada"},
 		"payment_method_details": map[string]any{"card": map[string]any{"number": "4242 4242 4242 4242", "last4": "4242"}},
 		"billing_details":        map[string]any{"address": map[string]any{"line1": "1 Street"}},
 	}
@@ -161,6 +162,21 @@ func TestBIL_PCI_3_PayloadAllowList(t *testing.T) {
 	if ev.CustomerRef != "cus_1" || ev.Kind != domain.KindInvoicePaid || ev.Object.ID != "in_1" ||
 		ev.Metadata["tenant_id"] != "t1" || !ev.ProviderCreatedAt.Equal(fixedNow) || ev.ProviderEventID != "evt_1" {
 		t.Errorf("normalised event %+v", ev)
+	}
+	// Only metadata.{tenant_id,billing_subscription_id,purpose,purchase_id,change_id} (§4.2.15).
+	var stored struct {
+		Object struct {
+			Metadata map[string]string `json:"metadata"`
+		} `json:"object"`
+	}
+	if err := json.Unmarshal(ev.Payload, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Object.Metadata) != 3 || stored.Object.Metadata["billing_subscription_id"] != "s1" || stored.Object.Metadata["purpose"] != "conversion" {
+		t.Errorf("ledger metadata %v", stored.Object.Metadata)
+	}
+	if len(ev.Metadata) != 3 || ev.Metadata["note"] != "" || ev.Metadata["contact_email"] != "" {
+		t.Errorf("event metadata %v", ev.Metadata)
 	}
 }
 

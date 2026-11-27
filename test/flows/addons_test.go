@@ -99,6 +99,7 @@ func TestTokenAddonPaymentSession(t *testing.T) {
 	}
 	cur := invoiceState("in_addon:"+res.PurchaseID, "", "paid", "manual", e.now, 1)
 	delete(cur.Fields, "subscription")
+	cur.Fields["amount_paid_minor"] = scalar[int64](t, `SELECT amount_minor FROM quota_addon_purchases WHERE purchase_id = $1`, res.PurchaseID)
 	if out, err := e.handle(t, tenant, paidChain(e.svc), callback("evt_add", "invoice.paid", domain.KindInvoicePaid), cur); err != nil || out != "applied:addon_purchase" {
 		t.Fatalf("paid: %s %v", out, err)
 	}

@@ -80,7 +80,8 @@ func TestUpgradeAsyncAndDeclined(t *testing.T) {
 	inv := scalar[string](t, `SELECT provider_invoice_id FROM plan_change_requests WHERE change_id = $1`, res.ChangeID)
 	paid := domain.PaymentEvent{Provider: "stripe", ProviderEventID: "evt_up", EventType: "invoice.paid", Kind: domain.KindInvoicePaid}
 	cur := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: inv}, Status: "paid",
-		Fields: map[string]any{"subscription": "sub_" + sub, "billing_reason": "subscription_update"}}
+		Fields: map[string]any{"subscription": "sub_" + sub, "billing_reason": "subscription_update", "currency": "USD",
+			"amount_paid_minor": scalar[int64](t, `SELECT amount_minor FROM plan_change_requests WHERE change_id = $1`, res.ChangeID)}}
 	h := app.FirstInvoicePaid{S: e.svc, Next: app.UpgradeInvoicePaid{S: e.svc, Next: app.DowngradeOnCycle{S: e.svc}}}
 	if out, err := e.handle(t, tenant, h, paid, cur); err != nil || out != "applied:plan_upgrade" {
 		t.Fatalf("invoice.paid: %s %v", out, err)

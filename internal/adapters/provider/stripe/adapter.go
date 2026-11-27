@@ -24,7 +24,7 @@ import (
 const Name = "stripe"
 
 // adapterSemver is this adapter's own version; bump it with any mapping change.
-const adapterSemver = "1.0.0"
+const adapterSemver = "1.1.0"
 
 // AdapterVersion is "<adapter semver>+stripeapi.<pinned Stripe API version>" (§3.5).
 var AdapterVersion = adapterSemver + "+stripeapi." + stripego.APIVersion

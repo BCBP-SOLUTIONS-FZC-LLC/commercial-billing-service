@@ -132,6 +132,7 @@ func (p *WebhookProcessor) processOne(ctx context.Context, row domain.LedgerEntr
 		return herr
 	})
 	var ignored *port.IgnoredEvent
+	var parked *port.ParkedEvent
 	switch {
 	case err == nil:
 		if outcome == "" {
@@ -140,6 +141,10 @@ func (p *WebhookProcessor) processOne(ctx context.Context, row domain.LedgerEntr
 		finish(domain.LedgerProcessed, outcome, nil)
 	case errors.As(err, &ignored):
 		finish(domain.LedgerIgnored, "ignored:"+ignored.Reason, nil)
+	case errors.As(err, &parked):
+		// An operator decides (BIL-OPS-6): failed, no retry; the handler
+		// raised its own alert.
+		finish(domain.LedgerFailed, "failed:"+parked.Reason, nil)
 	default:
 		p.retryOrPark(row, err, finish)
 	}

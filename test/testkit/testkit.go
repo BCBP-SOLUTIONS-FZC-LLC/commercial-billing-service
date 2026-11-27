@@ -168,6 +168,8 @@ type Provider struct {
 	calls        []string
 	// Confirm scripts ConfirmInitialPayment answers in order (default: paid).
 	Confirm []port.PaymentOutcome
+	// Found is the invoice FindInvoice returns ("" → none).
+	Found string
 }
 
 // NewProvider returns a fake named name ("stripe").
@@ -275,6 +277,15 @@ func (p *Provider) PreviewQuantityChange(_ context.Context, in port.QuantityChan
 func (p *Provider) ChangeQuantity(_ context.Context, in port.QuantityChange, key string) (port.ChangeResult, error) {
 	p.record(fmt.Sprintf("ChangeQuantity %d->%d %s", in.From, in.To, key))
 	return port.ChangeResult{Invoice: port.InvoiceRef{ProviderInvoiceID: "in_" + key}, Outcome: port.PaymentOutcome{Status: port.PaymentPaid}}, nil
+}
+
+// FindInvoice implements port.PaymentProvider: Found, when set, is the
+// invoice found; otherwise there is none.
+func (p *Provider) FindInvoice(_ context.Context, q port.InvoiceQuery) (port.InvoiceRef, bool, error) {
+	p.record("FindInvoice " + q.PurchaseID + q.Subscription.ProviderSubscriptionID)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return port.InvoiceRef{ProviderInvoiceID: p.Found}, p.Found != "", nil
 }
 
 // SetCancelAtPeriodEnd implements port.PaymentProvider.

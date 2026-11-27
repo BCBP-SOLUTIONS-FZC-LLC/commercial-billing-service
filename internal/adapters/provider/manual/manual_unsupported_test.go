@@ -20,6 +20,7 @@ func TestEveryOtherOperationUnsupported(t *testing.T) {
 			_, err := a.CreateHostedCheckout(ctx, port.CheckoutInput{}, "k")
 			return err
 		},
+		"ExpireCheckout": func() error { return a.ExpireCheckout(ctx, "cs_1", "k") },
 		"CreatePaymentMethodSetup": func() error {
 			_, err := a.CreatePaymentMethodSetup(ctx, port.SetupInput{}, "k")
 			return err

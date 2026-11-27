@@ -51,6 +51,22 @@ func exec(t *testing.T, q string, args ...any) {
 	}
 }
 
+// paidFields is a paid invoice re-read for exactly what the purchase (or
+// plan change) id in table charged (BIL-PAY-7), plus extra key/value pairs.
+func paidFields(t *testing.T, table, id string, extra ...string) map[string]any {
+	t.Helper()
+	key := "purchase_id"
+	if table == "plan_change_requests" {
+		key = "change_id"
+	}
+	f := map[string]any{"amount_paid_minor": scalar[int64](t, `SELECT amount_minor FROM `+table+` WHERE `+key+` = $1::uuid`, id),
+		"currency": scalar[string](t, `SELECT currency FROM `+table+` WHERE `+key+` = $1::uuid`, id)}
+	for i := 0; i+1 < len(extra); i += 2 {
+		f[extra[i]] = extra[i+1]
+	}
+	return f
+}
+
 func scalar[T any](t *testing.T, q string, args ...any) T {
 	t.Helper()
 	v, err := testkit.Scalar[T](context.Background(), db, q, args...)

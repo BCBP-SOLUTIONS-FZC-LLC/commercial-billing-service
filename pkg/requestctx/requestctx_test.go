@@ -18,3 +18,12 @@ func TestWithFromAndHasRole(t *testing.T) {
 		t.Error("HasRole wrong")
 	}
 }
+
+func TestRequestID(t *testing.T) {
+	if RequestID(context.Background()) != "" || RequestID(WithRequestID(context.Background(), "")) != "" {
+		t.Fatal("empty context carries a request ID")
+	}
+	if got := RequestID(WithRequestID(context.Background(), "req-1")); got != "req-1" {
+		t.Fatalf("RequestID = %q", got)
+	}
+}
