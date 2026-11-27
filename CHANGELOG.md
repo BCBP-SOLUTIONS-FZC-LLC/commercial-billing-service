@@ -6,6 +6,22 @@ This service has never been deployed to any environment, and there is no release
 
 ## [Unreleased]
 
+### Changed (2026-11-27 — Billing ↔ Entitlements compatibility re-check, LLD rev 0.62)
+
+- Re-checked against `commercial-entitlements-service` `108939f`. **No wire change on Billing's side**: the contract test passes against Entitlements' live consumed schema, which is byte-identical to the vendored copy (now recorded as `108939f`).
+- LLD §18.4 now lists `addon_eligibility.llm_tokens`, which Billing reads alongside `llm_token_quota_monthly`.
+- BL-OQ-28 updated in `billing-open-items.md`:
+  - **Still open on Entitlements:** F-1/F-2 (eligibility route and auth), F-5 (no Glue consumer codec, critical) and F-6 (now also covers `TenantSubscriptionCancelled` and `TenantReactivated`).
+  - **New:** B-4 to B-8.
+  - **Done:** the consumer event names, and BL-OQ-27 (b) E-1 to E-3.
+- **Hand-off to Entitlements:** `billing-handoff-to-entitlements-compatibility.md` in the Commercial folder.
+- **Entitlements' fixes re-checked** at `13ab5c7`, merged to Entitlements' `main` as `52d7ac6` (PR #4; reply `entitlements-reply-to-billing-compatibility.md`). Billing verified the diff and ran Entitlements' unit and pipeline suites (1028 pass):
+  - F-1, F-2, F-5, F-6 and B-4 to B-8 are fixed in code. E-4 is decided: the add-on balance survives a conversion reversal (ENT-D14).
+  - LLD §10.2 corrected: Entitlements' Istio rule for Billing is `GET` on the prefix `/api/v1/internal/tenants/*` (Istio has no mid-path `*`), and `billingReadOnly` narrows it to ENT-I1.
+  - Open-items tracker updated. The Billing follow-up "Glue-framed delivery in `contract-live`" is closed by Entitlements' pipeline test.
+- **F-3 / F-4 re-checked** (hand-off `billing-handoff-to-entitlements-f3-f4.md`, reply `entitlements-reply-to-billing-f3-f4.md`): Entitlements makes refunds idempotent on `billing_ref` through a `quota_addon_refunds` ledger (PR #5, merged to Entitlements' `main` as `e18c0e6`; Billing ran their unit and Postgres suites on `main`: 1048 and 102 pass). The Commercial TL decided F-4 (ENT-D15): `TenantEntitlementsChanged{cause: addon_change}` is allowed, drawdowns included. Entitlements also decided ENT-D16 (a fully refunded pack becomes `refunded`; `total_tokens` stays the purchased quantity). No Billing change.
+- **Contract test:** Entitlements' three new consumed schemas (`inbound_billing_tenant_{plan_changed,subscription_cancelled,reactivated}.json`) are vendored and checked for every produced `TenantPlanChanged`, `TenantSubscriptionCancelled` and `TenantReactivated`. `contract-live` fetches all four Entitlements schemas from its `main`.
+
 ### Fixed (2026-11-27 — production-readiness review round 2, LLD rev 0.60)
 
 **Money**

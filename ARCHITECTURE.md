@@ -2,7 +2,7 @@
 
 This document describes the internal structure, dependency rules and runtime data flows of `commercial-billing-service`.
 
-`commercial-billing` is a **private Go service** (`github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service`, Go 1.26.11), deployed as a containerised microservice in namespace `billing` (HPA 2–4 replicas). It refines the **Commercial Domain HLD v0.65** and is specified by its LLD, [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md) (rev 0.61). The LLD is the source of truth: where this document and the LLD disagree, the LLD wins, and this document should be fixed.
+`commercial-billing` is a **private Go service** (`github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service`, Go 1.26.11), deployed as a containerised microservice in namespace `billing` (HPA 2–4 replicas). It refines the **Commercial Domain HLD v0.65** and is specified by its LLD, [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md) (rev 0.62). The LLD is the source of truth: where this document and the LLD disagree, the LLD wins, and this document should be fixed.
 
 **What Billing owns:**
 - subscriptions, renewals and seat licensing;
@@ -997,7 +997,7 @@ A service consuming `billing.events` must:
 - OP-G2 and OP-G3, the operator path;
 - BL-OQ-24, the `UsagePeriodClosed` contract;
 - BL-OQ-12, Notification messages;
-- BL-OQ-28, Entitlements' findings: Glue decode on its consumer (F-5, critical), access to the eligibility route (F-1, F-2) and the `TenantPlanChanged` race (F-6);
+- BL-OQ-28, Entitlements' findings: Glue decode on its consumer (F-5, critical), access to the eligibility route (F-1, F-2), the plan-change race (F-6) and B-4 to B-8. All are fixed on Entitlements' `main` (PR #4, `52d7ac6`) and re-checked by Billing; they wait on Entitlements' deploy;
 - BL-OQ-29, the outbox retry window (an HLD §9.3 change).
 
 **Before go-live:** certification of Stripe adapter 1.1.0 in staging (the release gate fails until then), the Loki rules for the log-based alerts (`BillingReversalDecisionNeeded`, `BillingReviewTrigger`, `BillingPaymentParked`), and the LLD §20.10 checks (Pushgateway `honorLabels`, kube-state-metrics CronJob families, AWS endpoint CIDRs, client IP trust, scrape mode, `production` deployment-branch rules).

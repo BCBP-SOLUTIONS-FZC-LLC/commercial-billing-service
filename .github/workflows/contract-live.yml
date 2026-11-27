@@ -7,8 +7,10 @@
 # before the vendored copy is refreshed. It runs daily (consumer changes don't
 # trigger Billing's CI) and on every pull request.
 #
-# Covered today: Entitlements' consumed TenantQuotaAddOnChanged schema
-# (BL-OQ-4, BL-OQ-20). GO_PRIVATE_TOKEN needs read access to
+# Covered today: Entitlements' consumed schemas for TenantQuotaAddOnChanged
+# (BL-OQ-4, BL-OQ-20) and, since Entitlements PR #4 (B-4, BL-OQ-28),
+# TenantPlanChanged, TenantSubscriptionCancelled and TenantReactivated.
+# GO_PRIVATE_TOKEN needs read access to
 # commercial-entitlements-service.
 name: Contract (live consumers)
 
@@ -71,22 +73,32 @@ jobs:
           go mod download
           go list -deps -test ./test/contract/... >/dev/null
 
-      - name: Fetch Entitlements' consumed schema from main
+      - name: Fetch Entitlements' consumed schemas from main
         env:
           GH_TOKEN: ${{ secrets.GO_PRIVATE_TOKEN }}
         run: |
           set -euo pipefail
           dir="$RUNNER_TEMP/consumers"
           cp -R test/contract/testdata/consumers "$dir"
-          curl -fsSL \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github.raw+json" \
-            "https://api.github.com/repos/BCBP-SOLUTIONS-FZC-LLC/commercial-entitlements-service/contents/internal/adapter/outbound/eventbus/schemas/inbound_tenant_quota_add_on_changed.json?ref=main" \
-            -o "$dir/commercial-entitlements/inbound_tenant_quota_add_on_changed.json"
-          if ! diff -q test/contract/testdata/consumers/commercial-entitlements/inbound_tenant_quota_add_on_changed.json \
-               "$dir/commercial-entitlements/inbound_tenant_quota_add_on_changed.json" >/dev/null; then
-            echo "::warning::Entitlements' schema on main differs from the vendored copy; refresh test/contract/testdata/consumers/commercial-entitlements and its commit in README.md"
-          fi
+          base="https://api.github.com/repos/BCBP-SOLUTIONS-FZC-LLC/commercial-entitlements-service/contents/internal/adapter/outbound/eventbus/schemas"
+          # Every schema Entitlements validates Billing's events against on
+          # billing-entitlements-q (ValidateConsumed, B-4, BL-OQ-28). A missing
+          # file fails the run: Entitlements removed or renamed a schema.
+          for stem in \
+            inbound_tenant_quota_add_on_changed \
+            inbound_billing_tenant_plan_changed \
+            inbound_billing_tenant_subscription_cancelled \
+            inbound_billing_tenant_reactivated; do
+            name="$stem.json"
+            out="$dir/commercial-entitlements/$name"
+            curl -fsSL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github.raw+json" \
+              "$base/$name?ref=main" -o "$out"
+            if ! diff -q "test/contract/testdata/consumers/commercial-entitlements/$name" "$out" >/dev/null; then
+              echo "::warning::Entitlements' $name on main differs from the vendored copy; refresh test/contract/testdata/consumers/commercial-entitlements and its commit in README.md"
+            fi
+          done
           echo "CONTRACT_CONSUMERS_DIR=$dir" >> "$GITHUB_ENV"
 
       # From here on pull-request code runs: no credentials, no module fetch.
