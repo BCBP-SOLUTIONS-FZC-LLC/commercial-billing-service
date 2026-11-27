@@ -34,30 +34,61 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
           persist-credentials: false
           token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
 
       - name: Set up Go
-        uses: actions/setup-go@v7.0.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
             go.mod
 
-      - name: Configure private module access
+      # GO_PRIVATE_TOKEN is used in this step only, before any code from the
+      # checkout runs (go mod download / go list / go install fetch and
+      # compile; nothing from the checkout is executed). Git reads the token
+      # from a credential helper defined in this step's environment, so it is
+      # never written to disk and the later steps (lint, tests: pull-request
+      # code) cannot read it. Recommended: replace the long-lived PAT with a
+      # short-lived GitHub App installation token
+      # (actions/create-github-app-token) scoped to the platform-* repositories
+      # with contents:read.
+      - name: Download modules and tools (private module access)
+        env:
+          GO_PRIVATE_TOKEN: ${{ secrets.GO_PRIVATE_TOKEN }}
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: credential.https://github.com.helper
+          GIT_CONFIG_VALUE_0: '!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=${GO_PRIVATE_TOKEN}"; }; f'
         run: |
-          git config --global credential.helper store
-          echo "https://x-access-token:${{ secrets.GO_PRIVATE_TOKEN }}@github.com" > ~/.git-credentials
-          chmod 600 ~/.git-credentials
-
-      - name: Download and verify modules
-        run: |
+          set -euo pipefail
           go mod download
           go mod verify
+          # Warm the module cache for the later steps, which run with
+          # GOPROXY=off: tidy, every build tag and test, the go.mod tools
+          # (golangci-lint), metricslint (go run by the metrics tests) and the
+          # tools below (govulncheck mirrors `make vuln-check`, whose @latest
+          # cannot resolve offline).
+          go mod tidy -diff >/dev/null || true
+          go list -deps -test ./... >/dev/null
+          go list -deps -test -tags=integration,helm ./... >/dev/null
+          go list -deps tool github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/cmd/metricslint >/dev/null
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
+
+      # From here on pull-request code runs: no credentials, no module fetch.
+      - name: Drop private module access
+        run: |
+          rm -f ~/.git-credentials
+          git config --global --unset-all credential.helper || true
+          {
+            echo "GOPROXY=off"
+            echo "GOFLAGS=-mod=readonly"
+            echo "GOTOOLCHAIN=local"
+          } >> "$GITHUB_ENV"
 
       # Workflow files must use literal operators, not HTML entity encodings.
       - name: Reject HTML-escaped operators in workflow files
@@ -110,9 +141,10 @@ jobs:
       - name: Observability standard (metrics-lint)
         run: make metrics-lint
 
+      # Same scope as `make vuln-check`, with the binary installed above.
       - name: Vulnerability check
         run: |
-          if ! make vuln-check; then
+          if ! govulncheck ./cmd/... ./internal/... ./pkg/...; then
             echo "::error file=go.mod,title=Vulnerability found::govulncheck reported vulnerabilities — run 'make vuln-check' locally for details."
             exit 1
           fi
@@ -128,15 +160,15 @@ jobs:
           echo "Dockerfile base images are digest-pinned."
 
       - name: Set up Helm
-        uses: azure/setup-helm@v4.3.0
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
         with:
-          version: v3.16.3
+          version: v3.21.4   # same Helm as release.yml deploy-gate
 
-      - name: Install promtool and kubeconform
+      # kubeconform was installed in the module download step.
+      - name: Install promtool
         run: |
           curl -sSL https://github.com/prometheus/prometheus/releases/download/v3.5.0/prometheus-3.5.0.linux-amd64.tar.gz \
             | tar -xz --strip-components=1 -C /usr/local/bin prometheus-3.5.0.linux-amd64/promtool
-          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
 
       # LLD §13.1, §13.3: helm lint --strict and kubeconform on base, dev,
       # staging and prod values; promtool on the alert rules; the chart

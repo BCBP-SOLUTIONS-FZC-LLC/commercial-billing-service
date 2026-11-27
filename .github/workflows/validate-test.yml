@@ -46,30 +46,84 @@ jobs:
       pct_all: ${{ steps.gate.outputs.pct_all }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
           persist-credentials: false
           token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
 
       - name: Set up Go
-        uses: actions/setup-go@v7.0.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
             go.mod
 
-      - name: Configure private module access
-        run: |
-          git config --global credential.helper store
-          echo "https://x-access-token:${{ secrets.GO_PRIVATE_TOKEN }}@github.com" > ~/.git-credentials
-          chmod 600 ~/.git-credentials
+      - name: Set up Python (schema-gov)
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.14'
 
-      - name: Download and verify modules
+      # GO_PRIVATE_TOKEN is used in this step only, before any code from the
+      # checkout runs (go mod download / go list / go install and a git
+      # fetch of schema-gov's source; nothing is executed from the checkout
+      # or from schema-gov). Git reads the
+      # token from a credential helper defined in this step's environment, so
+      # it is never written to disk and the later steps (tests: pull-request
+      # code) cannot read it. Recommended: replace the long-lived PAT with a
+      # short-lived GitHub App installation token
+      # (actions/create-github-app-token) scoped to the platform-* repositories
+      # with contents:read.
+      - name: Download modules and tools (private module access)
+        env:
+          SCHEMAGOV_SHA: 624ee47d8d7142424eb7d03dbb3e0a21019b9292
+          GO_PRIVATE_TOKEN: ${{ secrets.GO_PRIVATE_TOKEN }}
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: credential.https://github.com.helper
+          GIT_CONFIG_VALUE_0: '!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=${GO_PRIVATE_TOKEN}"; }; f'
         run: |
+          set -euo pipefail
           go mod download
           go mod verify
+          # Warm the module cache for the later steps, which run with
+          # GOPROXY=off: every build tag and test, the go.mod tools
+          # (golangci-lint) and metricslint (go run by the metrics tests).
+          go list -deps -test ./... >/dev/null
+          go list -deps -test -tags=integration,helm ./... >/dev/null
+          go list -deps tool github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/cmd/metricslint >/dev/null
+          command -v go-arch-lint >/dev/null || go install github.com/fe3dback/go-arch-lint@v1.15.0
+          # schema-gov is installed from source, as in the IAM services: the
+          # GHCR package's Actions allow-list does not include this
+          # repository. Only its source is fetched here (pinned to the commit
+          # of tag v0.4.0); it is built and installed, with its dependencies,
+          # in the next step, without the token.
+          src="${RUNNER_TEMP}/platform-schemagov"
+          git init -q "${src}"
+          git -C "${src}" fetch -q --depth=1 https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-schemagov.git "${SCHEMAGOV_SHA}"
+          git -C "${src}" checkout -q --detach FETCH_HEAD
+          test "$(git -C "${src}" rev-parse HEAD)" = "${SCHEMAGOV_SHA}"
+
+      # No credential in this step. Dependencies only from
+      # .github/schema-gov-requirements.txt (exact versions, sha256 hashes,
+      # wheels only); schema-gov itself is built from the commit fetched above
+      # with the hash-locked setuptools, offline (--no-index).
+      - name: Install schema-gov (no credentials, hash-locked dependencies)
+        run: |
+          set -euo pipefail
+          pip install --no-cache-dir --require-hashes --only-binary :all: -r .github/schema-gov-requirements.txt
+          pip install --no-cache-dir --no-deps --no-build-isolation --no-index "${RUNNER_TEMP}/platform-schemagov"
+
+      # From here on pull-request code runs: no credentials, no module fetch.
+      - name: Drop private module access
+        run: |
+          rm -f ~/.git-credentials
+          git config --global --unset-all credential.helper || true
+          {
+            echo "GOPROXY=off"
+            echo "GOFLAGS=-mod=readonly"
+            echo "GOTOOLCHAIN=local"
+          } >> "$GITHUB_ENV"
 
       # Blocking: a data race anywhere fails the pipeline. Do not remove.
       - name: Tests — race (no Docker)
@@ -90,19 +144,13 @@ jobs:
         run: bash .github/scripts/coverage-gate.sh
 
       - name: Upload coverage report
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: coverage-report-${{ github.sha }}
           path: coverage.out
           if-no-files-found: ignore
           retention-days: 30
-
-      - name: Cache go-arch-lint binary
-        uses: actions/cache@v6.1.0
-        with:
-          path: ~/go/bin
-          key: go-arch-lint-${{ runner.os }}-v1.15.0
 
       # .go-arch-lint.yml: domain ← port ← app ← adapters ← bootstrap / cmd.
       - name: Architecture lint
@@ -113,16 +161,7 @@ jobs:
       - name: OpenAPI drift
         run: make openapi-check
 
-      - name: Set up Python (schema-gov)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.14'
-
-      # Installed from source, as in the IAM services: the GHCR package's
-      # Actions allow-list does not include this repository.
-      - name: Install schema-gov (platform-schemagov v0.4.0)
-        run: pip install --no-cache-dir "git+https://x-access-token:${{ secrets.GO_PRIVATE_TOKEN }}@github.com/BCBP-SOLUTIONS-FZC-LLC/platform-schemagov.git@v0.4.0"
-
+      # schema-gov was installed in the install step above.
       # api/asyncapi.yaml is the source; the embedded schemas are derived.
       - name: Event schemas in sync with api/asyncapi.yaml
         run: schema-gov extract --asyncapi api/asyncapi.yaml --schema-dir internal/adapters/eventbus/schemas --check

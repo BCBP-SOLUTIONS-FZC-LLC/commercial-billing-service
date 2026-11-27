@@ -38,23 +38,37 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v7.0.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: |
             go.sum
             go.mod
 
-      - name: Configure private module access
+      # GO_PRIVATE_TOKEN is used only in this step and the schema fetch
+      # below, before any code from the checkout runs (go mod download and
+      # go list fetch and compile; nothing is executed). Git reads the token
+      # from a credential helper defined in this step's environment, so it is
+      # never written to disk and the test step (pull-request code) cannot
+      # read it. Recommended: replace the long-lived PAT with a short-lived
+      # GitHub App installation token (actions/create-github-app-token) scoped
+      # to the platform-* repositories and commercial-entitlements-service
+      # with contents:read.
+      - name: Download modules (private module access)
+        env:
+          GO_PRIVATE_TOKEN: ${{ secrets.GO_PRIVATE_TOKEN }}
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: credential.https://github.com.helper
+          GIT_CONFIG_VALUE_0: '!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=${GO_PRIVATE_TOKEN}"; }; f'
         run: |
-          git config --global credential.helper store
-          echo "https://x-access-token:${{ secrets.GO_PRIVATE_TOKEN }}@github.com" > ~/.git-credentials
-          chmod 600 ~/.git-credentials
+          set -euo pipefail
+          go mod download
+          go list -deps -test ./test/contract/... >/dev/null
 
       - name: Fetch Entitlements' consumed schema from main
         env:
@@ -73,6 +87,17 @@ jobs:
             echo "::warning::Entitlements' schema on main differs from the vendored copy; refresh test/contract/testdata/consumers/commercial-entitlements and its commit in README.md"
           fi
           echo "CONTRACT_CONSUMERS_DIR=$dir" >> "$GITHUB_ENV"
+
+      # From here on pull-request code runs: no credentials, no module fetch.
+      - name: Drop private module access
+        run: |
+          rm -f ~/.git-credentials
+          git config --global --unset-all credential.helper || true
+          {
+            echo "GOPROXY=off"
+            echo "GOFLAGS=-mod=readonly"
+            echo "GOTOOLCHAIN=local"
+          } >> "$GITHUB_ENV"
 
       - name: Contract tests against live schemas
         run: go test ./test/contract/... -count=1 -timeout 300s

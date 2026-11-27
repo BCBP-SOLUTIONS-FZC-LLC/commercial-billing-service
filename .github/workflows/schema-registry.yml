@@ -20,10 +20,17 @@
 #
 # AWS jobs are skipped (not failed) until the environment is wired:
 # vars.AWS_REGION is the switch. Per environment (staging / production):
-#   secrets AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY; vars AWS_REGION;
+#   vars AWS_REGION, AWS_ROLE_ARN (IAM role assumed through GitHub OIDC);
 #   optional vars SCHEMA_FREEZE (true blocks registration; override with force on dispatch);
 #   optional secrets PUSHGATEWAY_URL (schema-gov metrics → deploy/monitoring/schema-registry-alerts.yml)
 #   and ALARM_SNS_ARN.
+#
+# workflow_dispatch runs this file from whatever branch the dispatcher picks
+# and can target production, so the "staging" and "production" environments
+# must have deployment branch and tag rules allowing only the main branch and
+# tags v* (Settings → Environments → Deployment branches and tags). Without
+# them a modified copy of this workflow on any branch could assume the
+# production Glue role.
 name: Glue Schema Registry
 
 "on":
@@ -69,18 +76,46 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
 
       - name: Set up Python (schema-gov)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.14'
 
-      - name: Install schema-gov (platform-schemagov v0.4.0)
-        run: pip install --no-cache-dir "git+https://x-access-token:${{ secrets.GO_PRIVATE_TOKEN }}@github.com/BCBP-SOLUTIONS-FZC-LLC/platform-schemagov.git@v0.4.0"
+      # The token reaches git through a credential helper defined in this
+      # step's environment: never in the URL, never on disk, and only for a
+      # git fetch of schema-gov's source pinned to the commit of tag v0.4.0
+      # (nothing runs here). Recommended: a short-lived GitHub App
+      # installation token (actions/create-github-app-token) scoped to
+      # platform-schemagov with contents:read instead of the PAT.
+      - name: Fetch schema-gov source (platform-schemagov v0.4.0)
+        env:
+          SCHEMAGOV_SHA: 624ee47d8d7142424eb7d03dbb3e0a21019b9292
+          GO_PRIVATE_TOKEN: ${{ secrets.GO_PRIVATE_TOKEN }}
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: credential.https://github.com.helper
+          GIT_CONFIG_VALUE_0: '!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=${GO_PRIVATE_TOKEN}"; }; f'
+        run: |
+          set -euo pipefail
+          src="${RUNNER_TEMP}/platform-schemagov"
+          git init -q "${src}"
+          git -C "${src}" fetch -q --depth=1 https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-schemagov.git "${SCHEMAGOV_SHA}"
+          git -C "${src}" checkout -q --detach FETCH_HEAD
+          test "$(git -C "${src}" rev-parse HEAD)" = "${SCHEMAGOV_SHA}"
+
+      # No credential in this step. Dependencies only from
+      # .github/schema-gov-requirements.txt (exact versions, sha256 hashes,
+      # wheels only); schema-gov itself is built from the commit fetched above
+      # with the hash-locked setuptools, offline (--no-index).
+      - name: Install schema-gov (no credentials, hash-locked dependencies)
+        run: |
+          set -euo pipefail
+          pip install --no-cache-dir --require-hashes --only-binary :all: -r .github/schema-gov-requirements.txt
+          pip install --no-cache-dir --no-deps --no-build-isolation --no-index "${RUNNER_TEMP}/platform-schemagov"
 
       - name: Embedded schemas in sync with api/asyncapi.yaml
         run: schema-gov extract --asyncapi api/asyncapi.yaml --schema-dir internal/adapters/eventbus/schemas --check
@@ -97,22 +132,53 @@ jobs:
     timeout-minutes: 15
     if: vars.AWS_REGION != '' && github.event_name != 'pull_request'
     environment: ${{ github.event_name == 'release' && 'production' || (github.event_name == 'workflow_dispatch' && inputs.environment) || 'staging' }}
+    permissions:
+      contents: read
+      id-token: write  # GitHub OIDC → vars.AWS_ROLE_ARN
     env:
       TARGET_ENV: ${{ github.event_name == 'release' && 'production' || (github.event_name == 'workflow_dispatch' && inputs.environment) || 'staging' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
 
       - name: Set up Python (schema-gov)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.14'
 
-      - name: Install schema-gov (platform-schemagov v0.4.0)
-        run: pip install --no-cache-dir "git+https://x-access-token:${{ secrets.GO_PRIVATE_TOKEN }}@github.com/BCBP-SOLUTIONS-FZC-LLC/platform-schemagov.git@v0.4.0"
+      # The token reaches git through a credential helper defined in this
+      # step's environment: never in the URL, never on disk, and only for a
+      # git fetch of schema-gov's source pinned to the commit of tag v0.4.0
+      # (nothing runs here). Recommended: a short-lived GitHub App
+      # installation token (actions/create-github-app-token) scoped to
+      # platform-schemagov with contents:read instead of the PAT.
+      - name: Fetch schema-gov source (platform-schemagov v0.4.0)
+        env:
+          SCHEMAGOV_SHA: 624ee47d8d7142424eb7d03dbb3e0a21019b9292
+          GO_PRIVATE_TOKEN: ${{ secrets.GO_PRIVATE_TOKEN }}
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: credential.https://github.com.helper
+          GIT_CONFIG_VALUE_0: '!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=${GO_PRIVATE_TOKEN}"; }; f'
+        run: |
+          set -euo pipefail
+          src="${RUNNER_TEMP}/platform-schemagov"
+          git init -q "${src}"
+          git -C "${src}" fetch -q --depth=1 https://github.com/BCBP-SOLUTIONS-FZC-LLC/platform-schemagov.git "${SCHEMAGOV_SHA}"
+          git -C "${src}" checkout -q --detach FETCH_HEAD
+          test "$(git -C "${src}" rev-parse HEAD)" = "${SCHEMAGOV_SHA}"
+
+      # No credential in this step. Dependencies only from
+      # .github/schema-gov-requirements.txt (exact versions, sha256 hashes,
+      # wheels only); schema-gov itself is built from the commit fetched above
+      # with the hash-locked setuptools, offline (--no-index).
+      - name: Install schema-gov (no credentials, hash-locked dependencies)
+        run: |
+          set -euo pipefail
+          pip install --no-cache-dir --require-hashes --only-binary :all: -r .github/schema-gov-requirements.txt
+          pip install --no-cache-dir --no-deps --no-build-isolation --no-index "${RUNNER_TEMP}/platform-schemagov"
 
       - name: Validate schemas
         run: schema-gov validate --asyncapi api/asyncapi.yaml --schema-dir internal/adapters/eventbus/schemas
@@ -132,11 +198,23 @@ jobs:
             echo "::warning title=Freeze override::SCHEMA_FREEZE is set on ${ENVIRONMENT}, but force=true — proceeding."
           fi
 
+      # The OIDC token is requested here, after schema-gov and its
+      # dependencies are installed (hash-locked, no credential), so no
+      # install-time code runs while AWS credentials exist. The job still
+      # holds id-token: write from its start; keep every step before this one
+      # free of fetched code other than the hash-locked install.
+      # GitHub OIDC → an IAM role per environment (vars.AWS_ROLE_ARN; trust
+      # policy: token.actions.githubusercontent.com, aud sts.amazonaws.com,
+      # sub repo:<org>/commercial-billing-service:environment:<env>; Glue
+      # registry billing-events read/write). No long-lived keys.
+      # Fallback until the role exists: replace role-to-assume with
+      # aws-access-key-id / aws-secret-access-key from the environment secrets
+      # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, and delete them afterwards.
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6.2.3
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: commercial-billing-schema-registry
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Stage produced schemas (Glue names)

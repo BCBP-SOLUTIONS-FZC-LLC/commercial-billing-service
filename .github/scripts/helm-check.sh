@@ -1,21 +1,27 @@
 #!/usr/bin/env bash
 # Helm chart check (LLD §13.1, §13.3 "helm-check"):
 #   1. helm lint --strict and helm template + kubeconform for base, dev,
-#      staging and prod values (namespace billing);
+#      staging and prod values (namespace billing). Base (APP_ENV prod),
+#      staging and prod refuse to render without the account-specific values
+#      the deploy pipeline sets (IRSA role, SNS/SQS, Postgres CIDRs), so they
+#      are rendered with test/helm/testdata/values-pipeline.yaml on top;
 #   2. promtool on the §11.5 alert rules and the vendored platform-audit rules;
 #   3. the chart contract tests (test/helm, build tag helm): names and
-#      namespace, XFCC annotation (BIL-AUTH-3), OPERATOR_PATH_LIVE=false
-#      (BIL-AUTH-6), ten CronJobs = cmd/jobs, operator routes B-O1..B-O17,
-#      NetworkPolicy (incl. Entitlements egress), HPA/PDB/migrate, alert →
+#      namespace, workload labels and selectors, per-workload secrets, Istio
+#      native sidecars and PeerAuthentication (BIL-AUTH-3),
+#      OPERATOR_PATH_LIVE=false (BIL-AUTH-6), ten CronJobs = cmd/jobs,
+#      operator routes B-O1..B-O17, webhook rate limit, NetworkPolicies,
+#      shutdown and probes, HPA/PDB/migrate, placeholder guards, alert →
 #      runbook links.
 # CRD kinds (HTTPRoute, SecurityPolicy, BackendTrafficPolicy,
-# AuthorizationPolicy, ServiceMonitor, PrometheusRule, ExternalSecret) have no
-# upstream schema; kubeconform skips them and the contract tests cover them.
+# AuthorizationPolicy, PeerAuthentication, ServiceMonitor, PrometheusRule,
+# ExternalSecret) have no upstream schema; kubeconform skips them and the
+# contract tests cover them. Kubernetes >= 1.30 (preStop sleep action).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 CHART=deploy/helm
-command -v helm >/dev/null || { echo "helm is required (v3.16+)"; exit 2; }
+command -v helm >/dev/null || { echo "helm is required (v3.19+)"; exit 2; }
 command -v kubeconform >/dev/null || go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
 command -v promtool >/dev/null || { echo "promtool is required"; exit 2; }
 
@@ -23,6 +29,7 @@ fail=0
 for vf in "" values-dev.yaml values-staging.yaml values-prod.yaml; do
   args=(--namespace billing)
   [[ -n "$vf" ]] && args+=(-f "$CHART/$vf")
+  [[ "$vf" != values-dev.yaml ]] && args+=(-f test/helm/testdata/values-pipeline.yaml)
   echo "── ${vf:-base}"
   helm lint --strict "$CHART" "${args[@]}" >/dev/null || { fail=1; helm lint --strict "$CHART" "${args[@]}"; }
   helm template commercial-billing "$CHART" "${args[@]}" |
