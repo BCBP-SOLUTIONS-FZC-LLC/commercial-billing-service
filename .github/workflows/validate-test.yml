@@ -1,0 +1,131 @@
+# Reusable workflow — test gate (LLD §14.6).
+#
+#   race tests (unit · HTTP · contract · observability, no Docker)
+#   → every suite with coverage (Postgres, flows, scenarios, bus,
+#     stripe-mock, certification, e2e, cmd/*; testcontainers)
+#   → coverage gate ≥ 96% over internal/ + pkg/
+#   → architecture lint · OpenAPI drift · AsyncAPI ↔ embedded schemas
+#
+# Called by ci.yml and release.yml. Gates trivy, smoke, push and release.
+name: Validate / Test
+
+"on":
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to check out (empty = the caller ref)'
+        type: string
+        required: false
+        default: ''
+    outputs:
+      pct:
+        description: 'Statement coverage over internal/ + pkg/'
+        value: ${{ jobs.test.outputs.pct }}
+      pct_all:
+        description: 'Statement coverage over every package'
+        value: ${{ jobs.test.outputs.pct_all }}
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  GOPRIVATE: github.com/BCBP-SOLUTIONS-FZC-LLC/*
+  GONOSUMDB: github.com/BCBP-SOLUTIONS-FZC-LLC/*
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    # The integration suites start their own containers per package (Postgres
+    # 17, floci, stripe-mock); internal/certify alone takes about a minute.
+    timeout-minutes: 45
+    outputs:
+      pct: ${{ steps.gate.outputs.pct }}
+      pct_all: ${{ steps.gate.outputs.pct_all }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            go.mod
+
+      - name: Configure private module access
+        run: |
+          git config --global credential.helper store
+          echo "https://x-access-token:${{ secrets.GO_PRIVATE_TOKEN }}@github.com" > ~/.git-credentials
+          chmod 600 ~/.git-credentials
+
+      - name: Download and verify modules
+        run: |
+          go mod download
+          go mod verify
+
+      # Blocking: a data race anywhere fails the pipeline. Do not remove.
+      - name: Tests — race (no Docker)
+        run: make test
+
+      # Every suite, unit and integration, in one coverage run (one profile
+      # counts each block once). INT_PARALLEL=2: a hosted runner has far less
+      # headroom than a dev box, and every package starts its own containers.
+      - name: Tests — all suites with coverage (testcontainers)
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: 'true'
+        run: make cover-all INT_PARALLEL=2
+
+      # ≥ 96% over internal/ + pkg/ (the IAM services' gate scope). Do not
+      # lower it; add tests in the layer of the change instead.
+      - name: Coverage gate (≥ 96%)
+        id: gate
+        run: bash .github/scripts/coverage-gate.sh
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: coverage-report-${{ github.sha }}
+          path: coverage.out
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Cache go-arch-lint binary
+        uses: actions/cache@v6.1.0
+        with:
+          path: ~/go/bin
+          key: go-arch-lint-${{ runner.os }}-v1.15.0
+
+      # .go-arch-lint.yml: domain ← port ← app ← adapters ← bootstrap / cmd.
+      - name: Architecture lint
+        run: make arch-lint
+
+      # docs/swagger/openapi.json is generated from the route table
+      # (TestOpenAPIGolden); a stale copy fails here with the regenerate hint.
+      - name: OpenAPI drift
+        run: make openapi-check
+
+      - name: Set up Python (schema-gov)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      # Installed from source, as in the IAM services: the GHCR package's
+      # Actions allow-list does not include this repository.
+      - name: Install schema-gov (platform-schemagov v0.4.0)
+        run: pip install --no-cache-dir "git+https://x-access-token:${{ secrets.GO_PRIVATE_TOKEN }}@github.com/BCBP-SOLUTIONS-FZC-LLC/platform-schemagov.git@v0.4.0"
+
+      # api/asyncapi.yaml is the source; the embedded schemas are derived.
+      - name: Event schemas in sync with api/asyncapi.yaml
+        run: schema-gov extract --asyncapi api/asyncapi.yaml --schema-dir internal/adapters/eventbus/schemas --check
+
+      - name: Event schemas valid
+        run: schema-gov validate --asyncapi api/asyncapi.yaml --schema-dir internal/adapters/eventbus/schemas

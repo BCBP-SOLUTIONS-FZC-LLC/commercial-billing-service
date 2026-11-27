@@ -1,0 +1,147 @@
+# Reusable workflow — quality gate.
+#
+#   module verify · workflow hygiene · fmt · tidy · vet · lint (all build tags)
+#   · guards (BIL-PCI-1 stripe imports, BIL-OPS-2 outbox, BIL-API-6 problems,
+#     BIL-OPS-11 pgcommon) · Observability Standard (metrics-lint)
+#   · govulncheck · Dockerfile digest pins · Helm (lint, kubeconform, promtool,
+#     chart contract tests)
+#
+# Called by ci.yml and release.yml. Gates push and release; does not gate
+# trivy or smoke (those need validate-test only).
+name: Validate / Quality
+
+"on":
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to check out (empty = the caller ref)'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  GOPRIVATE: github.com/BCBP-SOLUTIONS-FZC-LLC/*
+  GONOSUMDB: github.com/BCBP-SOLUTIONS-FZC-LLC/*
+
+jobs:
+  quality:
+    name: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            go.mod
+
+      - name: Configure private module access
+        run: |
+          git config --global credential.helper store
+          echo "https://x-access-token:${{ secrets.GO_PRIVATE_TOKEN }}@github.com" > ~/.git-credentials
+          chmod 600 ~/.git-credentials
+
+      - name: Download and verify modules
+        run: |
+          go mod download
+          go mod verify
+
+      # Workflow files must use literal operators, not HTML entity encodings.
+      - name: Reject HTML-escaped operators in workflow files
+        run: |
+          if grep -REn '&(gt|lt|amp);' .github/workflows/ .github/scripts/; then
+            echo "::error::Workflow or script files contain HTML entities. Use literal operators instead."
+            exit 1
+          fi
+
+      - name: Format check
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "${unformatted}" ]; then
+            echo "${unformatted}" | while IFS= read -r f; do
+              echo "::error file=${f},title=Format check::Not formatted — run 'make fmt'"
+            done
+            exit 1
+          fi
+
+      - name: Tidy check
+        run: |
+          make tidy
+          if ! git diff --exit-code go.mod go.sum; then
+            echo "::error file=go.mod,title=Module drift::go.mod or go.sum is stale — run 'go mod tidy' and commit the result."
+            exit 1
+          fi
+
+      # Default build plus every test build tag (integration, helm).
+      - name: Vet
+        run: make vet
+
+      # golangci-lint pinned through go.mod's tool directive: depguard keeps
+      # stripe-go, pgx, the AWS messaging SDKs, Prometheus and OpenTelemetry
+      # behind their adapters; forbidigo bans pool construction outside
+      # pgcommon, fmt.Print* and gin.Default / gin.Logger.
+      - name: Lint
+        run: make lint
+
+      # What an import rule cannot see: stripe imports (BIL-PCI-1), SQL on
+      # the platform-events tables (BIL-OPS-2), hand-written problems / error
+      # DTOs / recovery (BIL-API-6), SQLSTATE literals and hand-written
+      # session settings (BIL-OPS-11 — a session-scoped GUC would leak a
+      # tenant across PgBouncer backends).
+      - name: Guards
+        run: make guards
+
+      # Enterprise Platform Observability Standard: metricslint on the scrape,
+      # every metric referenced by alerts, rules, SLOs, the dashboard, HPA and
+      # runbooks exposed or registered, the inventory current.
+      - name: Observability standard (metrics-lint)
+        run: make metrics-lint
+
+      - name: Vulnerability check
+        run: |
+          if ! make vuln-check; then
+            echo "::error file=go.mod,title=Vulnerability found::govulncheck reported vulnerabilities — run 'make vuln-check' locally for details."
+            exit 1
+          fi
+
+      # Floating base-image tags can be overwritten upstream; the FROM lines
+      # must be digest-pinned (make pin-base-images updates them).
+      - name: Dockerfile base images digest-pinned
+        run: |
+          if grep -E '^FROM [^ @]+:[^ @]+( AS .+)?$' Dockerfile; then
+            echo "::error file=Dockerfile,title=Unpinned base image::FROM lines must be digest-pinned (image:tag@sha256:...). Run 'make pin-base-images'."
+            exit 1
+          fi
+          echo "Dockerfile base images are digest-pinned."
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.16.3
+
+      - name: Install promtool and kubeconform
+        run: |
+          curl -sSL https://github.com/prometheus/prometheus/releases/download/v3.5.0/prometheus-3.5.0.linux-amd64.tar.gz \
+            | tar -xz --strip-components=1 -C /usr/local/bin prometheus-3.5.0.linux-amd64/promtool
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
+
+      # LLD §13.1, §13.3: helm lint --strict and kubeconform on base, dev,
+      # staging and prod values; promtool on the alert rules; the chart
+      # contract tests (names, XFCC annotation, OPERATOR_PATH_LIVE=false,
+      # CronJobs = cmd/jobs, operator routes B-O1…B-O17, NetworkPolicy incl.
+      # the Entitlements egress, HPA/PDB/migrate, alert → runbook links).
+      - name: Helm check
+        run: make helm-check

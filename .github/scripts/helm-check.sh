@@ -30,7 +30,7 @@ for vf in "" values-dev.yaml values-staging.yaml values-prod.yaml; do
 done
 
 promtool check rules deploy/monitoring/app-alerts.yml deploy/monitoring/recording-rules.yml deploy/monitoring/slo-rules.yml \
-  deploy/monitoring/platform-audit.rules.yml || fail=1
+  deploy/monitoring/platform-audit.rules.yml deploy/monitoring/schema-registry-alerts.yml || fail=1
 cmp -s deploy/monitoring/dashboards/commercial-billing.json "$CHART/files/dashboard-commercial-billing.json" \
   || { echo "$CHART/files/dashboard-commercial-billing.json differs from the dashboard source"; fail=1; }
 for f in app-alerts.yml recording-rules.yml slo-rules.yml; do

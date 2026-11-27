@@ -1,11 +1,24 @@
 # CI for commercial-billing-service (LLD §13.3, §14.6).
 #
-# One job runs the same gates as `make ci` (fmt, vet, golangci-lint,
-# go-arch-lint, the BIL-PCI-1 / BIL-OPS-2 guard scripts, race tests, build);
-# others run schema-gov (`make schema-validate`), helm-check (chart, alert
-# rules, chart contract tests) and a Dockerfile lint. Later phases add the
-# integration suite (Postgres, floci, stripe-mock), the image build and
-# Trivy, following the IAM services' workflows.
+#   validate-test ──────┐
+#   build-image ────────┤──► trivy ──────┐
+#                       │   smoke ───────┤──► pr-summary (pull requests)
+#                       └────────────────┤──► push       (main only; needs quality too)
+#   validate-quality ───────────────────┘
+#
+# - validate-test: race tests, every suite with coverage (≥ 96%), arch lint,
+#   OpenAPI drift, AsyncAPI ↔ schema sync. Gates trivy and smoke.
+# - validate-quality: fmt, tidy, vet, lint, guards, metrics-lint, vuln, digest
+#   pins, Helm. Gates push and release only.
+# - build-image: Hadolint and the .dockerignore check first, then the cached
+#   amd64 build that trivy and smoke reload.
+# - push: on main, publish to GHCR with provenance and SBOM, sign keylessly
+#   with Cosign and verify the signature.
+#
+# Markdown-only commits skip the pipeline (paths-ignore skips only when every
+# changed file matches). Contract checks against Entitlements' main run in
+# contract-live.yml; Glue registration in schema-registry.yml; tags in
+# release.yml.
 name: CI
 
 "on":
@@ -19,6 +32,7 @@ name: CI
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -26,128 +40,310 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-  GOPRIVATE: github.com/BCBP-SOLUTIONS-FZC-LLC/*
-  GONOSUMDB: github.com/BCBP-SOLUTIONS-FZC-LLC/*
+  IMAGE_NAME: ghcr.io/bcbp-solutions-fzc-llc/commercial-billing
+  CI_IMAGE: commercial-billing-ci-test
+  BUILDKIT_PROGRESS: plain
 
 jobs:
-  validate:
-    name: Validate
+  validate-test:
+    name: Validate / Test
+    uses: ./.github/workflows/validate-test.yml
+    secrets: inherit
+
+  validate-quality:
+    name: Validate / Quality
+    uses: ./.github/workflows/validate-quality.yml
+    secrets: inherit
+
+  # Lints the Dockerfile before the expensive build: a Hadolint failure never
+  # starts it.
+  build-image:
+    name: Build image (cache)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
         with:
-          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
 
-      - name: Set up Go
-        uses: actions/setup-go@v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            go.mod
-
-      - name: Configure private module access
-        run: |
-          git config --global credential.helper store
-          echo "https://x-access-token:${{ secrets.GO_PRIVATE_TOKEN }}@github.com" > ~/.git-credentials
-          chmod 600 ~/.git-credentials
-
-      - name: Download and verify modules
-        run: |
-          go mod download
-          go mod verify
-
-      - name: gofmt
-        run: make fmt-check
-
-      - name: go vet
-        run: make vet
-
-      - name: golangci-lint
-        run: make lint
-
-      - name: go-arch-lint (LLD §3.2)
-        run: make arch-lint
-
-      - name: Guards (BIL-PCI-1, BIL-OPS-2)
-        run: make guards
-
-      - name: Tests (race)
-        run: make test
-
-      - name: Build
-        run: make build
-
-  helm:
-    name: Helm check
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up Go
-        uses: actions/setup-go@v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            go.mod
-
-      - name: Configure private module access
-        run: |
-          git config --global credential.helper store
-          echo "https://x-access-token:${{ secrets.GO_PRIVATE_TOKEN }}@github.com" > ~/.git-credentials
-          chmod 600 ~/.git-credentials
-
-      - name: Set up Helm
-        uses: azure/setup-helm@v4.3.0
-        with:
-          version: v3.16.3
-
-      - name: Install promtool and kubeconform
-        run: |
-          curl -sSL https://github.com/prometheus/prometheus/releases/download/v3.5.0/prometheus-3.5.0.linux-amd64.tar.gz \
-            | tar -xz --strip-components=1 -C /usr/local/bin prometheus-3.5.0.linux-amd64/promtool
-          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
-
-      # LLD §13.1, §13.3: chart lint + kubeconform, alert rules, chart
-      # contract tests (XFCC, OPERATOR_PATH_LIVE, CronJobs, operator routes).
-      - name: helm-check
-        run: make helm-check
-
-  schema:
-    name: Schema governance
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.14'
-      # Installed from source as in the IAM services: the GHCR package's
-      # Actions allow-list does not include this repository.
-      - name: Install schema-gov (platform-schemagov v0.4.0)
-        run: pip install --no-cache-dir "git+https://x-access-token:${{ secrets.GO_PRIVATE_TOKEN }}@github.com/BCBP-SOLUTIONS-FZC-LLC/platform-schemagov.git@v0.4.0"
-      - name: Embedded schemas in sync with api/asyncapi.yaml
-        run: schema-gov extract --asyncapi api/asyncapi.yaml --schema-dir internal/adapters/eventbus/schemas --check
-      - name: Validate
-        run: schema-gov validate --asyncapi api/asyncapi.yaml --schema-dir internal/adapters/eventbus/schemas
-
-  dockerfile:
-    name: Dockerfile lint
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          persist-credentials: false
-      - uses: hadolint/hadolint-action@v3.3.0
+      - name: Hadolint
+        uses: hadolint/hadolint-action@v3.3.0
         with:
           dockerfile: Dockerfile
+
+      - name: Check .dockerignore exists
+        run: test -f .dockerignore
+
+      - name: Prepare Docker build
+        id: cache
+        env:
+          REGISTRY_REF: ${{ env.IMAGE_NAME }}:buildcache
+          CAN_PUSH: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        run: bash .github/scripts/docker-build-prep.sh
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+
+      # Writes every layer to the GHA and registry caches; trivy and smoke
+      # reload it. amd64 only (no QEMU); the published image is amd64 too.
+      - name: Build image → cache
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: false
+          pull: ${{ github.event_name != 'pull_request' }}
+          cache-from: ${{ steps.cache.outputs.from }}
+          cache-to: ${{ steps.cache.outputs.to }}
+          build-args: |
+            BUILD_VERSION=${{ github.sha }}
+            SOURCE_DATE_EPOCH=${{ steps.cache.outputs.SOURCE_DATE_EPOCH }}
+          secrets: |
+            go_private_token=${{ secrets.GO_PRIVATE_TOKEN }}
+
+  trivy:
+    name: Trivy CVE scan
+    runs-on: ubuntu-latest
+    needs: [validate-test, build-image]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+
+      - name: Load image from cache
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.CI_IMAGE }}
+          cache-from: type=gha
+          build-args: BUILD_VERSION=${{ github.sha }}
+          secrets: |
+            go_private_token=${{ secrets.GO_PRIVATE_TOKEN }}
+
+      - name: Cache Trivy DB
+        uses: actions/cache@v6.1.0
+        with:
+          path: /tmp/trivy-cache
+          key: trivy-db-${{ runner.os }}
+          restore-keys: |
+            trivy-db-${{ runner.os }}-
+
+      # Human-readable table; fails on CRITICAL / HIGH / UNKNOWN with a fix.
+      - name: Trivy scan — CRITICAL / HIGH / UNKNOWN
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.CI_IMAGE }}
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH,UNKNOWN
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          cache-dir: /tmp/trivy-cache
+
+      - name: Trivy scan — SARIF
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.CI_IMAGE }}
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: '0'
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          cache-dir: /tmp/trivy-cache
+
+      - name: Upload SARIF to the Security tab
+        uses: github/codeql-action/upload-sarif@v4.37.4
+        continue-on-error: true
+        with:
+          sarif_file: trivy-results.sarif
+
+      # CycloneDX SBOM: component inventory for PCI / compliance evidence.
+      - name: Trivy SBOM — CycloneDX
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.CI_IMAGE }}
+          format: cyclonedx
+          output: sbom.cyclonedx.json
+          exit-code: '0'
+          cache-dir: /tmp/trivy-cache
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: sbom-${{ github.sha }}
+          path: sbom.cyclonedx.json
+          retention-days: 90
+
+  smoke:
+    name: Smoke tests
+    runs-on: ubuntu-latest
+    needs: [validate-test, build-image]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+
+      - name: Load image from cache
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.CI_IMAGE }}
+          cache-from: type=gha
+          build-args: BUILD_VERSION=${{ github.sha }}
+          secrets: |
+            go_private_token=${{ secrets.GO_PRIVATE_TOKEN }}
+
+      - name: Smoke tests
+        env:
+          IMAGE: ${{ env.CI_IMAGE }}
+        run: bash .github/scripts/smoke-tests.sh
+
+  pr-summary:
+    name: PR summary
+    runs-on: ubuntu-latest
+    needs: [validate-test, validate-quality, build-image, trivy, smoke]
+    if: always() && github.event_name == 'pull_request'
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: Post or update the summary comment
+        uses: actions/github-script@v9.0.0
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        with:
+          script: |
+            const fs = require('fs')
+            const code = fs.readFileSync('.github/scripts/pr-summary.js', 'utf8')
+            const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+            const run = new AsyncFunction('github', 'context', 'core', 'require', 'process', code)
+            await run(github, context, core, require, process)
+
+  # Publish on merge to main. The Verify step accepts only a Sigstore
+  # certificate for refs/heads/main, so this job runs on main only; feature
+  # branches are covered by the pull_request run (build, trivy, smoke).
+  push:
+    name: Push image → GHCR
+    runs-on: ubuntu-latest
+    needs: [validate-test, validate-quality, trivy, smoke]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: Set SOURCE_DATE_EPOCH
+        id: sde
+        run: bash .github/scripts/set-source-date-epoch.sh
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6.2.0
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-,format=short
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+
+      - name: Build and push
+        id: pushed
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          pull: true
+          push: true
+          provenance: true
+          sbom: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_VERSION=${{ github.sha }}
+            SOURCE_DATE_EPOCH=${{ steps.sde.outputs.SOURCE_DATE_EPOCH }}
+          secrets: |
+            go_private_token=${{ secrets.GO_PRIVATE_TOKEN }}
+          cache-from: |
+            type=gha
+            type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
+          cache-to: |
+            type=gha,mode=max
+            type=registry,ref=${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4.1.2
+
+      # Keyless signing through Sigstore OIDC: no long-lived key to rotate or leak.
+      - name: Sign image with Cosign
+        run: cosign sign --yes "${{ env.IMAGE_NAME }}@${{ steps.pushed.outputs.digest }}"
+
+      - name: Verify image signature
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "^https://github\.com/${{ github.repository }}/.github/workflows/.*@refs/heads/main$" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${{ env.IMAGE_NAME }}@${{ steps.pushed.outputs.digest }}"
+
+      - name: Log image digest
+        env:
+          IMAGE_DIGEST: ${{ steps.pushed.outputs.digest }}
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: bash .github/scripts/log-image-digest.sh

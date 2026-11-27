@@ -1,0 +1,4 @@
+# Trivy findings accepted for commercial-billing (ci.yml, release.yml).
+# One CVE id per line, each with an owner, a reason and a review date.
+# Keep this empty unless a finding has no fix and is assessed unexploitable
+# in a distroless image — PCI scope (SAQ A) still applies to the image.

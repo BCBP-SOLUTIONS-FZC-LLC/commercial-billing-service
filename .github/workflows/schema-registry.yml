@@ -1,0 +1,208 @@
+# Registers Billing's six produced event schemas in the AWS Glue Schema
+# Registry "billing-events" (LLD §7.2, §7.6).
+#
+#   api/asyncapi.yaml → make schema-extract → internal/adapters/eventbus/schemas/*.json
+#   → staged as .tmp/glue/<EventType>.json (make _stage-produced: Glue names are the event types)
+#
+# Triggers:
+#   pull_request → main (schema files changed)  validate; diff against staging (read-only)
+#   push → main  (schema files changed)          validate → freeze check → diff → register → verify   (staging)
+#   release published                            same, production
+#   workflow_dispatch                            chosen environment
+#
+# The server resolves every produced schema's version by definition at
+# start-up and refuses to run ahead of the registry, so registration must
+# precede a deploy; release.yml re-checks it (schema-verify) before the image.
+#
+# A breaking change fails the diff: rename the event (…V2), dual-publish for
+# one release, and coordinate consumers (CONTRIBUTING.md, "Adding a domain
+# event"). Schemas are open — additive fields are compatible.
+#
+# AWS jobs are skipped (not failed) until the environment is wired:
+# vars.AWS_REGION is the switch. Per environment (staging / production):
+#   secrets AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY; vars AWS_REGION;
+#   optional vars SCHEMA_FREEZE (true blocks registration; override with force on dispatch);
+#   optional secrets PUSHGATEWAY_URL (schema-gov metrics → deploy/monitoring/schema-registry-alerts.yml)
+#   and ALARM_SNS_ARN.
+name: Glue Schema Registry
+
+"on":
+  pull_request:
+    branches: [main]
+    paths:
+      - 'internal/adapters/eventbus/schemas/*.json'
+      - 'api/asyncapi.yaml'
+  push:
+    branches: [main]
+    paths:
+      - 'internal/adapters/eventbus/schemas/*.json'
+      - 'api/asyncapi.yaml'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options: [staging, production]
+        default: staging
+      force:
+        description: 'Register even if SCHEMA_FREEZE is set'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  GLUE_REGISTRY_NAME: billing-events
+
+jobs:
+  # Runs on every PR that touches the schemas, with or without AWS.
+  validate:
+    name: Validate schemas
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: Set up Python (schema-gov)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install schema-gov (platform-schemagov v0.4.0)
+        run: pip install --no-cache-dir "git+https://x-access-token:${{ secrets.GO_PRIVATE_TOKEN }}@github.com/BCBP-SOLUTIONS-FZC-LLC/platform-schemagov.git@v0.4.0"
+
+      - name: Embedded schemas in sync with api/asyncapi.yaml
+        run: schema-gov extract --asyncapi api/asyncapi.yaml --schema-dir internal/adapters/eventbus/schemas --check
+
+      - name: Validate
+        run: schema-gov validate --asyncapi api/asyncapi.yaml --schema-dir internal/adapters/eventbus/schemas
+
+  # One job; the environment follows the trigger: push → staging, a
+  # published release → production, dispatch → the chosen one. (A job-level
+  # `if` cannot read `matrix`, so there is no matrix here.)
+  register:
+    name: Register schemas → ${{ github.event_name == 'release' && 'production' || (github.event_name == 'workflow_dispatch' && inputs.environment) || 'staging' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: vars.AWS_REGION != '' && github.event_name != 'pull_request'
+    environment: ${{ github.event_name == 'release' && 'production' || (github.event_name == 'workflow_dispatch' && inputs.environment) || 'staging' }}
+    env:
+      TARGET_ENV: ${{ github.event_name == 'release' && 'production' || (github.event_name == 'workflow_dispatch' && inputs.environment) || 'staging' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          token: ${{ secrets.CI_REPO_READ_TOKEN || github.token }}
+
+      - name: Set up Python (schema-gov)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install schema-gov (platform-schemagov v0.4.0)
+        run: pip install --no-cache-dir "git+https://x-access-token:${{ secrets.GO_PRIVATE_TOKEN }}@github.com/BCBP-SOLUTIONS-FZC-LLC/platform-schemagov.git@v0.4.0"
+
+      - name: Validate schemas
+        run: schema-gov validate --asyncapi api/asyncapi.yaml --schema-dir internal/adapters/eventbus/schemas
+
+      # Before credentials, so a frozen environment never configures them.
+      - name: Check schema freeze
+        env:
+          SCHEMA_FREEZE: ${{ vars.SCHEMA_FREEZE }}
+          FORCE_REGISTRATION: ${{ inputs.force }}
+          ENVIRONMENT: ${{ env.TARGET_ENV }}
+        run: |
+          if [ "${SCHEMA_FREEZE:-}" = "true" ] && [ "${FORCE_REGISTRATION}" != "true" ]; then
+            echo "::error title=Schema registry frozen::Registration is frozen for ${ENVIRONMENT}. Lift SCHEMA_FREEZE or re-run with force=true."
+            exit 1
+          fi
+          if [ "${SCHEMA_FREEZE:-}" = "true" ]; then
+            echo "::warning title=Freeze override::SCHEMA_FREEZE is set on ${ENVIRONMENT}, but force=true — proceeding."
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Stage produced schemas (Glue names)
+        run: make _stage-produced
+
+      # Fails on a breaking change before anything is uploaded.
+      - name: Diff against the registry
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          breaking=()
+          for file in .tmp/glue/*.json; do
+            name=$(basename "$file" .json)
+            ver=$(aws glue get-schema --schema-id "RegistryName=${GLUE_REGISTRY_NAME},SchemaName=${name}" \
+                    --query 'LatestSchemaVersion' --output text 2>/dev/null || echo "")
+            if [ -z "$ver" ] || [ "$ver" = "None" ]; then
+              echo "  ·  ${name}: not in the registry — first registration"
+              continue
+            fi
+            aws glue get-schema-version --schema-id "RegistryName=${GLUE_REGISTRY_NAME},SchemaName=${name}" \
+              --schema-version-number "VersionNumber=${ver}" --query 'SchemaDefinition' --output text > "/tmp/${name}.current.json"
+            if ! schema-gov diff --current "/tmp/${name}.current.json" --proposed "$file" --schema-name "$name"; then
+              breaking+=("$name")
+            fi
+          done
+          # Read by schema-gov metrics (glue_schema_registry_breaking_changes_blocked).
+          printf '{"breaking_count": %d}\n' "${#breaking[@]}" > "${RUNNER_TEMP}/schema-diff-metrics.json"
+          if [ "${#breaking[@]}" -gt 0 ]; then
+            for name in "${breaking[@]}"; do
+              echo "::error title=Breaking schema change::${name}: publish a new event type (${name}V2), dual-publish for one release and coordinate consumers."
+            done
+            exit 1
+          fi
+
+      - name: Register schemas
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: schema-gov register --registry "${GLUE_REGISTRY_NAME}" --schema-dir .tmp/glue
+
+      # The exact lookup the server does at start-up (GetSchemaByDefinition).
+      - name: Verify registered and AVAILABLE
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: make schema-verify
+
+      # Never fails the job (schema-gov metrics always exits 0). Reads the
+      # files the diff and register steps left in RUNNER_TEMP; pushes to the
+      # Pushgateway only when PUSHGATEWAY_URL is set.
+      - name: Emit metrics
+        if: always()
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          PUSHGATEWAY_URL: ${{ secrets.PUSHGATEWAY_URL }}
+          ALARM_SNS_ARN: ${{ secrets.ALARM_SNS_ARN }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          schema-gov metrics \
+            --registry "${GLUE_REGISTRY_NAME}" \
+            --env "${TARGET_ENV}" \
+            --job-status "${JOB_STATUS}" \
+            --metrics-dir "${RUNNER_TEMP}"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Glue registry ${GLUE_REGISTRY_NAME} — ${TARGET_ENV}"
+            for f in .tmp/glue/*.json; do [ -e "$f" ] && echo "- $(basename "$f" .json)"; done
+          } >> "$GITHUB_STEP_SUMMARY"

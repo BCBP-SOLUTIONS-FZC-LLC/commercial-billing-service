@@ -1,0 +1,30 @@
+# Default: every file needs review from the Commercial team.
+* @BCBP-SOLUTIONS-FZC-LLC/commercial-team
+
+# CI, release and repository automation.
+/.github/ @BCBP-SOLUTIONS-FZC-LLC/commercial-team @BCBP-SOLUTIONS-FZC-LLC/platform-team
+
+# PCI scope (SAQ A, LLD §10.1, HLD §15.4): the only stripe-go importer, the
+# webhook path (signature, ledger) and the provider port. A second reviewer
+# from the PCI owner group is required.
+/internal/adapters/provider/ @BCBP-SOLUTIONS-FZC-LLC/commercial-team @BCBP-SOLUTIONS-FZC-LLC/pci-owners
+/internal/adapters/webhook/ @BCBP-SOLUTIONS-FZC-LLC/commercial-team @BCBP-SOLUTIONS-FZC-LLC/pci-owners
+/internal/app/port/payment_provider.go @BCBP-SOLUTIONS-FZC-LLC/commercial-team @BCBP-SOLUTIONS-FZC-LLC/pci-owners
+/internal/certify/ @BCBP-SOLUTIONS-FZC-LLC/commercial-team @BCBP-SOLUTIONS-FZC-LLC/pci-owners
+/cmd/certify/ @BCBP-SOLUTIONS-FZC-LLC/commercial-team @BCBP-SOLUTIONS-FZC-LLC/pci-owners
+
+# Event contract: consumed by Core, Realm Provisioner, Entitlements, Audit,
+# Notification and AuthZ Enrichment.
+/api/asyncapi.yaml @BCBP-SOLUTIONS-FZC-LLC/commercial-team @BCBP-SOLUTIONS-FZC-LLC/platform-team
+/internal/adapters/eventbus/schemas/ @BCBP-SOLUTIONS-FZC-LLC/commercial-team @BCBP-SOLUTIONS-FZC-LLC/platform-team
+
+# Migrations run against every replica and money records; production needs
+# the production-data-migrations approval (LLD §13.4).
+/internal/adapters/postgres/migrations/ @BCBP-SOLUTIONS-FZC-LLC/commercial-team @BCBP-SOLUTIONS-FZC-LLC/platform-team
+
+# Deployment: network policy, mesh identity, secrets, production values.
+/deploy/ @BCBP-SOLUTIONS-FZC-LLC/commercial-team @BCBP-SOLUTIONS-FZC-LLC/platform-team
+/deploy/helm/values-prod.yaml @BCBP-SOLUTIONS-FZC-LLC/commercial-team @BCBP-SOLUTIONS-FZC-LLC/platform-team @BCBP-SOLUTIONS-FZC-LLC/pci-owners
+
+# The design: changes go through the Commercial team's sign-off.
+/docs/lld/ @BCBP-SOLUTIONS-FZC-LLC/commercial-team

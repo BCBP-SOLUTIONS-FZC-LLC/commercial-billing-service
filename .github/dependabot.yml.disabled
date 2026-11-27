@@ -1,0 +1,46 @@
+version: 2
+
+# Dependabot needs read access to the private BCBP-SOLUTIONS-FZC-LLC Go
+# modules (platform-gincommon, -pgcommon, -events, -audit) to resolve the
+# module graph for any gomod update. Requires a Dependabot secret
+# GO_PRIVATE_TOKEN (Settings → Secrets and variables → Dependabot — a
+# separate store from Actions secrets).
+registries:
+  github-bcbp:
+    type: git
+    url: https://github.com
+    username: x-access-token
+    password: ${{ secrets.GO_PRIVATE_TOKEN }}
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    registries: [github-bcbp]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, go]
+    # stripe-go: a bump that changes the pinned Stripe API version changes
+    # the adapter version and needs a new certification run (BIL-PROV-2), so
+    # it is upgraded by hand, deliberately.
+    ignore:
+      - dependency-name: github.com/stripe/stripe-go/*
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    labels: [dependencies, docker]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, github-actions]
+
+# DISABLED: named dependabot.yml.disabled so GitHub does not read it. To
+# enable, once GO_PRIVATE_TOKEN is set for Dependabot:
+#   git mv .github/dependabot.yml.disabled .github/dependabot.yml
