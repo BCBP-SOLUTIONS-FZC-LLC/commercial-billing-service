@@ -293,7 +293,7 @@ func (m *Metrics) ProviderCertified(provider, adapterVersion string, ok bool) {
 // "received"}, and a missing series would leave it unable to scale down.
 var (
 	backlogStatuses = []string{"received", "failed"}
-	sagaStates      = []string{"payment_confirmed", "rp_convert_pending", "awaiting_tenant_converted", "failed"}
+	sagaStates      = []string{"payment_confirmed", "rp_convert_pending", "awaiting_tenant_converted", "failed", "reverting"}
 )
 
 // SetSnapshot replaces the exporter gauges with a fresh database reading

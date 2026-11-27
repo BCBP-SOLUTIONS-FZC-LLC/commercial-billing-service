@@ -21,16 +21,19 @@ const (
 	SagaRPConvertPending        SagaState = "rp_convert_pending"
 	SagaAwaitingTenantConverted SagaState = "awaiting_tenant_converted"
 	SagaConfirmed               SagaState = "confirmed"
-	SagaFailed                  SagaState = "failed"
-	SagaRefundPending           SagaState = "refund_pending"
-	SagaRefunded                SagaState = "refunded"
-	SagaReverted                SagaState = "reverted"
+	// SagaReverting: B-O8 recorded a reversal request and RP-4 has not yet
+	// answered 200; the saga worker retries RP-4 and completes it (§8.2, rev 0.63).
+	SagaReverting     SagaState = "reverting"
+	SagaFailed        SagaState = "failed"
+	SagaRefundPending SagaState = "refund_pending"
+	SagaRefunded      SagaState = "refunded"
+	SagaReverted      SagaState = "reverted"
 )
 
 // AllSagaStates lists every state, for exhaustive tests.
 var AllSagaStates = []SagaState{
 	SagaPaymentConfirmed, SagaRPConvertPending, SagaAwaitingTenantConverted, SagaConfirmed,
-	SagaFailed, SagaRefundPending, SagaRefunded, SagaReverted,
+	SagaReverting, SagaFailed, SagaRefundPending, SagaRefunded, SagaReverted,
 }
 
 // Terminal reports whether no further transition is possible. confirmed is
@@ -67,7 +70,11 @@ var sagaTransitions = map[SagaState][]SagaState{
 	SagaAwaitingTenantConverted: {SagaConfirmed, SagaRefundPending},
 	SagaFailed:                  {SagaRPConvertPending, SagaRefundPending},
 	SagaRefundPending:           {SagaRefunded},
-	SagaConfirmed:               {SagaReverted},
+	// B-O8 records the request first (confirmed → reverting), then completes
+	// it (reverting → reverted). A terminal RP-4 answer drops the request
+	// (reverting → confirmed). Stay = an RP-4 retry.
+	SagaConfirmed: {SagaReverting},
+	SagaReverting: {SagaReverting, SagaReverted, SagaConfirmed},
 }
 
 // CanSagaTransition reports whether from → to is allowed (§9.3.1).
@@ -137,7 +144,7 @@ func RP3IdempotencyKey(tenantID, billingSubscriptionID string) string {
 // the use cases check the specific from → to with CanSagaTransition.
 func CanSagaTransitionOrStay(s ConversionSaga) bool {
 	switch s.State {
-	case SagaPaymentConfirmed, SagaRPConvertPending, SagaAwaitingTenantConverted, SagaConfirmed, SagaFailed,
+	case SagaPaymentConfirmed, SagaRPConvertPending, SagaAwaitingTenantConverted, SagaConfirmed, SagaReverting, SagaFailed,
 		SagaRefundPending, SagaRefunded, SagaReverted:
 		return true
 	}

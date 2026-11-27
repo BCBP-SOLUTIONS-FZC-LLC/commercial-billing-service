@@ -96,6 +96,7 @@ func TestConversionReversal(t *testing.T) {
 	mustNoErr(t, sql(ctx, `UPDATE subscriptions SET converted_at = now() WHERE billing_subscription_id = $1::uuid`, sub))
 	// TenantConverted applied: the account is active.
 	mustNoErr(t, sql(ctx, `UPDATE billing_accounts SET iam_lifecycle = 'active', iam_last_event_at = now() WHERE tenant_id = $1::uuid`, tenant))
+	mustNoErr(t, sql(ctx, `UPDATE conversion_sagas SET state = 'confirmed', confirmed_at = now() WHERE billing_subscription_id = $1::uuid`, sub))
 	e.mirrorPaid(t, tenant, sub, "in_conv_"+sub, "subscription_create", 20700)
 	d := invoiceState("dp_1_"+sub, "", "needs_response", "", e.now, 0)
 	d.Ref.Kind = domain.ObjectDispute
@@ -135,6 +136,7 @@ func TestConversionReversal(t *testing.T) {
 	// Outside the window → 409.
 	tenant2, sub2 := e.activeSubscription(t, "pro", 3)
 	mustNoErr(t, sql(ctx, `UPDATE subscriptions SET converted_at = now() - interval '8 days' WHERE billing_subscription_id = $1::uuid`, sub2))
+	mustNoErr(t, sql(ctx, `UPDATE conversion_sagas SET state = 'confirmed', confirmed_at = now() WHERE billing_subscription_id = $1::uuid`, sub2))
 	if _, err := e.svc.RevertConversion(ctx, operator, tenant2, app.ReversalRequest{Reason: "a long enough reason"}); !domain.HasCode(err, domain.ErrRevertWindowExpired) {
 		t.Fatalf("window: %v", err)
 	}

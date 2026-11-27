@@ -1,0 +1,11 @@
+-- 000008_saga_reverting_state: saga state 'reverting' (§9.3.1, rev 0.63).
+--
+-- B-O8 records the operator's reversal request on the saga before it calls
+-- RP-4 (confirmed → reverting). Realm Provisioner finishes a revert in the
+-- background (RP-D30), so when RP-4 answers 503 or times out the saga worker
+-- keeps calling RP-4 with the same key and completes the reversal (provider
+-- cancel, refund, subscription ended) once RP answers 200.
+--
+-- A separate migration from 000009: a new enum value cannot be used in the
+-- transaction that adds it, and 000009's index predicate uses it.
+ALTER TYPE saga_state ADD VALUE IF NOT EXISTS 'reverting' AFTER 'confirmed';

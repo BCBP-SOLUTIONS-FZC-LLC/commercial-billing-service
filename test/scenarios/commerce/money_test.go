@@ -5,6 +5,7 @@ package commerce_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
@@ -317,6 +318,11 @@ func TestReversalPaths(t *testing.T) {
 	exec(t, `UPDATE subscriptions SET converted_at = $2 WHERE billing_subscription_id = $1::uuid`, sub, e.now)
 	exec(t, `UPDATE billing_accounts SET iam_lifecycle = 'active' WHERE tenant_id = $1::uuid`, tenant)
 	e.mirror(t, tenant, sub, "in_conv_"+sub, "subscription_create", "paid", 20700)
+	saga := scalar[string](t, `SELECT saga_id::text FROM conversion_sagas WHERE billing_subscription_id = $1`, sub)
+	exec(t, `UPDATE conversion_sagas SET state = 'awaiting_tenant_converted' WHERE saga_id = $1`, saga)
+	_, err = e.svc.RevertConversion(ctx, operator, tenant, req)
+	isCode(t, "conversion not confirmed", err, domain.ErrSubscriptionNotActive)
+	exec(t, `UPDATE conversion_sagas SET state = 'confirmed', confirmed_at = now() WHERE saga_id = $1`, saga)
 
 	e.fail("Subs.Live", 0)
 	_, err = e.svc.RevertConversion(ctx, operator, tenant, req)
@@ -339,27 +345,64 @@ func TestReversalPaths(t *testing.T) {
 	}
 
 	e.rp.reverts = []domain.RP3Answer{{Status: 409, ErrorCode: "revert_window_expired"}, {Status: 503}, {Status: 0},
-		{Status: 409, ErrorCode: "operation_in_progress"}, {Status: 422, ErrorCode: "tenant_not_converted"}}
+		{Status: 409, ErrorCode: "operation_in_progress"}, {Status: 409, ErrorCode: "optimistic_lock_conflict"},
+		{Status: 422, ErrorCode: "tenant_not_converted"}, {Status: 400, ErrorCode: "invalid_request"},
+		{Status: 403, ErrorCode: "insufficient_role"}, {Status: 403}, {Status: 404, ErrorCode: "tenant_realm_not_found"}}
 	for i, want := range []domain.ErrorCode{domain.ErrRevertWindowExpired, domain.ErrIAMUnavailable, domain.ErrIAMUnavailable,
-		domain.ErrIAMUnavailable, domain.ErrInternal} {
+		domain.ErrIAMUnavailable, domain.ErrIAMUnavailable, domain.ErrInternal, domain.ErrInternal, domain.ErrInternal, domain.ErrInternal,
+		domain.ErrInternal} {
+		e.now = e.now.Add(10 * time.Minute) // past the previous answer's backoff
 		_, err = e.svc.RevertConversion(ctx, operator, tenant, req)
 		isCode(t, "RP-4 answer "+string(rune('0'+i)), err, want)
 	}
-	e.reg.hidden["stripe"] = true
-	_, err = e.svc.RevertConversion(ctx, operator, tenant, req)
-	isCode(t, "provider unloaded", err, domain.ErrProviderNotEnabled)
-	delete(e.reg.hidden, "stripe")
-	e.p.on("CancelNow", answer{err: errProvider})
-	_, err = e.svc.RevertConversion(ctx, operator, tenant, req)
-	isCode(t, "cancel", err, domain.ErrProviderUnavailable)
+	// Each refusal above dropped the request: the saga is confirmed again.
+	if got := scalar[string](t, `SELECT state::text FROM conversion_sagas WHERE saga_id = $1`, saga); got != "confirmed" {
+		t.Fatalf("after a terminal RP-4 answer: %s", got)
+	}
+	// From here RP-4 answers 200 and a provider step fails: the request stays
+	// recorded (reverting) and a repeat of the same body continues it.
 	withRefund := req
 	withRefund.Refund = true
+	e.reg.hidden["stripe"] = true
+	_, err = e.svc.RevertConversion(ctx, operator, tenant, withRefund)
+	isCode(t, "provider unloaded", err, domain.ErrProviderNotEnabled)
+	delete(e.reg.hidden, "stripe")
+	if got := scalar[string](t, `SELECT state::text||'/'||reversal_refund::text FROM conversion_sagas WHERE saga_id = $1`, saga); got != "reverting/true" {
+		t.Fatalf("request not recorded: %s", got)
+	}
+	_, err = e.svc.RevertConversion(ctx, operator, tenant, req)
+	isCode(t, "a different request while one is recorded", err, domain.ErrRequestInProgress)
+	// RP-4 answered 200: recorded, so RP-4 is never called again for it.
+	if n := count(t, `SELECT count(*) FROM conversion_sagas WHERE saga_id = $1 AND reversal_rp_done_at IS NOT NULL`, saga); n != 1 {
+		t.Fatal("RP-4 200 not recorded")
+	}
+	_, err = e.svc.RevertConversion(ctx, operator, tenant, withRefund)
+	isCode(t, "repeat inside the backoff", err, domain.ErrIAMUnavailable)
+	rpCalls := len(e.rp.keys)
+	e.p.on("CancelNow", answer{err: errProvider})
+	e.now = e.now.Add(10 * time.Minute)
+	_, err = e.svc.RevertConversion(ctx, operator, tenant, withRefund)
+	isCode(t, "cancel", err, domain.ErrProviderUnavailable)
 	e.fail("Invoices.ConversionInvoice", 0)
+	e.now = e.now.Add(10 * time.Minute)
 	_, err = e.svc.RevertConversion(ctx, operator, tenant, withRefund)
 	isInjected(t, "conversion invoice", err)
 	e.p.on("Refund", answer{err: errProvider})
+	e.now = e.now.Add(10 * time.Minute)
 	_, err = e.svc.RevertConversion(ctx, operator, tenant, withRefund)
 	isCode(t, "refund", err, domain.ErrProviderUnavailable)
+	if len(e.rp.keys) != rpCalls {
+		t.Fatalf("RP-4 called again after its 200: %d calls", len(e.rp.keys)-rpCalls)
+	}
+	// B-O9 refund, resolved_manually and a late TenantConverted leave the
+	// recorded reversal alone (§9.3.1).
+	_, err = e.svc.SagaAction(ctx, operator, tenant, saga, app.SagaActionRequest{Action: "refund", Reason: "Signup could not complete"})
+	isCode(t, "B-O9 refund while reverting", err, domain.ErrSagaAlreadyConfirmed)
+	_, err = e.svc.SagaAction(ctx, operator, tenant, saga, app.SagaActionRequest{Action: "resolved_manually", Reason: "Checked by hand in RP"})
+	isCode(t, "resolved_manually while reverting", err, domain.ErrSagaAlreadyConfirmed)
+	if got := scalar[string](t, `SELECT state::text FROM conversion_sagas WHERE saga_id = $1`, saga); got != "reverting" {
+		t.Fatalf("saga %s", got)
+	}
 	for _, k := range e.rp.keys {
 		if k != "revert:"+tenant+":"+sub {
 			t.Fatalf("RP-4 key %s", k)
@@ -373,9 +416,16 @@ func TestReversalPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	withRefund.DisputeID = scalar[string](t, `SELECT dispute_id::text FROM disputes WHERE tenant_id = $1`, tenant)
+	// The recorded request had no dispute: a request naming one waits for it.
+	_, err = e.svc.RevertConversion(ctx, operator, tenant, withRefund)
+	isCode(t, "dispute added while a request is recorded", err, domain.ErrRequestInProgress)
+	exec(t, `UPDATE conversion_sagas SET state = 'confirmed', next_attempt_at = NULL, reversal_requested_at = NULL,
+		reversal_requested_by = NULL, reversal_reason = NULL, reversal_refund = NULL, reversal_rp_done_at = NULL WHERE saga_id = $1`, saga)
+	e.now = e.now.Add(10 * time.Minute)
 	for _, f := range []string{"Subs.Get", "Subs.Transition", "Subs.AppendHistory", "Sagas.Get", "Sagas.Update", "Accounts.ReturnToTrial",
 		"Money.DecideDispute", "Audit.Write"} {
 		e.fail(f, 0)
+		e.now = e.now.Add(10 * time.Minute)
 		_, err := e.svc.RevertConversion(ctx, operator, tenant, withRefund)
 		isInjected(t, f, err)
 		if got := scalar[string](t, `SELECT status::text FROM subscriptions WHERE billing_subscription_id = $1`, sub); got != "active" {
@@ -383,6 +433,7 @@ func TestReversalPaths(t *testing.T) {
 		}
 	}
 	refunds := len(e.p.called("Refund "))
+	e.now = e.now.Add(10 * time.Minute)
 	res, err := e.svc.RevertConversion(ctx, operator, tenant, withRefund)
 	if err != nil || res.ReversalStatus != "reverted" || res.RefundID != nil {
 		t.Fatalf("reversal %+v %v", res, err)
@@ -397,6 +448,108 @@ func TestReversalPaths(t *testing.T) {
 	}
 	if n := count(t, `SELECT count(*) FROM pending_audit_entries WHERE tenant_id = $1 AND entry->>'entry_type' = 'billing.conversion.reverted'`, tenant); n != 1 {
 		t.Fatalf("audit %d", n)
+	}
+}
+
+// B-O8 answered 503 while Realm Provisioner was still reverting (RP-D30):
+// the request stays recorded, the saga worker retries RP-4 with the same key
+// and completes the reversal (provider cancel, one refund, subscription
+// ended, account back on trial, one AL-5 entry), even after the 7-day window;
+// a later repeat of B-O8 finds nothing left to revert.
+func TestReversalCompletedBySagaWorker(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant, sub := e.activeSubscription(t, "pro", 3)
+	exec(t, `UPDATE subscriptions SET converted_at = $2 WHERE billing_subscription_id = $1::uuid`, sub, e.now)
+	exec(t, `UPDATE billing_accounts SET iam_lifecycle = 'active' WHERE tenant_id = $1::uuid`, tenant)
+	e.mirror(t, tenant, sub, "in_conv_"+sub, "subscription_create", "paid", 20700)
+	saga := scalar[string](t, `SELECT saga_id::text FROM conversion_sagas WHERE billing_subscription_id = $1`, sub)
+	exec(t, `UPDATE conversion_sagas SET state = 'confirmed', confirmed_at = now() WHERE saga_id = $1`, saga)
+	req := app.ReversalRequest{Refund: true, Reason: "Early fraud warning on conversion payment"}
+
+	e.rp.reverts = []domain.RP3Answer{{Status: 409, ErrorCode: "operation_in_progress"}, {Status: 0}}
+	_, err := e.svc.RevertConversion(ctx, operator, tenant, req)
+	isCode(t, "RP-4 still running", err, domain.ErrIAMUnavailable)
+	if got := scalar[string](t, `SELECT state::text||'/'||last_error_code FROM conversion_sagas WHERE saga_id = $1`, saga); got != "reverting/operation_in_progress" {
+		t.Fatalf("after 503: %s", got)
+	}
+	// Past the window: the recorded request is still completed.
+	e.now = e.now.Add(8 * 24 * time.Hour)
+	if _, err := e.svc.RunSagas(ctx, 100); err != nil { // RP-4 transport error: retried later
+		t.Fatal(err)
+	}
+	if got := scalar[string](t, `SELECT state::text FROM conversion_sagas WHERE saga_id = $1`, saga); got != "reverting" {
+		t.Fatalf("after a retryable worker attempt: %s", got)
+	}
+	e.now = e.now.Add(10 * time.Minute)
+	if _, err := e.svc.RunSagas(ctx, 100); err != nil { // RP-4 200: completed
+		t.Fatal(err)
+	}
+	if got := scalar[string](t, `SELECT s.status::text||'/'||s.cancel_reason::text||'/'||g.state::text||'/'||a.iam_lifecycle::text
+		FROM subscriptions s JOIN conversion_sagas g USING (billing_subscription_id)
+		JOIN billing_accounts a ON a.tenant_id = s.tenant_id WHERE s.billing_subscription_id = $1`, sub); got != "ended/operator_reversal/reverted/trial" {
+		t.Fatalf("state %s", got)
+	}
+	if n := count(t, `SELECT count(*) FROM refunds WHERE tenant_id = $1 AND idempotency_key = $2`, tenant, "refund:reversal:"+sub); n != 1 {
+		t.Fatalf("refunds %d", n)
+	}
+	if c := e.p.called("CancelNow!"); len(c) != 1 {
+		t.Fatalf("provider cancels %v", c)
+	}
+	if n := count(t, `SELECT count(*) FROM pending_audit_entries WHERE tenant_id = $1 AND entry->>'entry_type' = 'billing.conversion.reverted'`, tenant); n != 1 {
+		t.Fatalf("audit %d", n)
+	}
+	for _, k := range e.rp.keys {
+		if k != "revert:"+tenant+":"+sub {
+			t.Fatalf("RP-4 key %s", k)
+		}
+	}
+	_, err = e.svc.RevertConversion(ctx, operator, tenant, req)
+	isCode(t, "repeat after completion", err, domain.ErrSubscriptionNotActive)
+}
+
+// RP-4 answered 200 but Billing's side failed (provider cancel, then the
+// refund): the request is marked, so RP-4 is never called again (RP would
+// now refuse it: past the window) and the request is never dropped. The
+// saga worker completes it; a refund the provider never issued within the
+// key window does not block the reversal and pages for a manual refund.
+func TestReversalCompletesAfterRP4WithoutCallingItAgain(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant, sub := e.activeSubscription(t, "pro", 3)
+	exec(t, `UPDATE subscriptions SET converted_at = $2 WHERE billing_subscription_id = $1::uuid`, sub, e.now)
+	exec(t, `UPDATE billing_accounts SET iam_lifecycle = 'active' WHERE tenant_id = $1::uuid`, tenant)
+	e.mirror(t, tenant, sub, "in_conv_"+sub, "subscription_create", "paid", 20700)
+	saga := scalar[string](t, `SELECT saga_id::text FROM conversion_sagas WHERE billing_subscription_id = $1`, sub)
+	exec(t, `UPDATE conversion_sagas SET state = 'confirmed', confirmed_at = now() WHERE saga_id = $1`, saga)
+	req := app.ReversalRequest{Refund: true, Reason: "Early fraud warning on conversion payment"}
+
+	e.p.on("Refund", answer{err: errProvider})
+	_, err := e.svc.RevertConversion(ctx, operator, tenant, req) // RP-4 200, refund fails
+	isCode(t, "refund", err, domain.ErrProviderUnavailable)
+	e.rp.reverts = []domain.RP3Answer{{Status: 409, ErrorCode: "revert_window_expired"}}
+	e.p.on("Refund", answer{err: errProvider})
+	e.now = e.now.Add(10 * time.Minute)
+	if _, err := e.svc.RunSagas(ctx, 100); err != nil {
+		t.Fatal(err)
+	}
+	if got := scalar[string](t, `SELECT state::text||'/'||last_error_code FROM conversion_sagas WHERE saga_id = $1`, saga); got != "reverting/completion_failed" {
+		t.Fatalf("after a failed completion: %s", got)
+	}
+	// Past the provider key window the unissued refund no longer blocks.
+	e.now = e.now.Add(24 * time.Hour)
+	if _, err := e.svc.RunSagas(ctx, 100); err != nil {
+		t.Fatal(err)
+	}
+	if got := scalar[string](t, `SELECT s.status::text||'/'||g.state::text FROM subscriptions s JOIN conversion_sagas g USING (billing_subscription_id)
+		WHERE s.billing_subscription_id = $1`, sub); got != "ended/reverted" {
+		t.Fatalf("state %s", got)
+	}
+	if len(e.rp.reverts) != 1 {
+		t.Fatal("RP-4 called again after its 200")
+	}
+	if !e.log.has("ERROR", "SEV-2", "B-O3", tenant) {
+		t.Fatalf("unissued refund not paged: %v", e.log.lines)
 	}
 }
 

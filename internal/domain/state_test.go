@@ -72,7 +72,10 @@ func TestSagaEveryStatePair(t *testing.T) {
 		{SagaFailed, SagaRPConvertPending}:                  true,
 		{SagaFailed, SagaRefundPending}:                     true,
 		{SagaRefundPending, SagaRefunded}:                   true,
-		{SagaConfirmed, SagaReverted}:                       true,
+		{SagaConfirmed, SagaReverting}:                      true,
+		{SagaReverting, SagaReverting}:                      true,
+		{SagaReverting, SagaReverted}:                       true,
+		{SagaReverting, SagaConfirmed}:                      true,
 	}
 	for _, from := range AllSagaStates {
 		for _, to := range AllSagaStates {

@@ -38,6 +38,23 @@ func TestSubscriptionStatusConstraints(t *testing.T) {
 	mustExec(t, superPool, `UPDATE subscriptions SET collection_paused=true, collection_paused_by='auto' WHERE billing_subscription_id=$1`, s.Sub)
 }
 
+// 000008 / 000009 (§8.2, rev 0.63): a reverting saga carries the B-O8
+// request it completes, and the due scan's index covers it.
+func TestSagaReversalRequestConstraint(t *testing.T) {
+	s := seedTenant(t)
+	mustExec(t, superPool, `UPDATE conversion_sagas SET state = 'confirmed', confirmed_at = now() WHERE billing_subscription_id = $1`, s.Sub)
+	want(t, "23514", "reverting without its request", `UPDATE conversion_sagas SET state = 'reverting' WHERE billing_subscription_id = $1`, s.Sub)
+	want(t, "23514", "reverting without the refund flag", `UPDATE conversion_sagas SET state = 'reverting', reversal_requested_at = now(),
+		reversal_requested_by = $2::uuid, reversal_reason = 'fraud on the conversion payment' WHERE billing_subscription_id = $1`, s.Sub, commercialSystem)
+	mustExec(t, superPool, `UPDATE conversion_sagas SET state = 'reverting', reversal_requested_at = now(), reversal_requested_by = $2::uuid,
+		reversal_reason = 'fraud on the conversion payment', reversal_refund = true WHERE billing_subscription_id = $1`, s.Sub, commercialSystem)
+	n, err := count(context.Background(), superPool, `SELECT count(*) FROM pg_indexes WHERE indexname = 'idx_saga_due'
+		AND indexdef LIKE '%rp_convert_pending%' AND indexdef LIKE '%reverting%'`)
+	if err != nil || n != 1 {
+		t.Errorf("idx_saga_due does not cover reverting sagas (%d, %v)", n, err)
+	}
+}
+
 // BIL-SEAT-1 / BIL-SEAT-2: one open purchase and one open schedule.
 func TestBIL_SEAT_1_and_2_OneOpen(t *testing.T) {
 	s := seedTenant(t)

@@ -71,8 +71,16 @@ type ConversionSaga struct {
 	Resolution            *string
 	ResolutionReason      *string
 	ResolvedBy            *string
-	RecordVersion         int64
-	CreatedAt, UpdatedAt  time.Time
+	// The B-O8 request a reverting saga carries (§8.2, rev 0.63).
+	ReversalRequestedAt *time.Time
+	ReversalRequestedBy *string
+	ReversalReason      *string
+	ReversalRefund      *bool
+	ReversalDisputeID   *string
+	// ReversalRPDoneAt: RP-4 answered 200; only Billing's completion is left.
+	ReversalRPDoneAt     *time.Time
+	RecordVersion        int64
+	CreatedAt, UpdatedAt time.Time
 }
 
 // SagaBackoff is §8.1.2 step 2: 2 s, 4 s, 8 s … capped.

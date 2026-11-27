@@ -42,7 +42,6 @@ type RealmView struct {
 type ConvertRequest struct {
 	Plan                  domain.PlanCode `json:"plan"`
 	BillingSubscriptionID string          `json:"billing_subscription_id"`
-	PaymentMethodID       string          `json:"payment_method_id,omitempty"`
 }
 
 // CoreClient calls Org & Membership as commercial-system (§18.2). Failures
