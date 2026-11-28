@@ -191,6 +191,13 @@ func TestDirectSignupExpiry(t *testing.T) {
 	}
 	sub := scalar[string](t, `SELECT billing_subscription_id::text FROM subscriptions WHERE tenant_id = $1`, tenant)
 	e.now = e.now.Add(31 * time.Minute)
+	e.stripe.subStatus = "incomplete" // 3-D Secure abandoned: the first invoice is unpaid
+	e.f.on("Provider.FetchCurrent", 0)
+	_, err := e.svc.AuthorizeAndCharge(ctx, bff, chargeReq(tenant))
+	wantCode(t, err, domain.ErrInternal) // the expiry re-read failed: retried, nothing cancelled
+	if status(t, sub) != "incomplete" {
+		t.Fatal("cancelled without reading the payment")
+	}
 	for _, name := range []string{"Provider.CancelNow", "Subs.Get", "Subs.Transition"} {
 		e.f.on(name, 0)
 		_, err := e.svc.AuthorizeAndCharge(ctx, bff, chargeReq(tenant))
@@ -203,13 +210,75 @@ func TestDirectSignupExpiry(t *testing.T) {
 			t.Fatalf("%s: committed", name)
 		}
 	}
-	_, err := e.svc.AuthorizeAndCharge(ctx, bff, chargeReq(tenant))
+	_, err = e.svc.AuthorizeAndCharge(ctx, bff, chargeReq(tenant))
 	wantCode(t, err, domain.ErrChargeExpired)
 	if got := subStatus(t, tenant); got != "ended/signup_failed/sub_"+sub {
 		t.Fatalf("expired %s", got)
 	}
 	if n := count(t, `SELECT count(*) FROM subscription_status_history WHERE billing_subscription_id = $1 AND to_status = 'ended' AND cause = 'api:B-I1'`, sub); n != 1 {
 		t.Fatalf("history %d", n)
+	}
+}
+
+// 3-D Secure completed just before SCA_ABANDON_AFTER, retry (or the
+// purchase-expiry job) after it: the paid first invoice is activated as on
+// the paid path (201, active, direct-signup saga), never cancelled with a
+// 410 (rev 0.68). A first invoice paid after Billing ended the signup anyway
+// is parked for an operator, not ignored.
+func TestDirectSignupPaidJustBeforeExpiry(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant := e.tenant()
+	e.stripe.confirm = []port.PaymentOutcome{{Status: port.PaymentRequiresAction, ClientSecret: "pi_x"}}
+	if _, err := e.svc.AuthorizeAndCharge(ctx, bff, chargeReq(tenant)); !domain.HasCode(err, domain.ErrPaymentActionRequired) {
+		t.Fatal(err)
+	}
+	sub := scalar[string](t, `SELECT billing_subscription_id::text FROM subscriptions WHERE tenant_id = $1`, tenant)
+	e.now = e.now.Add(31 * time.Minute) // past the window; the provider says paid (default "active")
+	res, err := e.svc.AuthorizeAndCharge(ctx, bff, chargeReq(tenant))
+	if err != nil || res.BillingSubscriptionID != sub || res.Status != "active" {
+		t.Fatalf("late payment: %+v %v", res, err)
+	}
+	if got := scalar[string](t, `SELECT state::text FROM conversion_sagas WHERE billing_subscription_id = $1`, sub); got != "awaiting_tenant_converted" {
+		t.Fatalf("saga %s", got)
+	}
+	if len(e.stripe.calls("CancelNow")) != 0 {
+		t.Fatal("a paid signup was cancelled")
+	}
+
+	// The job path: same answer, no cancel.
+	t2 := e.tenant()
+	e.stripe.confirm = []port.PaymentOutcome{{Status: port.PaymentRequiresAction, ClientSecret: "pi_y"}}
+	if _, err := e.svc.AuthorizeAndCharge(ctx, bff, chargeReq(t2)); !domain.HasCode(err, domain.ErrPaymentActionRequired) {
+		t.Fatal(err)
+	}
+	s2 := scalar[string](t, `SELECT billing_subscription_id::text FROM subscriptions WHERE tenant_id = $1`, t2)
+	e.now = e.now.Add(31 * time.Minute)
+	if _, err := e.svc.ExpireStale(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if status(t, s2) != "active" || len(e.stripe.calls("CancelNow")) != 0 {
+		t.Fatalf("job: %s", status(t, s2))
+	}
+
+	// Paid after Billing ended the signup (the re-read said unpaid, then the
+	// customer paid before the cancel landed): parked, SEV-2.
+	t3 := e.tenant()
+	e.stripe.confirm = []port.PaymentOutcome{{Status: port.PaymentRequiresAction, ClientSecret: "pi_z"}}
+	if _, err := e.svc.AuthorizeAndCharge(ctx, bff, chargeReq(t3)); !domain.HasCode(err, domain.ErrPaymentActionRequired) {
+		t.Fatal(err)
+	}
+	s3 := scalar[string](t, `SELECT billing_subscription_id::text FROM subscriptions WHERE tenant_id = $1`, t3)
+	e.now = e.now.Add(31 * time.Minute)
+	e.stripe.subStatus = "incomplete"
+	_, err = e.svc.AuthorizeAndCharge(ctx, bff, chargeReq(t3))
+	wantCode(t, err, domain.ErrChargeExpired)
+	e.stripe.subStatus = ""
+	paid := invoiceState("in_late_"+s3, s3, "paid", "subscription_create", e.now, 3)
+	_, err = e.handle(t3, app.CycleInvoicePaid{S: e.svc}, callback("evt_late_"+s3, "invoice.paid", domain.KindInvoicePaid), paid)
+	var parked *port.ParkedEvent
+	if !errors.As(err, &parked) || parked.Reason != "paid_after_end" {
+		t.Fatalf("paid after end: %v", err)
 	}
 }
 

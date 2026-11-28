@@ -502,6 +502,9 @@ type provider struct {
 	caps port.ProviderCapabilities
 	// confirm scripts ConfirmInitialPayment answers (default paid).
 	confirm []port.PaymentOutcome
+	// subStatus is the provider subscription status FetchCurrent reports
+	// ("" = active, i.e. the first invoice is paid).
+	subStatus string
 	// change scripts ChangeQuantity errors (default paid).
 	change []error
 	// onEnsureCustomer runs once inside the next EnsureCustomer call.
@@ -585,7 +588,13 @@ func (p *provider) CancelNow(_ context.Context, ref port.SubscriptionRef, key st
 // FetchCurrent answers an active subscription whose period starts at now.
 func (p *provider) FetchCurrent(_ context.Context, obj domain.ProviderObjectRef) (domain.ProviderObjectState, error) {
 	start := p.now().Truncate(time.Second)
-	return domain.ProviderObjectState{Ref: obj, Status: "active", Fields: map[string]any{
+	p.mu.Lock()
+	st := p.subStatus
+	p.mu.Unlock()
+	if st == "" {
+		st = "active"
+	}
+	return domain.ProviderObjectState{Ref: obj, Status: st, Fields: map[string]any{
 		"current_period_start": start, "current_period_end": start.AddDate(0, 1, 0)}}, p.call("FetchCurrent", obj.ID)
 }
 
