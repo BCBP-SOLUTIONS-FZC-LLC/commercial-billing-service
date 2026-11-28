@@ -22,7 +22,7 @@ This file provides guidance to Claude Code when working with **commercial-billin
 
 **Status:** Phases 0–8 are implemented. Phases 0–5 sit on the stacked branches `feat/billing-phase-0-scaffolding` … `feat/billing-phase-5-api`; phases 6–8 and all later work (platform-library routing, RFC 9457, observability standard, tests, CI/CD, and the two production-readiness review rounds of LLD rev 0.59 and 0.60) are on `feat/billing-phase-6-flows`. `main` holds only the LLD. Nothing is deployed to any environment. Go-live still waits on cross-team items (`docs/lld/billing-open-items.md`), the Stripe adapter 1.1.0 certification and the LLD §20.10 checks.
 
-**LLD:** `docs/lld/commercial-lld-billing-service.md` (rev 0.74 at the time of writing; read the header) is the source of truth. **Implement what it says; don't invent endpoints, fields, events, statuses or config.** Open items and hand-offs to other teams: `docs/lld/billing-open-items.md` (there is no `docs/handoff/` directory any more). Invariant coverage: `docs/invariants-coverage.md`.
+**LLD:** `docs/lld/commercial-lld-billing-service.md` (rev 0.75 at the time of writing; read the header) is the source of truth. **Implement what it says; don't invent endpoints, fields, events, statuses or config.** Open items and hand-offs to other teams: `docs/lld/billing-open-items.md` (there is no `docs/handoff/` directory any more). Invariant coverage: `docs/invariants-coverage.md`.
 
 Detail lives in the topic files next to this one:
 - `key-files.md`: per-file notes;

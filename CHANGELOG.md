@@ -6,6 +6,18 @@ This service has never been deployed to any environment, and there is no release
 
 ## [Unreleased]
 
+### Design (2026-11-28 — trial token add-ons, LLD rev 0.75; not built yet)
+
+- **LLD rev 0.75** designs the HLD v0.69 decision that trial tenants may buy token add-ons:
+  - `BIL-ADD-1` is rewritten; new `BIL-ADD-5` trial cap (1 pack / USD 50, raisable by `platform_operator` up to 10 packs / USD 2,000);
+  - new operator route B-O18 `PUT …/trial-addon-cap`, behind `FEATURE_TRIAL_CAP_OVERRIDE=false`;
+  - migration `000012_trial_token_addons`;
+  - B-P19 / B-P20 trial rules: owner only, USD, active trial only;
+  - packs survive conversion;
+  - cross-team items in BL-OQ-31.
+
+  Code follows in a separate change.
+
 ### Changed (2026-11-28 — LLD rev 0.74: rebase on Commercial HLD v0.68)
 
 - **LLD rebased on HLD v0.68**, which records the alignment review's decisions (HLD §17.11): no operator plan, seat or add-on changes, Billing's 5xx release gate, PD-LLM-1 and ENT-D6 approved, the `manual` adapter exempt, the gateway namespace to confirm with Platform-edge. Each was already the LLD's position; docs only.
