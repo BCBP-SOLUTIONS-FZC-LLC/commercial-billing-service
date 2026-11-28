@@ -240,7 +240,7 @@ func TestGatesOff(t *testing.T) {
 	for _, vf := range envFiles {
 		dep := find(render(t, vf), "Deployment", "commercial-billing")
 		env := envOf(get(dep, "spec", "template", "spec", "containers", 0))
-		for k, want := range map[string]string{"OPERATOR_PATH_LIVE": "false", "FEATURE_TOKEN_ADDONS": "false",
+		for k, want := range map[string]string{"OPERATOR_PATH_LIVE": "false", "FEATURE_TOKEN_ADDONS": "false", "FEATURE_TRIAL_CAP_OVERRIDE": "false",
 			"FEATURE_DIRECT_SIGNUP": "false", "RUN_MIGRATIONS": "false", "APP_NAME": "commercial-billing"} {
 			if env[k] != want {
 				t.Errorf("%s: %s = %q, want %q", vf, k, env[k], want)
@@ -300,8 +300,8 @@ func TestRoutes(t *testing.T) {
 		t.Fatal("operator HTTPRoute missing")
 	}
 	matches := get(op, "spec", "rules", 0, "matches").([]any)
-	if len(matches) != 17 {
-		t.Fatalf("operator matches %d, want 17 (B-O1 to B-O17)", len(matches))
+	if len(matches) != 18 {
+		t.Fatalf("operator matches %d, want 18 (B-O1 to B-O18)", len(matches))
 	}
 	wh := find(docs, "HTTPRoute", "commercial-billing-webhook")
 	if get(wh, "spec", "rules", 0, "matches", 0, "path", "value") != "/api/v1/webhooks/stripe" {

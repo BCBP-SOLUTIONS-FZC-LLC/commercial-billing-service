@@ -347,3 +347,98 @@ func TestTxRunnerRollsBackOnError(t *testing.T) {
 		t.Fatalf("rolled-back account must not exist: %v", err)
 	}
 }
+
+// BIL-ADD-5 (rev 0.75) through the repository: trial_addon_caps get, upsert
+// with optimistic locking on record_version, delete, RLS; the trial usage
+// counts trial purchases that are not failed, expired or cancelled.
+func TestBIL_ADD_5_TrialCapRepository(t *testing.T) {
+	ctx := context.Background()
+	tx, addons := pgadapter.NewTxRunner(appPool), pgadapter.NewAddonRepository(appPool)
+	tenant := newID()
+	in := func(fn func(ctx context.Context) error) {
+		t.Helper()
+		if err := tx.RunInTenantTx(ctx, tenant, fn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	c := domain.TrialAddonCap{TenantID: tenant, MaxPacks: 5, MaxAmountMinor: 50000, Reason: "Enterprise PoC approved by Sales", SetBy: commercialSystem, SetAt: at}
+	in(func(ctx context.Context) error {
+		if _, found, err := addons.TrialCap(ctx, tenant); err != nil || found {
+			t.Fatalf("no override yet: %v %v", found, err)
+		}
+		got, err := addons.UpsertTrialCap(ctx, c, 0)
+		if err != nil || got.RecordVersion != 1 || got.MaxPacks != 5 || got.MaxAmountMinor != 50000 || got.SetBy != commercialSystem || !got.SetAt.Equal(at) {
+			t.Fatalf("insert %+v %v", got, err)
+		}
+		if _, err := addons.UpsertTrialCap(ctx, c, 0); !errors.Is(err, port.ErrTrialCapChanged) {
+			t.Fatalf("second insert: %v", err)
+		}
+		c.MaxPacks = 10
+		if got, err = addons.UpsertTrialCap(ctx, c, 1); err != nil || got.RecordVersion != 2 || got.MaxPacks != 10 {
+			t.Fatalf("update %+v %v", got, err)
+		}
+		if _, err := addons.UpsertTrialCap(ctx, c, 1); !errors.Is(err, port.ErrTrialCapChanged) {
+			t.Fatalf("stale update: %v", err)
+		}
+		return nil
+	})
+	if err := tx.RunInTenantTx(ctx, newID(), func(ctx context.Context) error {
+		if _, found, err := addons.TrialCap(ctx, tenant); err != nil || found {
+			t.Errorf("another tenant sees the override: %v %v", found, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	in(func(ctx context.Context) error {
+		if got, found, err := addons.TrialCap(ctx, tenant); err != nil || !found || got.RecordVersion != 2 {
+			t.Fatalf("read %+v %v %v", got, found, err)
+		}
+		if err := addons.DeleteTrialCap(ctx, tenant); err != nil {
+			return err
+		}
+		if _, found, err := addons.TrialCap(ctx, tenant); err != nil || found {
+			t.Fatalf("after delete: %v %v", found, err)
+		}
+		return addons.DeleteTrialCap(ctx, tenant) // no row: not an error
+	})
+
+	buy := func(ctx context.Context, packs int, amount int64, status domain.PurchaseStatus, trial bool) {
+		t.Helper()
+		p := domain.QuotaAddonPurchase{PurchaseID: newID(), TenantID: tenant, PackCode: "tokens_1m", PackQuantity: packs, TokensTotal: int64(packs) * 1_000_000,
+			AmountMinor: amount, Currency: "USD", Status: domain.PurchasePendingPayment, RequestedBy: commercialSystem, IdempotencyKey: newID(), TrialPurchase: trial}
+		if err := addons.Insert(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+		p.Status = status
+		if status == domain.PurchaseConfirmed {
+			now := time.Now()
+			p.ConfirmedAt = &now
+		}
+		if err := addons.Update(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+		got, found, err := addons.Get(ctx, p.PurchaseID)
+		if err != nil || !found || got.TrialPurchase != trial {
+			t.Fatalf("trial_purchase round trip %+v %v %v", got, found, err)
+		}
+	}
+	in(func(ctx context.Context) error {
+		if u, err := addons.TrialUsage(ctx, tenant); err != nil || u != (domain.TrialAddonUsage{}) {
+			t.Fatalf("no purchases: %+v %v", u, err)
+		}
+		buy(ctx, 1, 4900, domain.PurchasePendingPayment, true)
+		buy(ctx, 2, 9800, domain.PurchaseRequiresAction, true)
+		buy(ctx, 1, 4900, domain.PurchaseConfirmed, true)
+		for _, st := range []domain.PurchaseStatus{domain.PurchaseFailed, domain.PurchaseExpired, domain.PurchaseCancelled} {
+			buy(ctx, 3, 14700, st, true)
+		}
+		buy(ctx, 5, 24500, domain.PurchaseConfirmed, false) // a paid purchase
+		u, err := addons.TrialUsage(ctx, tenant)
+		if err != nil || u.Packs != 4 || u.AmountMinor != 19600 {
+			t.Fatalf("usage %+v %v, want 4 packs / 19600", u, err)
+		}
+		return nil
+	})
+}

@@ -86,5 +86,6 @@ type QuotaAddonPurchase struct {
 	IdempotencyKey    string
 	ConfirmedAt       *time.Time
 	EventID           *string
+	TrialPurchase     bool // bought during a trial; counts toward BIL-ADD-5 (000012)
 	CreatedAt         time.Time
 }

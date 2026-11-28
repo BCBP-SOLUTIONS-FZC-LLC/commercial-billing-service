@@ -27,6 +27,7 @@ var tenantScopedTables = []string{
 	"checkout_sessions", "conversion_sagas", "plan_change_requests", "seat_purchases",
 	"seat_change_schedules", "quota_addon_purchases", "invoices", "invoice_links", "adjustments",
 	"refunds", "disputes", "idempotency_records", "scheduled_emissions", "usage_period_records",
+	"trial_addon_caps", // 000012 (rev 0.75)
 }
 
 // seeded holds the ids created for one tenant.
@@ -88,6 +89,8 @@ func seedTenant(t *testing.T) seeded {
 			  VALUES ($1, $2, 'TenantSeatsChanged', 'seats_resync', $3, now())`, []any{newID(), s.Tenant, s.Sub}},
 			{`INSERT INTO usage_period_records (tenant_id, period_start, period_end, tokens_total, api_requests_total, limits, source_event_id, source_event_time)
 			  VALUES ($1, date_trunc('month', now()), date_trunc('month', now()) + interval '1 month', 10, 2, '{}', $2, now())`, []any{s.Tenant, newID()}},
+			{`INSERT INTO trial_addon_caps (tenant_id, max_packs, max_amount_minor, reason, set_by)
+			  VALUES ($1, 5, 50000, 'Enterprise PoC approved by Sales', $2)`, []any{s.Tenant, actor}},
 		}
 		for _, st := range stmts {
 			if _, err := tx.Exec(ctx, st.sql, st.args...); err != nil {

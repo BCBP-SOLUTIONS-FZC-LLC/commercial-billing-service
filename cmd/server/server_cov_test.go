@@ -66,15 +66,16 @@ func TestLoggerEnv(t *testing.T) {
 // §12: a feature flag that is off leaves its routes unregistered.
 func TestDisabledRoutes(t *testing.T) {
 	off := disabledRoutes(config.Config{FeatureSeatPurchase: true})
-	for _, id := range []string{"B-I1", "B-P19", "B-P20", "B-P21", "B-P22", "B-P23"} {
+	for _, id := range []string{"B-I1", "B-P19", "B-P20", "B-P21", "B-P22", "B-P23", "B-O18"} {
 		if !off[id] {
 			t.Errorf("%s registered with its flag off", id)
 		}
 	}
-	if off["B-P6"] || off["B-P7"] || len(off) != 6 {
+	if off["B-P6"] || off["B-P7"] || len(off) != 7 {
 		t.Errorf("disabled %v", off)
 	}
-	if all := disabledRoutes(config.Config{FeatureDirectSignup: true, FeatureTokenAddons: true, FeatureSeatPurchase: true}); len(all) != 0 {
+	if all := disabledRoutes(config.Config{FeatureDirectSignup: true, FeatureTokenAddons: true, FeatureSeatPurchase: true,
+		FeatureTrialCapOverride: true}); len(all) != 0 {
 		t.Errorf("all on: %v", all)
 	}
 	if none := disabledRoutes(config.Config{}); !none["B-P6"] || !none["B-P7"] {

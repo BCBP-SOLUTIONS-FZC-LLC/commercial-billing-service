@@ -296,9 +296,20 @@ type TokenPackCatalog struct {
 	Resource                  string          `json:"resource"`
 	Eligible                  bool            `json:"eligible"`
 	IneligibleReason          *string         `json:"ineligible_reason"`
+	TrialCap                  *TrialCapView   `json:"trial_cap"` // trial tenants only (rev 0.75, BIL-ADD-5)
 	MonthlyCapRemainingTokens *int64          `json:"monthly_cap_remaining_tokens"`
 	Items                     []TokenPackView `json:"items"`
 	Terms                     AddonTerms      `json:"terms"`
+}
+
+// TrialCapView is B-P19's trial_cap: the BIL-ADD-5 cap in force (default
+// or B-O18 override) and what the tenant's trial purchases already use.
+type TrialCapView struct {
+	MaxPacks        int    `json:"max_packs"`
+	MaxAmountMinor  int64  `json:"max_amount_minor"`
+	UsedPacks       int    `json:"used_packs"`
+	UsedAmountMinor int64  `json:"used_amount_minor"`
+	Currency        string `json:"currency"`
 }
 
 // TokenPackView is one pack.
@@ -684,6 +695,26 @@ type DispositionResult struct {
 	DisposedAt  time.Time `json:"disposed_at"`
 }
 
+// TrialAddonCapRequest is B-O18 (§5.4.4, BIL-ADD-5): the override within
+// the 10-pack / USD 2,000 ceiling, with a mandatory reason.
+type TrialAddonCapRequest struct {
+	MaxPacks       int    `json:"max_packs" binding:"required,min=1,max=10"`
+	MaxAmountMinor int64  `json:"max_amount_minor" binding:"required,min=1,max=200000"`
+	Reason         string `json:"reason" binding:"required,min=10,max=1000"`
+}
+
+// TrialAddonCapView is B-O18's 200.
+type TrialAddonCapView struct {
+	TenantID        string    `json:"tenant_id"`
+	MaxPacks        int       `json:"max_packs"`
+	MaxAmountMinor  int64     `json:"max_amount_minor"`
+	Currency        string    `json:"currency"`
+	UsedPacks       int       `json:"used_packs"`
+	UsedAmountMinor int64     `json:"used_amount_minor"`
+	SetBy           string    `json:"set_by"`
+	SetAt           time.Time `json:"set_at"`
+}
+
 // OperatorAPI is the operator route surface (§5.4.4). Every call is made
 // after RequirePlatformOperator; actor = Caller.UserID.
 type OperatorAPI interface {
@@ -704,4 +735,5 @@ type OperatorAPI interface {
 	RevokeCertification(ctx context.Context, c Caller, id string, r OperatorReason) (CertificationView, error)                     // B-O15
 	DisposeHeldInvoice(ctx context.Context, c Caller, tenantID, invoiceID string, r DispositionRequest) (DispositionResult, error) // B-O16
 	ReviewCertification(ctx context.Context, c Caller, id string, r ReviewRequest) (CertificationView, error)                      // B-O17
+	SetTrialAddonCap(ctx context.Context, c Caller, tenantID string, r TrialAddonCapRequest) (TrialAddonCapView, error)            // B-O18
 }

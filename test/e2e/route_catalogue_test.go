@@ -27,16 +27,16 @@ func concrete(path string) string {
 }
 
 // E2E-ROUTES-1 — every endpoint ID of the §5.3 catalogue is mounted on the
-// production router with its method: 26 tenant routes, B-I1 and 17 operator
-// routes (B-W1 is mounted by the webhook adapter), 44 IDs, none duplicated.
+// production router with its method: 26 tenant routes, B-I1 and 18 operator
+// routes (B-W1 is mounted by the webhook adapter), 45 IDs, none duplicated.
 // A request without credentials must be refused by a guard (401 / 403), never
 // fall through to gin's 404 / 405 — which would mean the route is missing or
 // mounted under another method.
 func TestE2E_EveryCatalogueRouteIsMounted(t *testing.T) {
 	s := newServer(t, defaultOpts())
 	routes := httpadapter.Routes()
-	if len(routes) != 44 {
-		t.Fatalf("%d routes in the catalogue, want 44 (26 tenant + B-I1 + 17 operator)", len(routes))
+	if len(routes) != 45 {
+		t.Fatalf("%d routes in the catalogue, want 45 (26 tenant + B-I1 + 18 operator)", len(routes))
 	}
 	seen := map[string]bool{}
 	for _, rt := range routes {
@@ -64,7 +64,7 @@ func TestE2E_EveryCatalogueRouteIsMounted(t *testing.T) {
 				n++
 			}
 		}
-		want := map[string]int{"B-P": 26, "B-O": 17}[prefix]
+		want := map[string]int{"B-P": 26, "B-O": 18}[prefix]
 		if n != want {
 			t.Errorf("%d %s* routes, want %d", n, prefix, want)
 		}

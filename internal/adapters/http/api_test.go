@@ -188,6 +188,7 @@ var validBodies = map[string]string{
 	"B-O14": `{"provider":"stripe","adapter_version":"1.0.0","provider_api_version":"2026-11-18.endive","suite_version":"cert-1.0","proration_mode":"native","capabilities":{},"results":[{"capability":"rs","case":"create","passed":true,"evidence_ref":"s3://e/1"}],"provider_account_ref":"acct_1","run_started_at":"2026-11-14T08:00:00Z","run_finished_at":"2026-11-14T08:40:00Z","reason":"` + reason10 + `"}`,
 	"B-O16": `{"action":"void","reason":"` + reason10 + `"}`,
 	"B-O17": `{"decision":"approve","reason":"` + reason10 + `"}`,
+	"B-O18": `{"max_packs":5,"max_amount_minor":50000,"reason":"` + reason10 + `"}`,
 }
 
 func call(r *Router, rt Route, headers map[string]string, withKey bool) *httptest.ResponseRecorder {
@@ -206,7 +207,7 @@ func call(r *Router, rt Route, headers map[string]string, withKey bool) *httptes
 // Every endpoint of §5.3 exists exactly once with its method and path.
 func TestCatalogue(t *testing.T) {
 	routes := Routes()
-	if len(routes) != 44 { // + B-W1 in the webhook adapter = 45
+	if len(routes) != 45 { // + B-W1 in the webhook adapter = 46
 		t.Fatalf("%d routes", len(routes))
 	}
 	seen := map[string]bool{}
@@ -559,6 +560,22 @@ func TestBIL_AUTH_2_OperatorGuards(t *testing.T) {
 	if w := do(r, req{"PUT", "/api/v1/operator/tenants/" + tenantA + "/collection-pause", `{"paused":true,"reason":"short"}`, short}); w.Code != 400 {
 		t.Errorf("short reason: %d", w.Code)
 	}
+	// B-O18 (rev 0.75, BIL-ADD-5): the 10-pack / 200000 ceiling and the
+	// mandatory reason are 400 VALIDATION_ERROR before the use case.
+	capKey := identity(tenantA, "platform_operator")
+	capKey[headerIdempotencyKey] = "cap-00000001"
+	for _, body := range []string{
+		`{"max_packs":11,"max_amount_minor":5000,"reason":"` + reason10 + `"}`,
+		`{"max_packs":0,"max_amount_minor":5000,"reason":"` + reason10 + `"}`,
+		`{"max_packs":5,"max_amount_minor":200001,"reason":"` + reason10 + `"}`,
+		`{"max_packs":5,"max_amount_minor":0,"reason":"` + reason10 + `"}`,
+		`{"max_packs":5,"max_amount_minor":50000,"reason":"short"}`,
+		`{"max_packs":5,"max_amount_minor":50000}`,
+	} {
+		if w := do(r, req{"PUT", "/api/v1/operator/tenants/" + tenantA + "/trial-addon-cap", body, capKey}); w.Code != 400 || errorCode(w) != "VALIDATION_ERROR" {
+			t.Errorf("B-O18 %s: %d %s", body, w.Code, errorCode(w))
+		}
+	}
 }
 
 func TestPrincipalFromXFCC(t *testing.T) {
@@ -577,8 +594,18 @@ func TestPrincipalFromXFCC(t *testing.T) {
 func TestDisabledRoutes(t *testing.T) {
 	rec := &recorder{charge: func() (app.ChargeResult, error) { return app.ChargeResult{}, nil }}
 	api := &APIConfig{Tenant: rec, Internal: rec, Operator: rec, Idem: &Idempotency{Repo: newMemIdem(), Tx: passTx{}, TTL: time.Hour, Lock: time.Second},
-		OperatorPathLive: true, BFFCallerPrincipal: "cluster.local/ns/bff/sa/bff-signup", Disabled: map[string]bool{"B-I1": true, "B-P19": true}}
+		OperatorPathLive: true, BFFCallerPrincipal: "cluster.local/ns/bff/sa/bff-signup", Disabled: map[string]bool{"B-I1": true, "B-P19": true, "B-O18": true}}
 	r := NewRouter(RouterConfig{GinConfig: testGin(), Routes: []func(gin.IRouter){api.Register}})
+	// B-O18 (rev 0.75): FEATURE_TRIAL_CAP_OVERRIDE off → not registered.
+	op := identity(tenantA, "platform_operator")
+	op[headerIdempotencyKey] = "cap-0000001"
+	if w := do(r, req{"PUT", "/api/v1/operator/tenants/" + tenantA + "/trial-addon-cap", validBodies["B-O18"], op}); w.Code != 404 {
+		t.Errorf("B-O18: %d", w.Code)
+	}
+	// Another operator route is still registered.
+	if w := do(r, req{"GET", "/api/v1/operator/tenants/" + tenantA + "/subscription", "", op}); w.Code != 501 {
+		t.Errorf("B-O7: %d", w.Code)
+	}
 	if w := do(r, req{"POST", "/api/v1/internal/subscriptions/authorize-and-charge", `{}`, nil}); w.Code != 404 {
 		t.Errorf("B-I1: %d", w.Code)
 	}

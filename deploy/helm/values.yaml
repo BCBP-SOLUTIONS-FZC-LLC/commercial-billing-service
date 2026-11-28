@@ -171,6 +171,7 @@ env:
   FEATURE_DIRECT_SIGNUP: "false"
   FEATURE_TOKEN_ADDONS: "false"
   FEATURE_SEAT_PURCHASE: "true"
+  FEATURE_TRIAL_CAP_OVERRIDE: "false" # B-O18 (rev 0.75): off until Audit Log has billing.trial_addon_cap.changed (BL-OQ-31)
   AUTO_PAUSE_ON_OPERATOR_SUSPENSION: "true"
   AUTO_REVERT_ON_EFW: "false"
   BFF_CALLER_PRINCIPAL: cluster.local/ns/bff/sa/bff-signup
@@ -329,9 +330,10 @@ gateway:
       provider: platform         # = AuthZ JWT_OPERATOR_PAYLOAD_KEY (OP-G3); the gateway writes the payload under this name
       issuer: ""
       jwksURI: ""
-    # Every Billing operator route, B-O1 to B-O17 (§5.3, BL-OQ-9): a route
+    # Every Billing operator route, B-O1 to B-O18 (§5.3, BL-OQ-9): a route
     # missing here is unreachable through the gateway. TestHelmOperatorRoutes
-    # compares this list with the code's route catalogue.
+    # compares this list with the code's route catalogue. B-O18 is listed
+    # even while FEATURE_TRIAL_CAP_OVERRIDE is off: the service then answers 404.
     routes:
       - { id: B-O1, method: POST, path: "/api/v1/operator/tenants/:id/conversions" }
       - { id: B-O2, method: POST, path: "/api/v1/operator/tenants/:id/adjustments" }
@@ -350,6 +352,7 @@ gateway:
       - { id: B-O15, method: POST, path: "/api/v1/operator/billing/provider-certifications/:cert_id/revoke" }
       - { id: B-O16, method: POST, path: "/api/v1/operator/tenants/:id/invoices/:invoice_id/disposition" }
       - { id: B-O17, method: POST, path: "/api/v1/operator/billing/provider-certifications/:cert_id/review" }
+      - { id: B-O18, method: PUT, path: "/api/v1/operator/tenants/:id/trial-addon-cap" }
   webhook:
     # Per client IP (sourceCIDR Distinct, one bucket per IPv4 and per IPv6
     # address), §10.3. Go-live check: the rate limit's client IP and

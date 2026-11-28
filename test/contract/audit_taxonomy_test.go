@@ -32,6 +32,14 @@ type auditTaxonomy struct {
 	} `json:"entry_types"`
 }
 
+// awaitingAuditTaxonomy are entry types Billing writes only from a route
+// that stays unregistered behind a feature flag until Audit Log adds the
+// type (§12). They are skipped while Audit Log's taxonomy lacks them; once
+// it lists them, the direct-write check applies.
+var awaitingAuditTaxonomy = map[string]string{
+	"billing.trial_addon_cap.changed": "B-O18, FEATURE_TRIAL_CAP_OVERRIDE (BL-OQ-31 (c))",
+}
+
 var entryTypeLiteral = regexp.MustCompile(`EntryType:\s*"([a-z0-9_.]+)"`)
 
 // billingEntryTypes collects every EntryType literal in Billing's production
@@ -84,6 +92,8 @@ func TestAuditEntryTypesAreDirectWriteInAuditLogTaxonomy(t *testing.T) {
 	for _, et := range types {
 		ok, known := direct[et]
 		switch {
+		case !known && awaitingAuditTaxonomy[et] != "":
+			t.Logf("%s: not in Audit Log's taxonomy yet; written only by %s", et, awaitingAuditTaxonomy[et])
 		case !known:
 			t.Errorf("%s: not in Audit Log's taxonomy (AL-5 would answer 422 UNKNOWN_ENTRY_TYPE)", et)
 		case !ok:

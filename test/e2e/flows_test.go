@@ -247,3 +247,34 @@ func TestE2E_OperatorSubscriptionView(t *testing.T) {
 		t.Errorf("B-O7 does not name subscription %s", sub)
 	}
 }
+
+// E2E-FLOW-TRIAL-ADDONS (rev 0.75) — over HTTP: B-O18 validates and sets a
+// trial tenant's add-on cap (200 view); B-P19 shows it as trial_cap; a
+// trial owner's first pack is a 202 requires_action payment_session; the
+// tenant admin is refused with owner_only.
+func TestE2E_TrialAddonCapAndPurchase(t *testing.T) {
+	s := newServer(t, defaultOpts())
+	s.fakes.Entitlements.Eligibility = "eligible"
+	tenant := newTenant()
+	path := "/api/v1/operator/tenants/" + tenant + "/trial-addon-cap"
+	expectProblem(t, s.call(t, http.MethodPut, path, idem(operator(tenant)), `{"max_packs":11,"max_amount_minor":5000,"reason":"Enterprise PoC approved"}`),
+		http.StatusBadRequest, "VALIDATION_ERROR")
+	r := s.call(t, http.MethodPut, path, idem(operator(tenant)), `{"max_packs":5,"max_amount_minor":50000,"reason":"Enterprise PoC approved by Sales"}`)
+	expect(t, r, http.StatusOK)
+	if v := r.json(t); v["tenant_id"] != tenant || v["max_packs"] != float64(5) || v["max_amount_minor"] != float64(50000) || v["currency"] != "USD" ||
+		v["used_packs"] != float64(0) || v["set_by"] != operatorID {
+		t.Fatalf("B-O18 %s", r.body)
+	}
+	r = s.get(t, tp(tenant, "/token-packs"), owner(tenant))
+	expect(t, r, http.StatusOK)
+	if c, _ := r.json(t)["trial_cap"].(map[string]any); c["max_packs"] != float64(5) || c["max_amount_minor"] != float64(50000) || r.json(t)["eligible"] != true {
+		t.Fatalf("B-P19 %s", r.body)
+	}
+	body := `{"pack_code":"tokens_1m","pack_quantity":1,"accept_terms":true}`
+	expectProblem(t, s.post(t, tp(tenant, "/token-addons/purchases"), idem(admin(tenant)), body), http.StatusConflict, "ADDON_NOT_ELIGIBLE")
+	r = s.post(t, tp(tenant, "/token-addons/purchases"), idem(owner(tenant)), body)
+	expect(t, r, http.StatusAccepted)
+	if v := r.json(t); v["status"] != "confirmed" {
+		t.Fatalf("B-P20 %s", r.body)
+	}
+}

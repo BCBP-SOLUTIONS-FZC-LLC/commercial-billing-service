@@ -32,7 +32,7 @@ spec:
         - name: {{ $fullname }}
           port: {{ .Values.service.port }}
 ---
-# Operator routes (§13.1): one match per route B-O1 to B-O17 (BL-OQ-9).
+# Operator routes (§13.1): one match per route B-O1 to B-O18 (BL-OQ-9).
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

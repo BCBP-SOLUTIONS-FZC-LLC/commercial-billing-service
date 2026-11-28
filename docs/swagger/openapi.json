@@ -2084,6 +2084,16 @@
           },
           "terms": {
             "$ref": "#/components/schemas/AddonTerms"
+          },
+          "trial_cap": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TrialCapView"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object"
@@ -2161,6 +2171,81 @@
             "$ref": "#/components/schemas/Money"
           },
           "tokens": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "TrialAddonCapRequest": {
+        "properties": {
+          "max_amount_minor": {
+            "maximum": 200000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_packs": {
+            "maximum": 10,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 10,
+            "type": "string"
+          }
+        },
+        "required": [
+          "max_amount_minor",
+          "max_packs",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "TrialAddonCapView": {
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "max_amount_minor": {
+            "type": "integer"
+          },
+          "max_packs": {
+            "type": "integer"
+          },
+          "set_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "set_by": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "used_amount_minor": {
+            "type": "integer"
+          },
+          "used_packs": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "TrialCapView": {
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "max_amount_minor": {
+            "type": "integer"
+          },
+          "max_packs": {
+            "type": "integer"
+          },
+          "used_amount_minor": {
+            "type": "integer"
+          },
+          "used_packs": {
             "type": "integer"
           }
         },
@@ -3306,6 +3391,68 @@
           }
         },
         "summary": "B-O7 — Full subscription, sagas, purchases, schedules, disputes, ledger excerpt",
+        "tags": [
+          "operator"
+        ]
+      }
+    },
+    "/api/v1/operator/tenants/{id}/trial-addon-cap": {
+      "put": {
+        "description": "Requires `platform_operator` (BIL-AUTH-2, BIL-AUTH-6).",
+        "operationId": "B-O18",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9:_\\-.]{8,200}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrialAddonCapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrialAddonCapView"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "RFC 9457 problem (§17)"
+          }
+        },
+        "summary": "B-O18 — Raise a trial tenant's token add-on cap (FEATURE_TRIAL_CAP_OVERRIDE; mandatory reason)",
         "tags": [
           "operator"
         ]

@@ -242,6 +242,19 @@ func (r checkouts) ExpireAll(ctx context.Context, tenantID string) error {
 	return r.CheckoutRepo.ExpireAll(ctx, tenantID)
 }
 
+// addons fails DeleteTrialCap on demand (TenantConverted, rev 0.75).
+type addons struct {
+	port.AddonRepo
+	f *faults
+}
+
+func (r addons) DeleteTrialCap(ctx context.Context, tenantID string) error {
+	if err := r.f.hit("Addons.DeleteTrialCap"); err != nil {
+		return err
+	}
+	return r.AddonRepo.DeleteTrialCap(ctx, tenantID)
+}
+
 // sagas also scopes Due to the test's tenants (the repository reads across
 // tenants on the system pool) and can replay stale refs, as a second
 // replica that read Due before the first one ran the saga would.
@@ -798,6 +811,7 @@ func newEnv(t *testing.T) *env {
 	svc.Audit = auditW{svc.Audit, f}
 	svc.Lock = locker{svc.Lock, f}
 	svc.Sagas = e.sagas
+	svc.Addons = addons{svc.Addons, f}
 	e.tx = &txRunner{TxRunner: svc.Tx}
 	svc.Tx = e.tx
 	svc.FollowUps = e.follow

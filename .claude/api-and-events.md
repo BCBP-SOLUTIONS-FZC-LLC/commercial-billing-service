@@ -11,7 +11,7 @@ Summary only. The contracts are LLD §5 (API), §7 (events) and §18 (integratio
 | Tenant | B-P1 … B-P26 | `/api/v1/tenants/:id/…` | Gateway with CD-19 headers `x-user-id`, `x-tenant-id`, `x-tenant-roles`. `x-tenant-id` = path `:id` (`BIL-API-2`); one permission per route (`BIL-AUTH-1`, `BIL-AUTH-7`) |
 | Internal | B-I1 | `POST /api/v1/internal/subscriptions/authorize-and-charge` | Signup BFF only: SPIFFE `cluster.local/ns/bff/sa/bff-signup` from `X-Forwarded-Client-Cert` (`BIL-AUTH-3`, `BFF_CALLER_PRINCIPAL`) |
 | Webhook | B-W1 | `POST /api/v1/webhooks/:provider` | Provider signature only; no tenant header trusted (`BIL-AUTH-5`). Gateway rate limit 50 rps per client IP (one bucket per IPv4 / IPv6 client), optional source CIDRs |
-| Operator | B-O1 … B-O17 | `/api/v1/operator/…` | `platform_operator` (`BIL-AUTH-2`); `403` until `OPERATOR_PATH_LIVE=true` (`BIL-AUTH-6`); B-O17 also `pci_owner_reviewer`, not the submitter (`BIL-PROV-4`) |
+| Operator | B-O1 … B-O18 (B-O18 behind `FEATURE_TRIAL_CAP_OVERRIDE`) | `/api/v1/operator/…` | `platform_operator` (`BIL-AUTH-2`); `403` until `OPERATOR_PATH_LIVE=true` (`BIL-AUTH-6`); B-O17 also `pci_owner_reviewer`, not the submitter (`BIL-PROV-4`) |
 | Docs, probes | — | `/openapi.json`, `/asyncapi`, `/asyncapi.yaml`, `/healthz`, `/readyz` | `/metrics` is on `METRICS_PORT` only. `/healthz` fails only when the platform-audit runner is not alive |
 
 `commercial-system` is rejected inbound on every route (`BIL-AUTH-4`).

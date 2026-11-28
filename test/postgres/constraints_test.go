@@ -71,6 +71,31 @@ func TestCheckoutRequestedSeatsBound(t *testing.T) {
 	}
 }
 
+// 000012 (rev 0.75, §4.2.25, BIL-ADD-5): an override stays within 1-10
+// packs and 1-200000 minor units with a 10-1000 character reason, one row
+// per tenant; a purchase is not a trial purchase unless marked.
+func TestBIL_ADD_5_TrialCapConstraints(t *testing.T) {
+	ins := `INSERT INTO trial_addon_caps (tenant_id, max_packs, max_amount_minor, reason, set_by) VALUES ($1, $2, $3, $4, $5)`
+	reason := "Enterprise PoC approved by Sales"
+	for _, c := range []struct {
+		what   string
+		packs  int
+		amount int64
+		reason string
+	}{{"0 packs", 0, 5000, reason}, {"11 packs", 11, 5000, reason}, {"amount 0", 5, 0, reason}, {"above USD 2,000", 5, 200001, reason},
+		{"short reason", 5, 5000, "too short"}} {
+		want(t, "23514", c.what, ins, newID(), c.packs, c.amount, c.reason, commercialSystem)
+	}
+	tenant := newID()
+	mustExec(t, superPool, ins, tenant, 10, 200000, reason, commercialSystem)
+	want(t, "23505", "second override for the tenant", ins, tenant, 1, 1, reason, commercialSystem)
+	s := seedTenant(t)
+	n, err := count(context.Background(), superPool, `SELECT count(*) FROM quota_addon_purchases WHERE purchase_id = $1 AND NOT trial_purchase`, s.AddonPurchase)
+	if err != nil || n != 1 {
+		t.Errorf("trial_purchase default: %d %v", n, err)
+	}
+}
+
 // BIL-SEAT-1: one open seat purchase per subscription (uq_sp_one_open).
 func TestBIL_SEAT_1_OneOpenPurchase(t *testing.T) {
 	s := seedTenant(t)

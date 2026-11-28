@@ -6,7 +6,7 @@ This service has never been deployed to any environment, and there is no release
 
 ## [Unreleased]
 
-### Design (2026-11-28 — trial token add-ons, LLD rev 0.75; not built yet)
+### Added (2026-11-28 — trial token add-ons, LLD rev 0.75)
 
 - **LLD rev 0.75** designs the HLD v0.69 decision that trial tenants may buy token add-ons:
   - `BIL-ADD-1` is rewritten; new `BIL-ADD-5` trial cap (1 pack / USD 50, raisable by `platform_operator` up to 10 packs / USD 2,000);
@@ -16,7 +16,16 @@ This service has never been deployed to any environment, and there is no release
   - packs survive conversion;
   - cross-team items in BL-OQ-31.
 
-  Code follows in a separate change.
+  Built on the same branch:
+  - migration `000012`;
+  - trial eligibility and the cap under the tenant lock;
+  - USD account and customer on the first trial purchase;
+  - B-O18 with its AL-5 entry (route registered only with the flag on);
+  - override deleted on `TenantConverted`;
+  - Helm operator route;
+  - tests: `TestBIL_ADD_5_*`, `TestTrialAddon*`, `TestTrialTokenAddonFlow`, `TestE2E_TrialAddonCapAndPurchase`.
+
+  Trial purchases fail closed (`trial_inactive`) until Entitlements serves trial eligibility (BL-OQ-31). Not built: the certification currency case (needs a suite version bump).
 
 ### Changed (2026-11-28 — LLD rev 0.74: rebase on Commercial HLD v0.68)
 

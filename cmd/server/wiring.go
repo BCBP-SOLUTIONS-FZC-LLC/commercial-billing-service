@@ -177,6 +177,7 @@ func disabledRoutes(cfg config.Config) map[string]bool {
 	set(cfg.FeatureDirectSignup, "B-I1")
 	set(cfg.FeatureTokenAddons, "B-P19", "B-P20", "B-P21", "B-P22", "B-P23")
 	set(cfg.FeatureSeatPurchase, "B-P6", "B-P7")
+	set(cfg.FeatureTrialCapOverride, "B-O18")
 	return off
 }
 
