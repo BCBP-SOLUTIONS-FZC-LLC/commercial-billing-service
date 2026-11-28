@@ -97,6 +97,8 @@ type Config struct {
 	OutboxPollInterval          time.Duration
 	OutboxBatchSize             int
 	OutboxMaxAttempts           int
+	OutboxRetryBackoff          time.Duration // a record's n-th failed publish waits RetryBackoff·2^(n-1) …
+	OutboxMaxRetryBackoff       time.Duration // … capped here (HLD §9.3 v0.66: 10 attempts, 30 s, 5 min)
 	OutboxRetentionDays         int
 	ProcessedEventsTTLDays      int
 	SeatsAfterConversionDelay   time.Duration
@@ -281,7 +283,11 @@ func LoadFromFor(getenv func(string) string, b Binary) (Config, []Problem) {
 	c.MaxLifecycleEventSkew = time.Duration(l.intIn("MAX_LIFECYCLE_EVENT_SKEW_SECONDS", 300, 60, 900)) * time.Second
 	c.OutboxPollInterval = l.durIn("OUTBOX_POLL_INTERVAL", 500*time.Millisecond, 100*time.Millisecond, 5*time.Second)
 	c.OutboxBatchSize = l.intIn("OUTBOX_BATCH_SIZE", 50, 1, 500)
-	c.OutboxMaxAttempts = l.intIn("OUTBOX_MAX_ATTEMPTS", 5, 1, 10)
+	// HLD §9.3 (v0.66, BL-OQ-29): 10 attempts, 30 s backoff doubling to 5 min,
+	// so an SNS or Glue outage of about half an hour dead-letters nothing.
+	c.OutboxMaxAttempts = l.intIn("OUTBOX_MAX_ATTEMPTS", 10, 1, 20)
+	c.OutboxRetryBackoff = l.durIn("OUTBOX_RETRY_BACKOFF", 30*time.Second, time.Second, 5*time.Minute)
+	c.OutboxMaxRetryBackoff = l.durIn("OUTBOX_MAX_RETRY_BACKOFF", 5*time.Minute, 30*time.Second, 30*time.Minute)
 	c.OutboxRetentionDays = l.intIn("OUTBOX_RETENTION_DAYS", 8, 7, 30)
 	// PE-1: must exceed the 4-day SQS retention.
 	c.ProcessedEventsTTLDays = l.intIn("PROCESSED_EVENTS_TTL_DAYS", 8, 5, 365)

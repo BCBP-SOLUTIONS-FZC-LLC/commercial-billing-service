@@ -6,6 +6,11 @@ This service has never been deployed to any environment, and there is no release
 
 ## [Unreleased]
 
+### Changed (2026-11-28 — alignment review step 2: rebase on Commercial HLD v0.66, LLD rev 0.70)
+
+- **Outbox retry budget** (HLD §9.3 v0.66, BL-OQ-29 closed). `OUTBOX_MAX_ATTEMPTS` defaults to 10 (was 5; range now 1–20), and the new `OUTBOX_RETRY_BACKOFF` (`30s`, 1 s–5 min) and `OUTBOX_MAX_RETRY_BACKOFF` (`5m`, 30 s–30 min) are passed to `outbox.Runner`; before, platform-events used a 1 s backoff and an SNS or Glue outage dead-lettered every row within about a minute. Now a row dead-letters after about 32 min. Code (`internal/config`, `cmd/server/events.go`) and Helm values.
+- **LLD rebased on HLD v0.66.** BL-OQ-30 closed: B-P14 is the only read-only exemption and B-P26 stays denied; a `billing_lapse`-suspended owner settles through the CD-57 settle-only sign-in (IAM builds it; support until then). `FEATURE_TOKEN_ADDONS=true` also waits for Audit Log `v0.3.0` in the environment. §18.10 RP-4 row and the §7.3.1 D-1 note corrected. Open items §3.1 (HLD merge) done.
+
 ### Fixed (2026-11-28 — alignment review step 1: money and security, LLD rev 0.69)
 
 From the HLD/LLD/code alignment review (`billing-hld-lld-code-alignment-report.md`, Commercial folder).

@@ -141,6 +141,7 @@ func outboxRunner(ctx context.Context, cfg config.Config, appPool *pgcommon.Pool
 	ob := evconfig.LoadOutbox()
 	evconfig.LogWarningsTo(log, ob.Warnings)
 	ob.PollInterval, ob.BatchSize, ob.MaxAttempts = cfg.OutboxPollInterval, cfg.OutboxBatchSize, cfg.OutboxMaxAttempts
+	ob.RetryBackoff, ob.MaxRetryBackoff = cfg.OutboxRetryBackoff, cfg.OutboxMaxRetryBackoff
 	if ob.PublishTimeout == 0 {
 		ob.PublishTimeout = outboxPublishTimeout
 	}

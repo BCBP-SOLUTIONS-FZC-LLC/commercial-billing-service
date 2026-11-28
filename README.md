@@ -15,13 +15,13 @@ It never holds card data (PCI SAQ A), and it is on no per-request hot path.
 
 **Design:**
 - Refines the Commercial Domain HLD **v0.65**.
-- The LLD is [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md), rev 0.69 (revision history at the top). It is the source of truth for everything here.
+- The LLD is [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md), rev 0.70 (revision history at the top). It is the source of truth for everything here.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) has the diagrams and runtime flows.
 
 **State:**
 - Phases 0–8 are implemented. Phases 0–5 are on the stacked branches `feat/billing-phase-0-scaffolding` … `feat/billing-phase-5-api`. Phases 6–8 and everything after them are on `feat/billing-phase-6-flows`: platform-library routing, RFC 9457 errors, the observability standard, the test suites, CI/CD, and the fixes from two production-readiness review rounds (LLD rev 0.59 and 0.60).
 - `main` holds only the LLD. Nothing is deployed to any environment.
-- Before go-live: the cross-team items in [`docs/lld/billing-open-items.md`](docs/lld/billing-open-items.md) (among them Entitlements' BL-OQ-28 findings and the outbox retry window, BL-OQ-29), certification of Stripe adapter 1.1.0, the Loki rules for the log-based alerts, and the LLD §20.10 go-live checks.
+- Before go-live: the cross-team items in [`docs/lld/billing-open-items.md`](docs/lld/billing-open-items.md) (among them Entitlements' BL-OQ-28 findings, Audit Log `v0.3.0` before token add-ons and the CD-57 settle-only sign-in), certification of Stripe adapter 1.1.0, the Loki rules for the log-based alerts, and the LLD §20.10 go-live checks.
 
 ---
 
@@ -726,7 +726,8 @@ Publishing the same `TenantConverted` again (same envelope `id`) does nothing: `
 | | `GLUE_REGISTRY_NAME` | `billing-events` | |
 | | `SQS_MAX_RECEIVE_COUNT` / `SQS_WAIT_TIME_SECONDS` / `SQS_VISIBILITY_TIMEOUT` | `4` / `20` / `60s` | |
 | | `MAX_LIFECYCLE_EVENT_SKEW_SECONDS` | `300` | Future-time clamp (`BIL-EVT-3`) |
-| | `OUTBOX_POLL_INTERVAL` / `OUTBOX_BATCH_SIZE` / `OUTBOX_MAX_ATTEMPTS` / `OUTBOX_RETENTION_DAYS` | `500ms` / `50` / `5` / `8` | |
+| | `OUTBOX_POLL_INTERVAL` / `OUTBOX_BATCH_SIZE` / `OUTBOX_MAX_ATTEMPTS` / `OUTBOX_RETENTION_DAYS` | `500ms` / `50` / `10` / `8` | HLD §9.3 v0.66 |
+| | `OUTBOX_RETRY_BACKOFF` / `OUTBOX_MAX_RETRY_BACKOFF` | `30s` / `5m` | About 32 min of SNS or Glue outage before a row dead-letters |
 | | `PROCESSED_EVENTS_TTL_DAYS` | `8` | |
 | | `SEATS_AFTER_CONVERSION_DELAY` / `EMISSION_POLL_INTERVAL` | `120s` / `5s` | `BIL-EVT-6` |
 | | `AWS_REGION`, `AWS_ENDPOINT_URL` | — | floci locally |
