@@ -6,6 +6,14 @@ This service has never been deployed to any environment, and there is no release
 
 ## [Unreleased]
 
+### Fixed (2026-11-28 — Billing ↔ Signup BFF compatibility, LLD rev 0.68)
+
+- Checked against `bff-signup` `main` at `c2e9a1d`. B-I1 route, mesh principal, NetworkPolicy, `Idempotency-Key`, body and every status are compatible.
+- **Money: a paid 3-D Secure signup was cancelled after the window.** B-I1 and `purchase-expiry` cancelled an expired pending signup without checking the payment, so a customer who completed 3-D Secure just before `SCA_ABANDON_AFTER` was charged, answered `410`, and the paid invoice was ignored. Both now re-read the provider subscription first and activate a paid one exactly as the paid path does (`201`, saga); only an unpaid one is cancelled (`activateSignup`, `expireCharge`). A first invoice paid after Billing ended the signup anyway is parked `failed:paid_after_end` (SEV-2 `BillingPaymentParked`) instead of ignored. Test `TestDirectSignupPaidJustBeforeExpiry`.
+- **Docs:** LLD §5.4.2 response table (`409` id caveat, `404` flag off, `415`, `503 PROVIDER_NOT_ENABLED` / `REQUEST_TIMEOUT`, `403` vs plaintext refusal), step 4, timing, §8.3 failure table, SRE-3 migration name; open items §4.7 (SB-1 to SB-4); runbook `operator-review.md`.
+- **Hand-off to the Signup BFF:** `billing-handoff-to-signup-bff-compatibility.md`.
+- **BFF's reply** (`signup-bff-reply-to-billing-compatibility.md`): SB-1, SB-3, SB-4 done and merged in BFF PR #7 (`91ade7b`); Billing reviewed it (587 BFF tests pass, B-I1 unchanged on the wire). SB-2 (Pact) waits on Billing's broker details.
+
 ### Fixed (2026-11-28 — Billing ↔ AuthZ Enrichment compatibility, LLD rev 0.67)
 
 - Checked against `iam-authz-enrichment` `main` at `417fad8` (release `v0.2.0`). Headers, the operator path (all platform-realm roles forwarded, nil-UUID tenant, B-O1 to B-O17), `billing-authz-q` and the B-W1 bypass are compatible.

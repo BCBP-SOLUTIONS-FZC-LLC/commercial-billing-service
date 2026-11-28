@@ -757,7 +757,8 @@ func (s *Service) expireSignup(ctx context.Context, w port.StaleWork) error {
 	if err != nil {
 		return err
 	}
-	if err := s.expireCharge(ctx, prov, sub); err != nil && !domain.HasCode(err, domain.ErrChargeExpired) {
+	// Paid just before the window closed: activated, not cancelled (rev 0.68).
+	if _, err := s.expireCharge(ctx, Caller{}, prov, sub); err != nil && !domain.HasCode(err, domain.ErrChargeExpired) {
 		return err
 	}
 	return nil

@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Billing LLD | `commercial-lld-billing-service.md` rev 0.67 (base HLD v0.65). The LLD's §16.1 register is the source of truth for every BL-OQ item; this file holds the per-team detail and actions for the items that are **not closed** |
+| Billing LLD | `commercial-lld-billing-service.md` rev 0.68 (base HLD v0.65). The LLD's §16.1 register is the source of truth for every BL-OQ item; this file holds the per-team detail and actions for the items that are **not closed** |
 | Date | 2026-11-26 (IAM status updated from IAM's replies in the hand-off doc "Billing — IAM Open Items Hand-off", 2026-11-26); Entitlements findings F-5, F-6 and the RP queue-name note added 2026-11-27 (contract check, Billing LLD rev 0.59); Realm Provisioner compatibility check 2026-11-27 at `fac6ea0` (R-1 to R-6, Billing LLD rev 0.63), re-checked after RP #65/#66 at `d3f4e3c` (Billing LLD rev 0.64); Entitlements' fixes for BL-OQ-28 re-checked 2026-11-27 at `13ab5c7` (PR #4, Billing LLD rev 0.62) |
 | From | Commercial Team (Billing) |
 | Deployment state | No service is deployed to any environment. "Done" means merged **and** promoted with each environment (dev → staging → production) |
@@ -341,7 +341,12 @@ Still to verify after deploy: Billing's in-cluster W-2 check (below), Glue-frame
   - Billing: Pact broker URL, credentials path, provider name and verification branch (Q2), and the Pact provider verification in Billing's CI, which doesn't exist yet;
   - Billing: Test-Clock E2E slot in staging (Q4);
   - Web / growth: promote PR #6 dev → staging (date to confirm), then publish the Pact contract;
-  - Platform-SRE: Istio sidecar injection on namespace `bff`, without which B-I1 answers `403`.
+  - Platform-SRE: Istio sidecar injection on namespace `bff`. Without it the BFF's plaintext call is refused at connection level by Billing's `PeerAuthentication STRICT` (a transport error the BFF retries as `503`), not answered `403`; `403` comes only from a meshed caller with a wrong or missing principal.
+- **Compatibility check of 2026-11-28** (BFF `main` at `c2e9a1d`; Billing LLD rev 0.68; hand-off `billing-handoff-to-signup-bff-compatibility.md`, Commercial folder). Route, principal, NetworkPolicy, `Idempotency-Key`, body and every status match. Billing fixed a money defect: an expired 3-D Secure signup that had been paid was cancelled (`410`) and the payment ignored; B-I1 and `purchase-expiry` now re-read and activate a paid one, and a late payment on an ended signup is parked. Open for the BFF:
+  - **SB-1 (done, merged in BFF PR #7 `91ade7b`):** after a `402 PAYMENT_ACTION_REQUIRED`, keep the handoff and session at least until Billing's `expires_at` plus a margin (today a fixed 30 min from the last update, which can lapse just before the 3-D Secure window ends and make a re-POST start a second charge);
+  - **SB-2:** the Pact consumer contract (case list now has seven cases incl. late 3-D Secure `201`; **blocked on Billing**: broker URL, credentials path, provider name, verification branch, Q2);
+  - **SB-3 (done in PR #7 `e7049a6`):** narrow egress to Billing pods (`app.kubernetes.io/name: commercial-billing`) instead of the whole `billing` namespace;
+  - **SB-4 (done in PR #7 `6342723`, BFF LLD v1.4):** docs: BFF LLD §19.1 and §20 cite Billing LLD rev 0.51 and the removed `docs/handoff/bl-oq-8-signup-bff.md`; the `client.go:155` comment on `403`; §19.6 #7 can point at Billing §8.3's saga alert and B-O9 refund.
 
 ### 4.8 Notification — BL-OQ-12, Billing messages (NTF-3)
 
@@ -445,6 +450,8 @@ A-10 role + PCI names holders ────────────────�
 | SRE-1, SRE-7 | Istio strict in staging; remove old queue | Platform-SRE | Open |
 | BL-OQ-19 | AI-1, AI-3, AI-5 on a cluster | AI team (+ SRE cluster) | Not proven |
 | BL-OQ-8 | BFF alignment | Web / growth (+ Billing for Pact, E2E) | BFF code merged (PR #6, `c2e9a1d`), not in staging; Pact and Test-Clock E2E pending |
+| — | SB-1 handoff and session held past `expires_at`; SB-3 egress; SB-4 docs | Web / growth | **Done**: merged in BFF PR #7 (`91ade7b`); reviewed by Billing (BFF unit tests 587 pass; B-I1 wire unchanged) |
+| — | SB-2 Pact: broker URL, credentials path, provider name, verification branch (Q2); provider verification in CI | **Billing** | Open: blocks the BFF's consumer contract |
 | BL-OQ-12 | NTF-3 messages | Notification + Commercial | Open |
 | BL-OQ-24 | `UsagePeriodClosed` contract | Usage & Metering | Open (known risk) |
 | W-8 | Add-on event publish | Billing | **Built** (Phase 6, `feat/billing-phase-6-flows`): purchase and refund events through the outbox; not deployed; Glue registration per environment open |

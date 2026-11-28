@@ -87,7 +87,7 @@ func (s *Service) authorizeAndCharge(ctx context.Context, c Caller, r AuthorizeC
 	subID := newID()
 	if pending != nil {
 		if s.now().Sub(pending.CreatedAt) > s.Settings.SCAAbandonAfter {
-			return ChargeResult{}, s.expireCharge(ctx, prov, *pending)
+			return s.expireCharge(ctx, c, prov, *pending)
 		}
 		item, err := s.itemOf(ctx, tenantID, pending.BillingSubscriptionID)
 		if err != nil {
@@ -223,49 +223,7 @@ func (s *Service) authorizeAndCharge(ctx context.Context, c Caller, r AuthorizeC
 	}
 
 	// Paid: the period and invoice from the provider, then transaction 2.
-	state, err := prov.FetchCurrent(ctx, domain.ProviderObjectRef{Kind: domain.ObjectSubscription, ID: providerSub})
-	if err != nil {
-		return ChargeResult{}, providerErr(err) // the retry with the same key applies it
-	}
-	start, _ := state.Fields["current_period_start"].(time.Time)
-	end, _ := state.Fields["current_period_end"].(time.Time)
-	var out ChargeResult
-	err = s.locked(ctx, tenantID, func(ctx context.Context) error {
-		sub, err := s.Subs.Get(ctx, subID)
-		if err != nil {
-			return err
-		}
-		if sub.Status == domain.StatusIncomplete {
-			now := s.now()
-			from := sub.Status
-			if sub, err = s.Subs.Transition(ctx, subID, 0, domain.StatusActive, func(x *domain.Subscription) {
-				x.PaymentConfirmedAt = &now
-				if !start.IsZero() {
-					x.CurrentPeriodStart, x.CurrentPeriodEnd = &start, &end
-				}
-			}); err != nil {
-				return err
-			}
-			if err := s.history(ctx, sub, &from, "api:B-I1", actorOf(c), nil, &[2]*int{nil, &r.LicensedSeats}, nil); err != nil {
-				return err
-			}
-			if _, found, err := s.Sagas.BySubscription(ctx, subID); err != nil {
-				return err
-			} else if !found {
-				if err := s.Sagas.Insert(ctx, domain.ConversionSaga{SagaID: newID(), TenantID: tenantID, BillingSubscriptionID: subID,
-					Kind: domain.SagaDirectSignup, State: domain.SagaAwaitingTenantConverted, PaymentConfirmedAt: now}); err != nil {
-					return err
-				}
-			}
-		}
-		out = ChargeResult{BillingSubscriptionID: subID, Status: string(sub.Status), PlanCode: string(sub.Plan), LicensedSeats: r.LicensedSeats,
-			Interval: string(sub.Interval), Provider: sub.Provider}
-		if sub.CurrentPeriodEnd != nil {
-			out.CurrentPeriodEnd = *sub.CurrentPeriodEnd
-		}
-		return nil
-	})
-	return out, err
+	return s.activateSignup(ctx, c, prov, tenantID, subID, providerSub, r.LicensedSeats)
 }
 
 // chargeFailed turns a provider failure into B-I1's answer. A decline
@@ -309,10 +267,26 @@ func (s *Service) chargeFailed(ctx context.Context, prov port.PaymentProvider, t
 // expireCharge is 410 CHARGE_EXPIRED: 3-D Secure not completed within
 // SCA_ABANDON_AFTER; the provider subscription is cancelled and Billing's
 // ended (§8.3).
-func (s *Service) expireCharge(ctx context.Context, prov port.PaymentProvider, sub domain.Subscription) error {
+//
+// Before it cancels, it re-reads the provider subscription (read only): a
+// customer may have completed 3-D Secure just before the window closed, so a
+// paid first invoice is activated as on the paid path instead of cancelled
+// (rev 0.68). A subscription that cannot be read answers 503 (retried).
+func (s *Service) expireCharge(ctx context.Context, c Caller, prov port.PaymentProvider, sub domain.Subscription) (ChargeResult, error) {
 	if p := deref(sub.ProviderSubscriptionID); p != "" {
+		st, err := prov.FetchCurrent(ctx, domain.ProviderObjectRef{Kind: domain.ObjectSubscription, ID: p})
+		if err != nil {
+			return ChargeResult{}, providerErr(err)
+		}
+		if st.Status == "active" || st.Status == "trialing" {
+			item, err := s.itemOf(ctx, sub.TenantID, sub.BillingSubscriptionID)
+			if err != nil {
+				return ChargeResult{}, err
+			}
+			return s.activateSignup(ctx, c, prov, sub.TenantID, sub.BillingSubscriptionID, p, item.Quantity)
+		}
 		if err := prov.CancelNow(ctx, port.SubscriptionRef{ProviderSubscriptionID: p}, "cancel:"+sub.BillingSubscriptionID+":1"); err != nil {
-			return providerErr(err)
+			return ChargeResult{}, providerErr(err)
 		}
 	}
 	if err := s.locked(ctx, sub.TenantID, func(ctx context.Context) error {
@@ -322,9 +296,9 @@ func (s *Service) expireCharge(ctx context.Context, prov port.PaymentProvider, s
 		}
 		return s.endSignup(ctx, cur, "api:B-I1")
 	}); err != nil {
-		return err
+		return ChargeResult{}, err
 	}
-	return domain.NewError(domain.ErrChargeExpired, "3-D Secure was not completed in time; start the signup again")
+	return ChargeResult{}, domain.NewError(domain.ErrChargeExpired, "3-D Secure was not completed in time; start the signup again")
 }
 
 // endSignup closes a failed direct-signup subscription (signup_failed).
@@ -360,4 +334,54 @@ func nonEmpty(v string) *string {
 		return nil
 	}
 	return &v
+}
+
+// activateSignup is B-I1's paid path (§5.4.2 step 4): the period from the
+// provider, then transaction 2 (subscription active, payment confirmed, the
+// direct-signup saga awaiting TenantConverted). Safe to repeat: it changes
+// nothing once the subscription is no longer incomplete.
+func (s *Service) activateSignup(ctx context.Context, c Caller, prov port.PaymentProvider, tenantID, subID, providerSub string, seats int) (ChargeResult, error) {
+	state, err := prov.FetchCurrent(ctx, domain.ProviderObjectRef{Kind: domain.ObjectSubscription, ID: providerSub})
+	if err != nil {
+		return ChargeResult{}, providerErr(err) // the retry with the same key applies it
+	}
+	start, _ := state.Fields["current_period_start"].(time.Time)
+	end, _ := state.Fields["current_period_end"].(time.Time)
+	var out ChargeResult
+	err = s.locked(ctx, tenantID, func(ctx context.Context) error {
+		sub, err := s.Subs.Get(ctx, subID)
+		if err != nil {
+			return err
+		}
+		if sub.Status == domain.StatusIncomplete {
+			now := s.now()
+			from := sub.Status
+			if sub, err = s.Subs.Transition(ctx, subID, 0, domain.StatusActive, func(x *domain.Subscription) {
+				x.PaymentConfirmedAt = &now
+				if !start.IsZero() {
+					x.CurrentPeriodStart, x.CurrentPeriodEnd = &start, &end
+				}
+			}); err != nil {
+				return err
+			}
+			if err := s.history(ctx, sub, &from, "api:B-I1", actorOf(c), nil, &[2]*int{nil, &seats}, nil); err != nil {
+				return err
+			}
+			if _, found, err := s.Sagas.BySubscription(ctx, subID); err != nil {
+				return err
+			} else if !found {
+				if err := s.Sagas.Insert(ctx, domain.ConversionSaga{SagaID: newID(), TenantID: tenantID, BillingSubscriptionID: subID,
+					Kind: domain.SagaDirectSignup, State: domain.SagaAwaitingTenantConverted, PaymentConfirmedAt: now}); err != nil {
+					return err
+				}
+			}
+		}
+		out = ChargeResult{BillingSubscriptionID: subID, Status: string(sub.Status), PlanCode: string(sub.Plan), LicensedSeats: seats,
+			Interval: string(sub.Interval), Provider: sub.Provider}
+		if sub.CurrentPeriodEnd != nil {
+			out.CurrentPeriodEnd = *sub.CurrentPeriodEnd
+		}
+		return nil
+	})
+	return out, err
 }

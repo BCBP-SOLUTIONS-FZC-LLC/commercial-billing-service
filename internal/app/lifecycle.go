@@ -370,7 +370,15 @@ func (h CycleInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain
 			return "applied:renewed", nil
 		}
 		return "applied:invoice_mirrored", nil
-	case domain.StatusIncomplete, domain.StatusEnded:
+	case domain.StatusEnded:
+		// A direct signup Billing ended (CHARGE_EXPIRED or decline) whose
+		// first invoice was paid after all, e.g. 3-D Secure completed between
+		// the expiry re-read and the cancel: money with nothing granted.
+		// Parked for an operator (refund), never ignored (rev 0.68).
+		if sub.Origin == domain.OriginDirectSignup && firstInvoiceOfSubscription(cur) {
+			return "", s.paymentNeedsDecision(ctx, tenantID, ev, sub.BillingSubscriptionID, "paid_after_end")
+		}
+	case domain.StatusIncomplete:
 	}
 	return "", &port.IgnoredEvent{Reason: "subscription_" + string(sub.Status)}
 }
