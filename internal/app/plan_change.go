@@ -399,7 +399,7 @@ func (s *Service) applyPlanChange(ctx context.Context, req *domain.PlanChangeReq
 	if err := s.history(ctx, sub, &from, cause, actor, evRef, nil, &[2]*domain.PlanCode{&req.FromPlan, &req.ToPlan}); err != nil {
 		return err
 	}
-	_, err = s.Events.Enqueue(ctx, domain.TenantPlanChanged{TenantID: sub.TenantID, Plan: req.ToPlan, PreviousPlan: req.FromPlan,
+	err = s.emit(ctx, domain.TenantPlanChanged{TenantID: sub.TenantID, Plan: req.ToPlan, PreviousPlan: req.FromPlan,
 		Direction: req.Direction, EffectiveAt: now, BillingRef: req.ChangeID, BillingSubscriptionID: sub.BillingSubscriptionID}, m)
 	return err
 }

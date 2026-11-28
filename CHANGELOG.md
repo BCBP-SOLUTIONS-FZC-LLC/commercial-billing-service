@@ -6,6 +6,14 @@ This service has never been deployed to any environment, and there is no release
 
 ## [Unreleased]
 
+### Fixed (2026-11-28 — Billing ↔ Org & Membership compatibility, LLD rev 0.66)
+
+- Checked against `iam-org-membership` `main` at `b7a2410`. I-11, I-18 and `billing-orgm-q` are compatible; Core's consumed schemas are byte-identical (now recorded at `b7a2410`).
+- **No Core-bound event while a conversion is being undone** (§8.2 step 4): while the saga is `reverting` (B-O8) or `refund_pending` (B-O9), `TenantPlanChanged`, `TenantSeatsChanged`, `TenantPaymentPastDue`, `TenantSubscriptionCancelled` and `TenantReactivated` are deferred (`REQUEST_IN_PROGRESS`, retried) instead of sent. Before, the `customer.subscription.deleted` caused by B-O8's own provider cancel emitted `TenantSubscriptionCancelled`, which Core dead-letters after RP's revert or which makes Core skip the revert reset (BL-OQ-27 a). Regression test `TestNoCoreEventWhileConversionUnwinds`.
+- **Docs:** LLD §18.2 (Core LLD 2.66, `over_cap` retired), §7.3.1, §10.2 (Core's CD-19 tests), §18.10 (I-18 cold-cache budget); SRE-3 now names `000000_initial_schema`.
+- **Hand-off to Core:** `billing-handoff-to-org-membership-compatibility.md` (C-1 `om:seat_usage` cache vs LLD, C-2 AsyncAPI `TenantSuspended` producer, C-3 optional no-op).
+- **Core's reply** (`org-membership-reply-to-billing-compatibility.md`): C-1 to C-3 done and merged in Core PR #76 (`234bd54`); C-3 narrowed to a reverted conversion. Billing re-checked the PR (no schema, route or Helm change; Core's suites pass).
+
 ### Fixed (2026-11-27 — Billing ↔ Audit Log compatibility, LLD rev 0.65)
 
 - Checked against `iam-audit-log` `main` at `e995889`. **No wire break**: all 12 AL-5 entry types are direct-write types in Audit Log's taxonomy; the six `billing.events` types are classified; identity, network and Glue decoding match.

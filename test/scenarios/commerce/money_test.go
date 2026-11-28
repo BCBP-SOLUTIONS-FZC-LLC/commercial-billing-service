@@ -4,6 +4,7 @@ package commerce_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -570,6 +571,73 @@ func TestReversalWithoutOperatorAuditedAsServiceAccount(t *testing.T) {
 		WHERE tenant_id = $1 AND entry->>'entry_type' = 'billing.conversion.reverted'`, tenant)
 	if got != "service_account/"+domain.CommercialSystemPrincipal {
 		t.Fatalf("actor %s", got)
+	}
+}
+
+// BL-OQ-27 (a) with Core: while B-O8 reverts (or B-O9 refunds) a conversion,
+// a provider callback must not send Core a Core-bound event. The
+// customer.subscription.deleted that B-O8's own CancelNow causes arrives
+// between the cancel and the final commit; applied, it would send
+// TenantSubscriptionCancelled after RP's TrialReactivated (dead-lettered by
+// Core's subscription_started_at check) or before it (the revert reset is
+// then skipped as stale). It is deferred, then ignored once the subscription
+// is ended; nothing reaches billing-orgm-q.
+func TestNoCoreEventWhileConversionUnwinds(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant, sub := e.activeSubscription(t, "pro", 3)
+	exec(t, `UPDATE subscriptions SET converted_at = $2 WHERE billing_subscription_id = $1::uuid`, sub, e.now)
+	exec(t, `UPDATE billing_accounts SET iam_lifecycle = 'active' WHERE tenant_id = $1::uuid`, tenant)
+	e.mirror(t, tenant, sub, "in_conv_"+sub, "subscription_create", "paid", 20700)
+	exec(t, `UPDATE conversion_sagas SET state = 'confirmed', confirmed_at = now() WHERE billing_subscription_id = $1::uuid`, sub)
+	core := func() int {
+		n := 0
+		for _, et := range []string{"TenantSubscriptionCancelled", "TenantPaymentPastDue", "TenantSeatsChanged", "TenantPlanChanged", "TenantReactivated"} {
+			n += outbox(t, tenant, et)
+		}
+		return n
+	}
+	before := core()
+
+	// RP-4 200, CancelNow done, the refund fails: the subscription is still
+	// active and the saga reverting when the provider's deletion arrives.
+	e.p.on("Refund", answer{err: errProvider})
+	_, err := e.svc.RevertConversion(ctx, operator, tenant, app.ReversalRequest{Refund: true, Reason: "Early fraud warning on conversion payment"})
+	isCode(t, "refund", err, domain.ErrProviderUnavailable)
+	deleted := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectSubscription, ID: "sub_" + sub}, Status: "canceled"}
+	_, err = e.handle(tenant, app.SubscriptionEnded{S: e.svc}, callback("evt_del_rev", "customer.subscription.deleted", domain.KindSubscriptionEnded), deleted)
+	isCode(t, "deletion during the reversal", err, domain.ErrRequestInProgress)
+	if got := scalar[string](t, `SELECT status::text FROM subscriptions WHERE billing_subscription_id = $1`, sub); got != "active" {
+		t.Fatalf("subscription %s", got)
+	}
+	// The saga worker completes the reversal; the retried callback is ignored.
+	e.now = e.now.Add(10 * time.Minute)
+	if _, err := e.svc.RunSagas(ctx, 100); err != nil {
+		t.Fatal(err)
+	}
+	out, err := e.handle(tenant, app.SubscriptionEnded{S: e.svc}, callback("evt_del_rev", "customer.subscription.deleted", domain.KindSubscriptionEnded), deleted)
+	var ignored *port.IgnoredEvent
+	if !errors.As(err, &ignored) && err != nil {
+		t.Fatalf("retry: %s %v", out, err)
+	}
+	if got := scalar[string](t, `SELECT status::text||'/'||cancel_reason::text FROM subscriptions WHERE billing_subscription_id = $1`, sub); got != "ended/operator_reversal" {
+		t.Fatalf("subscription %s", got)
+	}
+	if n := core() - before; n != 0 {
+		t.Fatalf("%d Core-bound events enqueued during the reversal", n)
+	}
+
+	// B-O9 refund before TenantConverted: a past-due callback in the middle is
+	// deferred the same way (Core holds the tenant as a trial).
+	t2, s2 := e.activeSubscription(t, "pro", 3)
+	saga2 := scalar[string](t, `SELECT saga_id::text FROM conversion_sagas WHERE billing_subscription_id = $1`, s2)
+	exec(t, `UPDATE conversion_sagas SET state = 'refund_pending' WHERE saga_id = $1`, saga2)
+	pastDue := invoiceState("in_r_"+s2, s2, "open", "subscription_cycle", e.now.AddDate(0, 1, 0).Truncate(time.Second), 3)
+	pastDue.Fields["decline_code"] = "insufficient_funds"
+	_, err = e.handle(t2, app.PaymentFailed{S: e.svc}, callback("evt_pf_rev", "invoice.payment_failed", domain.KindInvoicePaymentFailed), pastDue)
+	isCode(t, "past-due during the B-O9 refund", err, domain.ErrRequestInProgress)
+	if n := outbox(t, t2, "TenantPaymentPastDue"); n != 0 {
+		t.Fatalf("past-due enqueued during B-O9: %d", n)
 	}
 }
 

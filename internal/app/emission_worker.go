@@ -20,6 +20,9 @@ type EmissionWorker struct {
 	Tx        port.TxRunner
 	Lock      port.TenantLocker
 	Events    port.EventEnqueuer
+	// Sagas, when set, defers emissions while the tenant's conversion is
+	// being reversed or refunded (conversionUnwinding, §8.2 step 4).
+	Sagas     port.SagaRepo
 	BatchSize int // tenants per pass
 	Now       func() time.Time
 	Log       port.Logger
@@ -83,6 +86,11 @@ func (w *EmissionWorker) emit(ctx context.Context, e domain.ScheduledEmission) (
 	}
 	if err != nil {
 		return err
+	}
+	if busy, err := conversionUnwinding(ctx, w.Subs, w.Sagas, e.TenantID); err != nil {
+		return err
+	} else if busy {
+		return errConversionUnwinding // stays pending; the next pass retries
 	}
 	id, err := w.Events.Enqueue(ctx, domain.TenantSeatsChanged{
 		TenantID: e.TenantID, LicensedSeats: item.Quantity, Reason: reason, BillingSubscriptionID: sub.BillingSubscriptionID,

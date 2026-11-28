@@ -278,7 +278,7 @@ func (s *Service) confirmSeats(ctx context.Context, p *domain.SeatPurchase, caus
 	if p.DeferralReason != nil {
 		ev.DeferredAmountMinor, ev.DeferralReason = p.DeferredAmountMinor, *p.DeferralReason
 	}
-	_, err = s.Events.Enqueue(ctx, ev, m)
+	err = s.emit(ctx, ev, m)
 	if err == nil {
 		s.metrics().SeatChange("purchase", "confirmed")
 	}

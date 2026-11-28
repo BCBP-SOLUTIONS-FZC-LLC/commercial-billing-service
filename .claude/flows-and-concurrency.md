@@ -33,6 +33,7 @@ confirmed → reverting                            B-O8 records the request firs
 reverting → reverting                            RP-4 409 operation_in_progress / optimistic_lock_conflict, 5xx, timeout (saga worker, backoff)
 reverting → reverted                             RP-4 200: reversal completed (B-O8 or saga worker)
 reverting → confirmed                            terminal RP-4 answer: request dropped (worker: SEV-2 BillingReversalDecisionNeeded)
+(reverting / refund_pending: Core-bound events are deferred, app.emit → REQUEST_IN_PROGRESS, retried after; rev 0.66)
 ```
 
 - **`BIL-SAGA-1`:** RP-3 only after server-side payment confirmation.

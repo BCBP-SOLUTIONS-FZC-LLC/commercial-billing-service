@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Billing LLD | `commercial-lld-billing-service.md` rev 0.65 (base HLD v0.65). The LLD's §16.1 register is the source of truth for every BL-OQ item; this file holds the per-team detail and actions for the items that are **not closed** |
+| Billing LLD | `commercial-lld-billing-service.md` rev 0.66 (base HLD v0.65). The LLD's §16.1 register is the source of truth for every BL-OQ item; this file holds the per-team detail and actions for the items that are **not closed** |
 | Date | 2026-11-26 (IAM status updated from IAM's replies in the hand-off doc "Billing — IAM Open Items Hand-off", 2026-11-26); Entitlements findings F-5, F-6 and the RP queue-name note added 2026-11-27 (contract check, Billing LLD rev 0.59); Realm Provisioner compatibility check 2026-11-27 at `fac6ea0` (R-1 to R-6, Billing LLD rev 0.63), re-checked after RP #65/#66 at `d3f4e3c` (Billing LLD rev 0.64); Entitlements' fixes for BL-OQ-28 re-checked 2026-11-27 at `13ab5c7` (PR #4, Billing LLD rev 0.62) |
 | From | Commercial Team (Billing) |
 | Deployment state | No service is deployed to any environment. "Done" means merged **and** promoted with each environment (dev → staging → production) |
@@ -42,7 +42,7 @@
 | **IAM: Realm Provisioner** | `iam-realm-provisioner` | OP-G1 rollout and operator users; confirm A-10 (a) role (#62) and RP #63 live per environment (both merged); compatibility hand-off R-1 to R-6 done and merged (RP #65, `1137cd4`; re-checked at RP `main` `d3f4e3c`, 2026-11-27, no wire break) | Operator sign-in; provider certification; reversal reset |
 | **IAM: AuthZ Enrichment** | `iam-authz-enrichment` | OP-G3 payload key (issuer already set); OP-G4 runs (A-3); OP-G6 date. A-9 (a), A-10 (a, b) **done** (#45, v0.2.0) | Operator routes per environment |
 | **IAM: Audit Log** | `iam-audit-log` | Release and deploy A-9 (b), A-10 (c) (merged #25); deploy refund type (BL-OQ-23 b / W-12). `paused` field **confirmed**. Compatibility hand-off AU-1 to AU-4 done (reply `audit-log-reply-to-billing-compatibility.md`; #27 `05240a2`, released in **`v0.3.0`** = `495b742`, 2026-11-28). Remaining: **deploy `v0.3.0`** per environment (no cluster yet) | Correct audit for B-O16, B-O17, add-on refunds |
-| **IAM: Core (Org & Membership)** | `iam-org-membership` | SRE-3 ordering per environment (no code left); BL-OQ-27 (a) deploy | Direct paid signup; reversal reset |
+| **IAM: Core (Org & Membership)** | `iam-org-membership` | SRE-3 ordering per environment (no code left); BL-OQ-27 (a) deploy; compatibility hand-off C-1 to C-3 done and merged (PR #76, `234bd54`; reply `org-membership-reply-to-billing-compatibility.md`) | Direct paid signup; reversal reset |
 | **Commercial Entitlements** | `commercial-entitlements-service` | **Deploy `e18c0e6` or later** (PR #4 `52d7ac6`: BL-OQ-28 F-1, F-2, F-5, F-6, B-4 to B-8, E-4; PR #5 `e18c0e6`: BL-OQ-20 F-3, ENT-D16; all merged and re-checked by Billing); then the W-2 in-cluster check; F-3; E-6 | **Token add-ons**; plan changes reaching Entitlements |
 | **Commercial TL** | — | Nothing open for Billing: F-4 decided 2026-11-27 (ENT-D15, `addon_change` allowed, drawdowns included) | Nothing in Billing |
 | **Commercial IaC / Platform-SRE** | IaC; clusters | Topics, registry, queues (incl. W-11); SRE-1, SRE-3, SRE-7; audit DB role; Gateway test cluster; Bedrock access; `platform-audit` probe | Billing events in any environment; token add-ons |
@@ -197,6 +197,14 @@ Billing's side (rev 0.65): automated events now always carry `actor = …00c1` (
 
 #### Core / Org & Membership (`iam-org-membership`)
 
+**Compatibility check of 2026-11-28** (Core `main` at `b7a2410`, Core LLD 2.66; Billing LLD rev 0.66; hand-off `billing-handoff-to-org-membership-compatibility.md`, Commercial folder). I-11, I-18 and `billing-orgm-q` are compatible. Billing fixed its side: Core-bound events are deferred while a conversion is being reversed (B-O8) or refunded (B-O9), so Core never receives `TenantSubscriptionCancelled` (or a past-due, seat or plan event) around RP's `TrialReactivated{reason: conversion_revert}`. Open for Core:
+
+| # | What | Action | Done when |
+|---|---|---|---|
+| C-1 (**done**, merged in Core PR #76 `234bd54`: LLD now describes the 30 s read-through cache; unit test pins miss, hit, evict) | `om:seat_usage` is read and written with a 30 s TTL (`membership_service.go:960-995`), but Core LLD CACHE-5 and §6 say it is never read; I-11 (Billing's seat floor) can see a value up to 30 s old if an eviction fails | Make the LLD match the code, or drop the cache | LLD matches; a unit test pins hit, miss and evict |
+| C-2 (**done** in PR #76: AsyncAPI names RP as the other `iam-tenant-events` producer) | `api/asyncapi.yaml:730-733` says Billing emits `TenantSuspended` on `iam-tenant-events`; Billing never does (`BIL-SUB-1`) | Fix the text | AsyncAPI no longer names Billing as a `TenantSuspended` producer |
+| C-3 (**done, narrowed**, PR #76: acked as a no-op only for a **reverted** conversion, `subscription_started_at IS NULL AND trial_plan IS NOT NULL`; a never-converted trial still retries until `TenantConverted` lands, since the two queues are unordered) | `TenantSubscriptionCancelled` / `TenantPaymentPastDue` for a tenant with `subscription_started_at IS NULL` fails `chk_subscription_started_required` and dead-letters after 5 tries | Ack as a no-op with a warning | A consumer test shows it acked as a no-op |
+
 | # | What | Action | Done when |
 |---|---|---|---|
 | SRE-3 (with Platform-SRE) | Table `pending_tenant_events` (CD-50 / EVT-18) and the `parked-events-replay` CronJob (`*/5 * * * *`). The table was migration `000004`; it is now part of Core's consolidated base migration `000000_initial_schema`. The CronJob is on by default in the chart for every environment. No code change left | Deploy in each environment **before** `FEATURE_DIRECT_SIGNUP=true` there | Confirmed per environment |
@@ -301,7 +309,7 @@ Still to verify after deploy: Billing's in-cluster W-2 check (below), Glue-frame
 | DB | `billing_audit_drainer` role and secret (`PG_AUDIT_DRAINER_*`); `MIGRATION_DATABASE_URL` on the direct RDS endpoint, not PgBouncer | Create per environment | Migrations and audit drainer run |
 | `platform-audit` | `Client.Probe` returns `ProbeAdmitted` from a Billing pod; `platform-audit` alert rules loaded and routed to Billing on-call | Per environment | Probe passes; alerts routed |
 | SRE-1 | Istio `STRICT` mTLS in staging | Enable | Staging mesh is strict |
-| SRE-3 | Core `000004` + `parked-events-replay` before direct signup (with Core, §4.2) | Order per environment | Confirmed per environment |
+| SRE-3 | Core `pending_tenant_events` (`000000_initial_schema`) + `parked-events-replay` before direct signup (with Core, §4.2) | Order per environment | Confirmed per environment |
 | SRE-7 | Remove any `membership-billing-q` (retired by CD-54) | Delete if present | Queue absent |
 | BL-OQ-19 support | Cluster with Model Gateway v1.2.0, the rate-limit service and Valkey; Bedrock access in `ap-south-1` (later `me-central-1`) | Provide to the AI team | AI team can run AI-1, AI-3, AI-5 |
 
@@ -402,7 +410,8 @@ A-10 role + PCI names holders ────────────────�
 | — | AU-2 Deploy `v0.3.0` per environment before `FEATURE_TOKEN_ADDONS=true` | IAM Audit Log | Released; deploy open (no cluster yet) |
 | BL-OQ-27 (a) | Plan/seat reset on reversal | IAM Org & Membership; RP | O&M merged (`8150ea1`), not deployed; RP #63 merged (`47539e2`), reported deployed |
 | BL-OQ-27 (b) | Trial limits after reversal | Entitlements | **Done** in code: E-1 to E-3 (`108939f`), E-4 decided keep the balance (PR #4, `52d7ac6` on main, not deployed) |
-| SRE-3 | Core `000004` before direct signup | IAM Core + SRE | Code ready |
+| SRE-3 | Core `pending_tenant_events` (`000000_initial_schema`) before direct signup | IAM Core + SRE | Code ready (re-checked 2026-11-28 at `b7a2410`) |
+| — | C-1 `om:seat_usage` cache vs LLD; C-2 AsyncAPI `TenantSuspended` producer; C-3 no-op for a reverted conversion | IAM Core | **Done**: merged in PR #76 (`234bd54`, Core LLD 2.67); re-checked by Billing (Core unit 2982 and Postgres tests pass; no schema, route or Helm change) |
 | BL-OQ-3 | W-1 eligibility | Entitlements | **Done** (`dc9b654`) |
 | BL-OQ-3 | W-2 Billing access | Entitlements + Billing | Fixed in PR #4 (`52d7ac6` on main), not deployed; in-cluster check per environment open |
 | BL-OQ-28 / F-5 | Glue decode codec on the SQS consumer (all four Entitlements queues) | Entitlements | **Critical**; fixed in PR #4 (`52d7ac6` on main), not deployed. Gate before Billing publishes framed events |
