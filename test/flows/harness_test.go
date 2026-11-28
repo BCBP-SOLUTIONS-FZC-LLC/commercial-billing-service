@@ -117,6 +117,7 @@ type fakeProvider struct {
 	calls        []string
 	fail         error
 	confirm      []confirmAnswer
+	unpaid       map[string]bool // provider subscriptions whose first payment is not paid (FetchCurrent → incomplete)
 	change       []confirmAnswer
 	fallback     bool
 	refundStatus string
@@ -169,15 +170,18 @@ func (p *fakeProvider) CreateSubscription(_ context.Context, in port.Subscriptio
 }
 
 // confirm scripts ConfirmInitialPayment answers in order (default: paid).
-func (p *fakeProvider) ConfirmInitialPayment(_ context.Context, _ port.SubscriptionRef, key string) (port.PaymentOutcome, error) {
+func (p *fakeProvider) ConfirmInitialPayment(_ context.Context, ref port.SubscriptionRef, key string) (port.PaymentOutcome, error) {
 	_ = p.record("ConfirmInitialPayment " + key)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if len(p.confirm) == 0 {
-		return port.PaymentOutcome{Status: port.PaymentPaid}, nil
+	out := confirmAnswer{outcome: port.PaymentOutcome{Status: port.PaymentPaid}}
+	if len(p.confirm) > 0 {
+		out, p.confirm = p.confirm[0], p.confirm[1:]
 	}
-	out := p.confirm[0]
-	p.confirm = p.confirm[1:]
+	if p.unpaid == nil {
+		p.unpaid = map[string]bool{}
+	}
+	p.unpaid[ref.ProviderSubscriptionID] = out.err != nil || out.outcome.Status != port.PaymentPaid
 	return out.outcome, out.err
 }
 
@@ -195,7 +199,13 @@ func (p *fakeProvider) FetchCurrent(_ context.Context, obj domain.ProviderObject
 			"currency": "USD", "amount_due_minor": int64(1000), "kind": "subscription_cycle"}}, p.record("FetchCurrent " + obj.ID)
 	}
 	start := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
-	return domain.ProviderObjectState{Ref: obj, Status: "active", Fields: map[string]any{
+	status := "active"
+	p.mu.Lock()
+	if obj.Kind == domain.ObjectSubscription && p.unpaid[obj.ID] {
+		status = "incomplete"
+	}
+	p.mu.Unlock()
+	return domain.ProviderObjectState{Ref: obj, Status: status, Fields: map[string]any{
 		"current_period_start": start, "current_period_end": start.AddDate(0, 1, 0)}}, p.record("FetchCurrent " + obj.ID)
 }
 

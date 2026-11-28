@@ -170,6 +170,10 @@ type Provider struct {
 	Confirm []port.PaymentOutcome
 	// Found is the invoice FindInvoice returns ("" → none).
 	Found string
+	// unpaid holds provider subscriptions whose first payment did not come
+	// back paid (3-D Secure, decline, pending): FetchCurrent reports them
+	// "incomplete", as Stripe does, until a later confirm pays them.
+	unpaid map[string]bool
 }
 
 // NewProvider returns a fake named name ("stripe").
@@ -240,15 +244,18 @@ func (p *Provider) CreateSubscription(_ context.Context, in port.SubscriptionInp
 }
 
 // ConfirmInitialPayment implements port.PaymentProvider.
-func (p *Provider) ConfirmInitialPayment(_ context.Context, _ port.SubscriptionRef, key string) (port.PaymentOutcome, error) {
+func (p *Provider) ConfirmInitialPayment(_ context.Context, ref port.SubscriptionRef, key string) (port.PaymentOutcome, error) {
 	p.record("ConfirmInitialPayment " + key)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if len(p.Confirm) == 0 {
-		return port.PaymentOutcome{Status: port.PaymentPaid}, nil
+	out := port.PaymentOutcome{Status: port.PaymentPaid}
+	if len(p.Confirm) > 0 {
+		out, p.Confirm = p.Confirm[0], p.Confirm[1:]
 	}
-	out := p.Confirm[0]
-	p.Confirm = p.Confirm[1:]
+	if p.unpaid == nil {
+		p.unpaid = map[string]bool{}
+	}
+	p.unpaid[ref.ProviderSubscriptionID] = out.Status != port.PaymentPaid
 	return out, nil
 }
 
@@ -263,7 +270,13 @@ func (p *Provider) CancelNow(_ context.Context, ref port.SubscriptionRef, key st
 func (p *Provider) FetchCurrent(_ context.Context, obj domain.ProviderObjectRef) (domain.ProviderObjectState, error) {
 	p.record("FetchCurrent " + obj.ID)
 	start := time.Now().UTC().Truncate(time.Second).Add(-24 * time.Hour)
-	return domain.ProviderObjectState{Ref: obj, Status: "active", Fields: map[string]any{
+	status := "active"
+	p.mu.Lock()
+	if obj.Kind == domain.ObjectSubscription && p.unpaid[obj.ID] {
+		status = "incomplete"
+	}
+	p.mu.Unlock()
+	return domain.ProviderObjectState{Ref: obj, Status: status, Fields: map[string]any{
 		"current_period_start": start, "current_period_end": start.AddDate(0, 1, 0)}}, nil
 }
 
