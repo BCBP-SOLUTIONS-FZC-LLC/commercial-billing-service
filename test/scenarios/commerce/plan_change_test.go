@@ -5,6 +5,7 @@ package commerce_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -375,5 +376,40 @@ func TestDowngradePaths(t *testing.T) {
 	}
 	if plan(t, sub) != "pro/pro" || outbox(t, tenant, "TenantPlanChanged") != 1 {
 		t.Fatalf("after cycle %s", plan(t, sub))
+	}
+}
+
+// F-5 (rev 0.71, BIL-CONC-2): the invoice.paid callback applies the upgrade
+// while ChangePrice is still with the provider. B-P4 re-reads the request
+// under the lock: it returns the applied change and applies nothing twice
+// (one TenantPlanChanged), whether the provider answers paid or pending.
+func TestBIL_CONC_2_UpgradeSettledByCallbackDuringProviderCall(t *testing.T) {
+	ctx := context.Background()
+	for _, outcome := range []port.PaymentStatus{port.PaymentPaid, port.PaymentPending} {
+		t.Run(string(outcome), func(t *testing.T) {
+			e := newEnv(t)
+			tenant, sub := e.activeSubscription(t, "starter", 3)
+			e.p.on("ChangePrice", answer{outcome: port.PaymentOutcome{Status: outcome}, before: func(key string) {
+				id, inv := strings.TrimPrefix(key, "planchg:"), "in_"+key
+				exec(t, `UPDATE plan_change_requests SET provider_invoice_id = $2 WHERE change_id = $1::uuid`, id, inv)
+				cur := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: inv}, Status: "paid",
+					Fields: paidFields(t, "plan_change_requests", id, "subscription", "sub_"+sub, "billing_reason", "subscription_update")}
+				if out, err := e.handle(tenant, app.UpgradeInvoicePaid{S: e.svc}, callback("evt_race_"+id, "invoice.paid", domain.KindInvoicePaid), cur); err != nil || out != "applied:plan_upgrade" {
+					t.Errorf("racing callback %s %v", out, err)
+				}
+			}})
+			pv, err := e.svc.PreviewPlanChange(ctx, owner, tenant, app.PlanChangePreviewRequest{TargetPlan: "pro"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := e.svc.ChangePlan(ctx, withKey(owner, "k-up-race-"+string(outcome)), tenant,
+				app.PlanChangeRequest{TargetPlan: "pro", RecordVersion: version(t, sub), PreviewID: pv.PreviewID})
+			if err != nil || res.Status != "applied" || res.EffectiveAt == nil {
+				t.Fatalf("B-P4 after the callback applied it: %+v %v", res, err)
+			}
+			if plan(t, sub) != "pro/pro" || outbox(t, tenant, "TenantPlanChanged") != 1 {
+				t.Fatalf("plan %s, %d TenantPlanChanged", plan(t, sub), outbox(t, tenant, "TenantPlanChanged"))
+			}
+		})
 	}
 }

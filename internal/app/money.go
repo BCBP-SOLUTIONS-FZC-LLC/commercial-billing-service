@@ -496,7 +496,9 @@ func (s *Service) reverse(ctx context.Context, c Caller, saga domain.ConversionS
 				return err
 			}
 			now := s.now()
-			cur.ReversalRPDoneAt = &now
+			// RP-4 retries spent the same counter; completion failures count
+			// from zero, so the page at reversalPageAttempts fires once (F-6).
+			cur.ReversalRPDoneAt, cur.Attempts = &now, 0
 			return s.Sagas.Update(ctx, cur)
 		}); err != nil {
 			return ReversalResult{}, "", err
@@ -557,7 +559,8 @@ func (s *Service) finishReversal(ctx context.Context, c Caller, saga domain.Conv
 	return ReversalResult{}, "", err
 }
 
-// reversalPageAttempts is the failed completion attempt that pages: with the
+// reversalPageAttempts is the failed completion attempt that pages (counted
+// from RP-4's 200, which resets the saga's attempts): with the
 // §8.1.2 backoff (2 s doubling, capped at SAGA_MAX_BACKOFF) about 20 minutes.
 const reversalPageAttempts = 8
 

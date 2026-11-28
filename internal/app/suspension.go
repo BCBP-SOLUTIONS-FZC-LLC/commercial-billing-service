@@ -147,6 +147,9 @@ func (s *Service) closeOffboarded(ctx context.Context, tenantID, subID string) e
 			return err
 		}
 	}
+	if err := s.closeOpenAddons(ctx, tenantID); err != nil {
+		return err
+	}
 	if err := s.locked(ctx, tenantID, func(ctx context.Context) error {
 		var err error
 		if sub, err = s.Subs.Get(ctx, subID); err != nil {
@@ -286,4 +289,64 @@ func (s *Service) DisposeHeldInvoice(ctx context.Context, c Caller, tenantID, in
 	}
 	s.metrics().InvoiceDisposition(r.Action)
 	return DispositionResult{InvoiceID: invoiceID, Status: status, Disposition: r.Action, DisposedBy: c.UserID, DisposedAt: now}, nil
+}
+
+// closeOpenAddons ends every open token add-on purchase at offboarding
+// (§8.8.4, F-9 rev 0.71). Its invoice is voided outside any transaction
+// (BIL-CONC-2); one already paid is parked paid_after_cancel (SEV-2) for a
+// refund, never granted to an offboarded tenant. The purchase is then
+// cancelled under the lock with a re-read, so purchase-expiry never settles
+// it later and no TenantQuotaAddOnChanged follows the offboarding.
+func (s *Service) closeOpenAddons(ctx context.Context, tenantID string) error {
+	var acct domain.BillingAccount
+	var open []domain.QuotaAddonPurchase
+	if err := s.Tx.RunInTenantTx(ctx, tenantID, func(ctx context.Context) error {
+		var err error
+		if acct, err = s.Accounts.Get(ctx, tenantID); err != nil {
+			return err
+		}
+		for after := ""; ; {
+			page, err := s.Addons.List(ctx, tenantID, after, 100)
+			if err != nil {
+				return err
+			}
+			for _, p := range page {
+				if p.Status.Open() {
+					open = append(open, p)
+				}
+			}
+			if len(page) < 100 {
+				return nil
+			}
+			after = page[len(page)-1].PurchaseID
+		}
+	}); err != nil {
+		return err
+	}
+	for _, p := range open {
+		inv, err := s.closeInvoice(ctx, acct.Provider, p.ProviderInvoiceID, addonTarget(acct, p), "addon:"+p.PurchaseID+":offboarded")
+		if err != nil {
+			return err
+		}
+		if inv.Paid {
+			s.purchasePaymentParked(ctx, tenantID, port.PurchaseKindTokenAddon, p.PurchaseID, inv.ID, "paid_after_cancel", "")
+		}
+		if err := s.locked(ctx, tenantID, func(ctx context.Context) error {
+			cur, found, err := s.Addons.Get(ctx, p.PurchaseID)
+			if err != nil || !found || !cur.Status.Open() {
+				return err
+			}
+			if err := s.recheckInvoice(ctx, tenantID, p.PurchaseID, &inv); err != nil { // BIL-PAY-6
+				return err
+			}
+			if inv.ID != "" {
+				cur.ProviderInvoiceID = &inv.ID
+			}
+			cur.Status, cur.ClientAction = domain.PurchaseCancelled, nil
+			return s.Addons.Update(ctx, cur)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }

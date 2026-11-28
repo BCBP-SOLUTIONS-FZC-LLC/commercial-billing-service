@@ -109,22 +109,57 @@ func (r *ReconRepository) Get(ctx context.Context, runID string) (port.ReconRun,
 }
 
 // BillingSubscriptions implements port.ReconRepo: provider subscription id
-// → (tenant, status) for the provider.
-func (r *ReconRepository) BillingSubscriptions(ctx context.Context, provider string) (map[string][2]string, error) {
-	out := map[string][2]string{}
+// → Billing's status, seat quantity, provider price refs and in-flight
+// changes for the provider (§8.13).
+func (r *ReconRepository) BillingSubscriptions(ctx context.Context, provider string) (map[string]port.ReconSubscription, error) {
+	out := map[string]port.ReconSubscription{}
 	err := inTx(ctx, r.sys, func(q querier) error {
-		rows, err := q.Query(ctx, `SELECT provider_subscription_id, tenant_id::text, status::text FROM subscriptions
-			WHERE provider = $1 AND provider_subscription_id IS NOT NULL`, provider)
+		rows, err := q.Query(ctx, `
+			SELECT s.provider_subscription_id, s.tenant_id::text, s.status::text, s.plan::text, coalesce(i.quantity, 0),
+			       coalesce(p.provider_price_id, ''), coalesce(sp.provider_price_id, ''),
+			       EXISTS (SELECT 1 FROM seat_purchases x WHERE x.billing_subscription_id = s.billing_subscription_id
+			                 AND x.status IN ('pending_payment', 'requires_action'))
+			       OR EXISTS (SELECT 1 FROM plan_change_requests c WHERE c.billing_subscription_id = s.billing_subscription_id
+			                 AND c.status = 'pending_payment')
+			FROM subscriptions s
+			LEFT JOIN subscription_items i ON i.billing_subscription_id = s.billing_subscription_id AND i.kind = 'seats'
+			LEFT JOIN plan_prices p ON p.price_id = i.price_id
+			LEFT JOIN plan_prices sp ON sp.price_id = i.scheduled_price_id
+			WHERE s.provider = $1 AND s.provider_subscription_id IS NOT NULL`, provider)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var id, t, st string
-			if err := rows.Scan(&id, &t, &st); err != nil {
+			var id string
+			var b port.ReconSubscription
+			if err := rows.Scan(&id, &b.TenantID, &b.Status, &b.Plan, &b.Quantity, &b.PriceRef, &b.ScheduledPriceRef, &b.PendingUpdate); err != nil {
 				return err
 			}
-			out[id] = [2]string{t, st}
+			out[id] = b
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// InvoiceMirrors implements port.ReconRepo.
+func (r *ReconRepository) InvoiceMirrors(ctx context.Context, provider string, ids []string) (map[string]port.ReconInvoice, error) {
+	out := map[string]port.ReconInvoice{}
+	err := inTx(ctx, r.sys, func(q querier) error {
+		rows, err := q.Query(ctx, `SELECT provider_invoice_id, tenant_id::text, status::text, currency, amount_due_minor, amount_paid_minor
+			FROM invoices WHERE provider = $1 AND provider_invoice_id = ANY($2)`, provider, ids)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			var m port.ReconInvoice
+			if err := rows.Scan(&id, &m.TenantID, &m.Status, &m.Currency, &m.AmountDueMinor, &m.AmountPaidMinor); err != nil {
+				return err
+			}
+			out[id] = m
 		}
 		return rows.Err()
 	})

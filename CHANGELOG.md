@@ -6,6 +6,19 @@ This service has never been deployed to any environment, and there is no release
 
 ## [Unreleased]
 
+### Fixed (2026-11-28 — alignment review step 3: functional fixes F-1 to F-13, LLD rev 0.71)
+
+- **Money: B-P4 no longer re-applies an upgrade a callback already applied** (F-5, `BIL-CONC-2`). After `ChangePrice`, the request is re-read under the lock; before, a racing `invoice.paid` led to two `TenantPlanChanged` or put the applied change back to `pending_payment`. Test `TestUpgradeSettledByCallbackDuringProviderCall`.
+- **Money: offboarding voids and cancels open token add-on purchases** (F-9, §8.8.4); a paid one is parked `paid_after_cancel`, never granted. Test `TestOffboardingCancelsOpenAddonPurchase`.
+- **Money: a closed purchase is never reopened by its own request** (`BIL-CONC-2`). If offboarding, a renewal top-up or `purchase-expiry` closed a seat or add-on purchase while B-P7 / B-P20 waited on the provider, the request reopened it and, when paid, granted it; now the payment is parked `paid_after_cancel` (SEV-2).
+- **Money: prices at renewal** (F-12, `BIL-SUB-8`). A downgrade's provider schedule and B-P3's renewal estimate use the target plan's row effective at the renewal; a seat reduction re-applied after a blocked downgrade uses the current plan's row at the renewal.
+- **Reactivation on another interval** (F-4, §8.9) updates the subscription's `interval` and the seat item's price row once the checkout completes; **above 1000 seats** (F-13) it no longer fails: migration `000010` raises `checkout_sessions.requested_seats` to 100000.
+- **Conversion reversal:** the completion page fires once at the 8th failed completion however many RP-4 retries came first (F-6); a webhook deferred by a reversal retries every minute without spending an attempt, so it is never parked (F-7, new `LedgerRepo.Defer`).
+- **Errors** (F-3): a missing provider object is `500 INTERNAL` (paged), not `422 PROVIDER_PRICE_MISMATCH`; B-P18 without a PDF is `404 INVOICE_NOT_FOUND`.
+- **Reconciliation** (F-10, §8.13) now reports `seats_mismatch`, `plan_mismatch` and `invoice_mismatch`.
+- **Read views** (F-11): B-P1, B-O7 and B-O10 show `pending_plan_change`, `scheduled_reduction` and `open_purchases` (without `client_action`, `BIL-API-4`); `invoice_links` is written when an invoice is mirrored.
+- **Configuration:** new accounts use `DEFAULT_PAYMENT_PROVIDER` (F-1); `.env-example` has the `AUDIT_*` keys platform-audit requires (F-2).
+
 ### Changed (2026-11-28 — alignment review step 2: rebase on Commercial HLD v0.66, LLD rev 0.70)
 
 - **Outbox retry budget** (HLD §9.3 v0.66, BL-OQ-29 closed). `OUTBOX_MAX_ATTEMPTS` defaults to 10 (was 5; range now 1–20), and the new `OUTBOX_RETRY_BACKOFF` (`30s`, 1 s–5 min) and `OUTBOX_MAX_RETRY_BACKOFF` (`5m`, 30 s–30 min) are passed to `outbox.Runner`; before, platform-events used a 1 s backoff and an SNS or Glue outage dead-lettered every row within about a minute. Now a row dead-letters after about 32 min. Code (`internal/config`, `cmd/server/events.go`) and Helm values.

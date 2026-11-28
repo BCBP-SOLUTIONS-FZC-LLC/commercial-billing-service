@@ -274,6 +274,16 @@ func (s *Service) purchaseTokenAddon(ctx context.Context, c Caller, tenantID str
 			p = cur
 			return nil
 		}
+		if !cur.Status.Open() {
+			// Cancelled (offboarding) or expired while ChargeOneOff ran: never
+			// reopened or granted (BIL-CONC-2, §8.8.4); a payment taken anyway
+			// is parked for a refund.
+			if res.Outcome.Status == port.PaymentPaid {
+				s.purchasePaymentParked(ctx, tenantID, port.PurchaseKindTokenAddon, cur.PurchaseID, deref(p.ProviderInvoiceID), "paid_after_cancel", "")
+			}
+			p = cur
+			return nil
+		}
 		cur.ProviderInvoiceID, cur.ClientAction, cur.Status = p.ProviderInvoiceID, p.ClientAction, p.Status
 		if err == nil && res.Outcome.Status == port.PaymentPaid && cur.Status == domain.PurchasePendingPayment {
 			if err := s.confirmAddon(ctx, &cur, metaFor(c)); err != nil {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app"
+	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app/port"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 )
 
@@ -192,6 +193,10 @@ func TestInvoiceHistoryAndContactPaths(t *testing.T) {
 	e.p.on("InvoicePDFLink", answer{err: errProvider})
 	_, err = e.svc.InvoiceDownloadURL(ctx, owner, tenant, page.Items[0].InvoiceID)
 	isCode(t, "B-P18 provider", err, domain.ErrProviderUnavailable)
+	// F-3 (rev 0.71): no PDF at the provider is 404, not PROVIDER_PRICE_MISMATCH.
+	e.p.on("InvoicePDFLink", answer{err: port.ErrNotFound})
+	_, err = e.svc.InvoiceDownloadURL(ctx, owner, tenant, page.Items[0].InvoiceID)
+	isCode(t, "B-P18 no PDF", err, domain.ErrInvoiceNotFound)
 
 	// B-P24.
 	for _, c := range []string{"abc", "-1"} {

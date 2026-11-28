@@ -555,6 +555,55 @@ func TestReversalCompletesAfterRP4WithoutCallingItAgain(t *testing.T) {
 	}
 }
 
+// F-6 (rev 0.71): RP-4 retries and completion failures shared one attempts
+// counter, so a reversal whose RP-4 had retried 8 times or more never paged.
+// RP-4's 200 now resets the counter: the page fires once, at the 8th failed
+// completion, however many RP-4 retries came before.
+func TestReversalCompletionPagesOnceAfterRP4Retries(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant, sub := e.activeSubscription(t, "pro", 3)
+	exec(t, `UPDATE subscriptions SET converted_at = $2 WHERE billing_subscription_id = $1::uuid`, sub, e.now)
+	exec(t, `UPDATE billing_accounts SET iam_lifecycle = 'active' WHERE tenant_id = $1::uuid`, tenant)
+	e.mirror(t, tenant, sub, "in_conv_"+sub, "subscription_create", "paid", 20700)
+	saga := scalar[string](t, `SELECT saga_id::text FROM conversion_sagas WHERE billing_subscription_id = $1`, sub)
+	exec(t, `UPDATE conversion_sagas SET state = 'confirmed', confirmed_at = now() WHERE saga_id = $1`, saga)
+	for range 10 {
+		e.rp.reverts = append(e.rp.reverts, domain.RP3Answer{Status: 503})
+	}
+	_, err := e.svc.RevertConversion(ctx, operator, tenant, app.ReversalRequest{Refund: true, Reason: "Early fraud warning on conversion payment"})
+	isCode(t, "rp-4 503", err, domain.ErrIAMUnavailable)
+	for range 30 {
+		e.p.on("Refund", answer{err: errProvider})
+	}
+	pages := func() int {
+		n := 0
+		e.log.mu.Lock()
+		defer e.log.mu.Unlock()
+		for _, l := range e.log.lines {
+			if strings.Contains(l, "cannot complete after RP-4 succeeded") {
+				n++
+			}
+		}
+		return n
+	}
+	for range 25 { // 10 RP-4 attempts, then 15 failed completions (inside the 24 h refund-key window)
+		e.now = e.now.Add(30 * time.Minute)
+		if _, err := e.svc.RunSagas(ctx, 100); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(e.rp.reverts) != 0 {
+		t.Fatalf("RP-4 answers left: %d", len(e.rp.reverts))
+	}
+	if got := scalar[string](t, `SELECT state::text||'/'||last_error_code FROM conversion_sagas WHERE saga_id = $1`, saga); got != "reverting/completion_failed" {
+		t.Fatalf("state %s", got)
+	}
+	if n := pages(); n != 1 {
+		t.Fatalf("BillingReversalDecisionNeeded paged %d times, want 1", n)
+	}
+}
+
 // A reversal completed without an operator (empty caller → commercial-system's
 // sentinel) is audited as the service account, not as a user with the
 // sentinel id (Audit Log §10.3: non-IAM producers use {service_account, …00c1}).

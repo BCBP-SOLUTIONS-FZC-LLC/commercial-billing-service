@@ -211,7 +211,7 @@ func TestStepFailuresMapToPortErrors(t *testing.T) {
 		{"VerifyPrice", func(f *fakeStripe) {
 			f.on("GET", "/v1/prices/price_A", 404, apiErr("invalid_request_error", "resource_missing"))
 		},
-			func(a *Adapter) error { return a.VerifyPrice(ctx, "price_A", port.PriceExpectation{Amount: usd5}) }, port.ErrNotFound, nil},
+			func(a *Adapter) error { return a.VerifyPrice(ctx, "price_A", port.PriceExpectation{Amount: usd5}) }, port.ErrPriceMismatch, nil}, // missing price → 422 (F-3)
 	}
 	for _, kind := range []struct {
 		kind domain.ProviderObjectKind

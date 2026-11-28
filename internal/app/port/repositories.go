@@ -122,6 +122,10 @@ type LedgerRepo interface {
 	Claim(ctx context.Context, limit int, claimFor time.Duration) ([]domain.LedgerEntry, error)
 	// Finish records the outcome. nextAttempt is set only for a retry.
 	Finish(ctx context.Context, provider, providerEventID string, status domain.LedgerStatus, outcome string, nextAttempt *time.Time) error
+	// Defer reschedules a row whose handler waits on another process (a
+	// conversion reversal, F-7) and gives back the attempt its claim spent,
+	// so waiting never counts toward WEBHOOK_MAX_ATTEMPTS.
+	Defer(ctx context.Context, provider, providerEventID, outcome string, nextAttempt time.Time) error
 }
 
 // CheckoutRepo stores hosted checkout sessions (§4.2.7).
@@ -216,6 +220,7 @@ type FollowUpRepo interface {
 type PlanChangeRepo interface {
 	Insert(ctx context.Context, c domain.PlanChangeRequest) error
 	Open(ctx context.Context, tenantID string) (domain.PlanChangeRequest, bool, error)
+	Get(ctx context.Context, tenantID, changeID string) (domain.PlanChangeRequest, bool, error)
 	ByProviderInvoice(ctx context.Context, tenantID, providerInvoiceID string) (domain.PlanChangeRequest, bool, error)
 	Update(ctx context.Context, c domain.PlanChangeRequest) error
 	DueDowngrades(ctx context.Context, until time.Time, limit int) ([]domain.PlanChangeRequest, error)
@@ -296,6 +301,23 @@ type ReconFinding struct {
 	RepairNote                  *string
 }
 
+// ReconSubscription is Billing's view of one provider subscription for
+// reconciliation: status, the seat item's quantity and provider price refs
+// (current and scheduled at renewal), and whether a change is in flight (an
+// open seat purchase or plan change) that explains a provider difference.
+type ReconSubscription struct {
+	TenantID, Status, Plan      string
+	Quantity                    int
+	PriceRef, ScheduledPriceRef string
+	PendingUpdate               bool
+}
+
+// ReconInvoice is Billing's mirror of one provider invoice.
+type ReconInvoice struct {
+	TenantID, Status, Currency      string
+	AmountDueMinor, AmountPaidMinor int64
+}
+
 // ReconRepo stores reconciliation runs and reads Billing's side (system pool).
 type ReconRepo interface {
 	Queue(ctx context.Context, r ReconRun) error
@@ -303,7 +325,12 @@ type ReconRepo interface {
 	AddFinding(ctx context.Context, runID string, f ReconFinding) error
 	Finish(ctx context.Context, runID, status string, counts map[string]int, errText *string) error
 	Get(ctx context.Context, runID string) (ReconRun, []ReconFinding, bool, error)
-	BillingSubscriptions(ctx context.Context, provider string) (map[string][2]string, error)
+	// BillingSubscriptions is Billing's side of each provider subscription,
+	// keyed by provider subscription id (§8.13).
+	BillingSubscriptions(ctx context.Context, provider string) (map[string]ReconSubscription, error)
 	KnownIDs(ctx context.Context, provider, kind string, ids []string) (map[string]bool, error)
+	// InvoiceMirrors is Billing's mirror of each listed provider invoice it
+	// holds, keyed by provider invoice id (§8.13 invoice_mismatch).
+	InvoiceMirrors(ctx context.Context, provider string, ids []string) (map[string]ReconInvoice, error)
 	UnknownCustomerEvents(ctx context.Context, provider string, from, to time.Time) ([]string, error)
 }

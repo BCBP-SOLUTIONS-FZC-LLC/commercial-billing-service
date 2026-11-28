@@ -9,14 +9,16 @@ import (
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 )
 
+// F-3 (rev 0.71): a missing provider object is not a price mismatch; it
+// means Billing and the provider disagree (500 INTERNAL, paged).
 func TestProviderErrorToDomainPriceAndNotFound(t *testing.T) {
-	for in, want := range map[error]string{
-		fmt.Errorf("price: %w", ErrPriceMismatch): "price: " + ErrPriceMismatch.Error(),
-		fmt.Errorf("gone: %w", ErrNotFound):       "the provider object does not exist",
+	for in, want := range map[error]domain.ErrorCode{
+		fmt.Errorf("price: %w", ErrPriceMismatch): domain.ErrProviderPriceMismatch,
+		fmt.Errorf("gone: %w", ErrNotFound):       domain.ErrInternal,
 	} {
 		var de *domain.DomainError
-		if !errors.As(ProviderErrorToDomain(in), &de) || de.Code != domain.ErrProviderPriceMismatch || de.Message != want {
-			t.Errorf("%v → %+v", in, de)
+		if !errors.As(ProviderErrorToDomain(in), &de) || de.Code != want {
+			t.Errorf("%v → %+v, want %s", in, de, want)
 		}
 	}
 }

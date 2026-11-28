@@ -83,3 +83,29 @@ func TestBIL_PAY_5_ClaimOrderAndRetry(t *testing.T) {
 		t.Fatalf("parked row must have next_attempt_at = 9999-12-31, got %v", parked.NextAttemptAt)
 	}
 }
+
+// F-7 (rev 0.71): Defer reschedules a claimed row and gives back the attempt
+// its claim counted, so a callback waiting on a conversion reversal never
+// reaches WEBHOOK_MAX_ATTEMPTS.
+func TestLedgerDeferGivesBackTheAttempt(t *testing.T) {
+	ctx := context.Background()
+	mustExec(t, superPool, `DELETE FROM payment_event_ledger`)
+	ledger := pgadapter.NewLedgerRepository(systemPool)
+	tA := newID()
+	if _, err := ledger.Insert(ctx, ledgerRow(&tA, "evt_defer", time.Now().Add(-time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 3; i++ {
+		got, err := ledger.Claim(ctx, 10, time.Minute)
+		if err != nil || len(got) != 1 || got[0].Attempts != 1 {
+			t.Fatalf("claim %d: %+v %v", i, got, err)
+		}
+		if err := ledger.Defer(ctx, "stripe", "evt_defer", "failed:REQUEST_IN_PROGRESS", time.Now().Add(-time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e, _ := ledger.Get(ctx, "stripe", "evt_defer")
+	if e.Status != domain.LedgerFailed || e.Attempts != 0 || e.Outcome == nil || *e.Outcome != "failed:REQUEST_IN_PROGRESS" || e.NextAttemptAt.IsZero() {
+		t.Fatalf("deferred row %+v", e)
+	}
+}

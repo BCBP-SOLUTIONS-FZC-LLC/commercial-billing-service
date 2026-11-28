@@ -105,3 +105,14 @@ func TestEventsAndHandlers(t *testing.T) {
 		t.Error("empty worker name")
 	}
 }
+
+// F-1 (rev 0.71): new accounts use DEFAULT_PAYMENT_PROVIDER (LLD §3.4, §12),
+// not a hard-coded "stripe".
+func TestNewServiceUsesDefaultPaymentProvider(t *testing.T) {
+	for _, p := range []string{"stripe", "manual"} {
+		svc := NewService(config.Config{DefaultPaymentProvider: p}, nil, nil, nil, nil, nil, nil, &recLog{})
+		if got := svc.Settings.NewAccountProvider; got != p {
+			t.Errorf("DEFAULT_PAYMENT_PROVIDER=%s: new accounts use %q", p, got)
+		}
+	}
+}

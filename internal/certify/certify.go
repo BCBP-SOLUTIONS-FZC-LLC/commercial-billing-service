@@ -166,7 +166,8 @@ func service(db *DB, prov port.PaymentProvider, e *Env) (*app.Service, error) {
 		FeatureDirectSignup: true, FeatureTokenAddons: true, FeatureSeatPurchase: true, AutoPauseOnOperatorSuspension: true,
 		ReviewThresholdMinor: 100000, SagaAlertAfter: 30 * time.Minute, SeatRenewalLead: 24 * time.Hour, DowngradeRecheckLead: 2 * time.Hour,
 		PurchaseAbandonAfter: 30 * time.Minute, SeatResyncAfter: 10 * time.Minute, RepriceCutoff: time.Hour,
-		PIIMinimiseOffboardedDays: 90, PIIMinimiseAbandonedDays: 30, ProviderCertSuiteVersion: SuiteVersion}
+		PIIMinimiseOffboardedDays: 90, PIIMinimiseAbandonedDays: 30, ProviderCertSuiteVersion: SuiteVersion,
+		DefaultPaymentProvider: prov.Name()} // new accounts use the adapter under certification
 	svc := bootstrap.NewService(cfg, nil, db.App, db.System, events, pgadapter.NewAuditWriter(enq), nil, e.Log)
 	svc.Providers = Registry{P: prov}
 	svc.Core, svc.RP, svc.Entitlements = e.Core, RPStub{}, EntitlementsStub{}

@@ -413,3 +413,33 @@ func TestUseCaseMetrics(t *testing.T) {
 		t.Fatalf("dunning metrics %v", e.metrics.counts)
 	}
 }
+
+// F-12 (rev 0.71, BIL-SUB-8): a downgrade takes effect at the renewal R, so
+// its ScheduleAtPeriodEnd uses the target plan's row effective at R, not the
+// one effective when the owner asked.
+func TestBIL_SUB_8_DowngradeSchedulesThePriceEffectiveAtRenewal(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant, sub := e.activeSubscription(t, "pro", 4)
+	r := periodEnd(t, sub)
+	// A test-only CHF price book, so no other test sees it.
+	mustNoErr(t, sql(ctx, `INSERT INTO plan_prices (plan, interval, currency, unit_amount_minor, provider, provider_price_id, effective_from, effective_to, created_by, reason)
+		VALUES ('pro','month','CHF',6900,'stripe','price_chf_pro','2026-01-01',NULL,'00000000-0000-0000-0000-0000000000c1','test CHF row'),
+		       ('starter','month','CHF',2900,'stripe','price_chf_starter_old','2026-01-01',$1,'00000000-0000-0000-0000-0000000000c1','test CHF row'),
+		       ('starter','month','CHF',3400,'stripe','price_chf_starter_new',$1,NULL,'00000000-0000-0000-0000-0000000000c1','test CHF row')`, r.Add(-24*time.Hour)))
+	pro := scalar[string](t, `SELECT price_id::text FROM plan_prices WHERE provider_price_id = 'price_chf_pro'`)
+	mustNoErr(t, sql(ctx, `UPDATE subscription_items SET price_id = $2 WHERE billing_subscription_id = $1`, sub, pro))
+
+	pv, err := e.svc.PreviewPlanChange(ctx, owner, tenant, app.PlanChangePreviewRequest{TargetPlan: "starter"})
+	if err != nil || pv.NextRenewalAmount.AmountMinor != 4*3400 {
+		t.Fatalf("B-P3 renewal amount %+v %v", pv.NextRenewalAmount, err)
+	}
+	e.core.check = port.PlanChangeCheck{Allowed: true}
+	res, err := e.svc.ChangePlan(ctx, withKey(owner, "k-down-chf"), tenant, app.PlanChangeRequest{TargetPlan: "starter", RecordVersion: e.version(t, sub)})
+	if err != nil || res.Status != "scheduled" {
+		t.Fatalf("downgrade %+v %v", res, err)
+	}
+	if len(e.stripe.called("ScheduleAtPeriodEnd price_chf_starter_new")) != 1 || len(e.stripe.called("ScheduleAtPeriodEnd price_chf_starter_old")) != 0 {
+		t.Fatalf("schedule %v", e.stripe.called("ScheduleAtPeriodEnd"))
+	}
+}

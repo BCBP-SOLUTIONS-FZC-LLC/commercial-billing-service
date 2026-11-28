@@ -79,7 +79,7 @@ func NewService(cfg config.Config, reg *provider.Registry, appPool, sysPool *pgc
 		Entitlements: entitlementsclient.New(cfg.EntitlementsBaseURL, cfg.EntitlementsTimeout),
 		Events:       events, Audit: auditW, Log: log,
 		Settings: app.Settings{
-			DefaultCurrency: cfg.DefaultCurrency, NewAccountProvider: "stripe", CheckoutTTL: cfg.CheckoutTTL,
+			DefaultCurrency: cfg.DefaultCurrency, NewAccountProvider: cfg.DefaultPaymentProvider, CheckoutTTL: cfg.CheckoutTTL,
 			TenantAppBaseURL: cfg.TenantAppBaseURL, SagaMaxBackoff: cfg.SagaMaxBackoff, SagaClaim: cfg.RPTimeout + sagaClaimMargin,
 			SeatsAfterConversionDelay: cfg.SeatsAfterConversionDelay, SCAAbandonAfter: cfg.SCAAbandonAfter, MaxSeatsPerPurchase: cfg.MaxSeatsPerPurchase, SeatPreviewTTL: cfg.SeatPreviewTTL,
 			MinChargeMinor: cfg.MinChargeMinor, BelowMinimumPolicy: domain.BelowMinimumPolicy(cfg.ProrationBelowMinimum),

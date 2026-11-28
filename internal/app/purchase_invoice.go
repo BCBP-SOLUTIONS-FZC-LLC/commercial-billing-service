@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strings"
 	"time"
@@ -90,6 +91,11 @@ func (s *Service) closeInvoice(ctx context.Context, providerName string, invoice
 		}
 	}
 	cur, err := prov.FetchCurrent(ctx, domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: id})
+	if errors.Is(err, port.ErrNotFound) {
+		// Gone at the provider (a draft an earlier pass deleted): nothing to
+		// void and nothing can be paid, so the purchase can close (rev 0.71).
+		return purchaseInvoice{ID: id, LookedUp: looked}, nil
+	}
 	if err != nil {
 		return purchaseInvoice{ID: id, LookedUp: looked}, providerErr(err)
 	}
