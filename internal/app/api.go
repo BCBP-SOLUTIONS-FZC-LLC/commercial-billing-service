@@ -557,7 +557,7 @@ type ReversalResult struct {
 
 // SagaActionRequest is B-O9.
 type SagaActionRequest struct {
-	Action string `json:"action" binding:"required,oneof=retry refund resolved_manually"`
+	Action string `json:"action" binding:"required,oneof=retry refund resolved_manually close_refunded"`
 	Reason string `json:"reason" binding:"required,min=10,max=1000"`
 }
 

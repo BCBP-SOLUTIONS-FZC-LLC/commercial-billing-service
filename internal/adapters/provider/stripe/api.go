@@ -846,7 +846,12 @@ func (a *Adapter) ListSince(ctx context.Context, kind port.ReconKind, since time
 			if err != nil {
 				return page, mapErr(err)
 			}
-			page.Items = append(page.Items, domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: inv.ID}, Status: string(inv.Status), Metadata: inv.Metadata})
+			st := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: inv.ID}, Status: string(inv.Status), Metadata: inv.Metadata,
+				Fields: map[string]any{}}
+			if inv.Customer != nil {
+				st.Fields["customer"] = inv.Customer.ID // the tenant comes from Billing's customer mapping (BIL-PAY-3)
+			}
+			page.Items = append(page.Items, st)
 			if len(page.Items) == limit {
 				page.NextCursor = inv.ID
 				break

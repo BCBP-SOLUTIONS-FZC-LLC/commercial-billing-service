@@ -103,7 +103,9 @@ func TestConversionReversal(t *testing.T) {
 	mustNoErr(t, sql(ctx, `UPDATE billing_accounts SET iam_lifecycle = 'active', iam_last_event_at = now() WHERE tenant_id = $1::uuid`, tenant))
 	mustNoErr(t, sql(ctx, `UPDATE conversion_sagas SET state = 'confirmed', confirmed_at = now() WHERE billing_subscription_id = $1::uuid`, sub))
 	e.mirrorPaid(t, tenant, sub, "in_conv_"+sub, "subscription_create", 20700)
-	d := invoiceState("dp_1_"+sub, "", "needs_response", "", e.now, 0)
+	// An inquiry (warning_*): no funds withdrawn, so B-O8 still refunds
+	// (D-L10, rev 0.69; a chargeback under way skips the refund).
+	d := invoiceState("dp_1_"+sub, "", "warning_needs_response", "", e.now, 0)
 	d.Ref.Kind = domain.ObjectDispute
 	d.Fields = map[string]any{"reason": "fraudulent", "payment_ref": "ch_1", "invoice": "in_conv_" + sub, "created": e.now}
 	if _, err := e.handle(t, tenant, app.DisputeOpened{S: e.svc}, callback("evt_dp", "charge.dispute.created", domain.KindDisputeOpened), d); err != nil {

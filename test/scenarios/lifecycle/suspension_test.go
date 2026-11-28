@@ -104,7 +104,7 @@ func TestOffboardingFailures(t *testing.T) {
 		name string
 		skip int
 	}{{"Subs.Get", 0}, {"SeatPurchases.Open", 0}, {"SeatPurchases.Update", 0}, {"Checkouts.ExpireAll", 0}, {"Changes.Open", 0},
-		{"Provider.CancelNow", 0}, {"Subs.Get", 1}, {"Subs.Transition", 0}} {
+		{"Provider.CancelNow", 0}, {"Subs.Get", 2}, {"Subs.Transition", 0}} { // Subs.Get 2: the final commit's read (the first two are before the cancel)
 		e.f.on(c.name, c.skip)
 		if _, err := e.svc.RunLifecycleFollowUps(ctx, 10); err != nil {
 			t.Fatal(err)

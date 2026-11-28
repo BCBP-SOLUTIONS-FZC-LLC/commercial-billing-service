@@ -9,6 +9,6 @@
 3. **`awaiting_tenant_converted`**: ask IAM whether RP emitted `TenantConverted` (RP outbox). If it did, check `tenant-billing-q-dlq` and redrive ([consumer-dlq.md](consumer-dlq.md)); the saga confirms itself when the event matches. If RP shows the conversion done but no event will come, B-O9 `resolved_manually` after IAM re-emits or confirms.
 4. **`failed`** (`tenant_offboarded`, `403`, `404`): fix admission or data with IAM, then B-O9 `retry`. If the tenant cannot be converted, B-O9 `refund`.
 5. **Direct signup where RP-2 never succeeds:** coordinate with the BFF team; if the signup cannot complete, B-O9 `refund` (`signup_failed`).
-6. **`IAMParkedTenantEventsStale` for a direct signup** (Billing's saga already confirmed; the alert is Core's and is routed to Billing on-call too): IAM re-drives I-1 or the backstop event. If IAM cannot complete it, refund through B-O3 (`signup_failed`) and record B-O9 `resolved_manually`.
+6. **`IAMParkedTenantEventsStale` for a direct signup** (Billing's saga already confirmed; the alert is Core's and is routed to Billing on-call too): IAM re-drives I-1 or the backstop event. If IAM cannot complete it, refund through B-O3 (`signup_failed`), then close it with B-O9 `close_refunded` (cancels the provider subscription, ends Billing's, saga `refunded`; refused while any of the payment is unrefunded).
 
 **Verify:** `commercial_billing_sagas_overdue` returns to 0; the tenant's subscription view shows the saga `confirmed`.

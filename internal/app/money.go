@@ -387,8 +387,9 @@ func (h DisputeOpened) Handle(ctx context.Context, tenantID string, ev domain.Pa
 // No billing.events: RP-4 is IAM's lifecycle change.
 func (s *Service) RevertConversion(ctx context.Context, c Caller, tenantID string, r ReversalRequest) (ReversalResult, error) {
 	var (
-		sub  domain.Subscription
-		saga domain.ConversionSaga
+		sub      domain.Subscription
+		saga     domain.ConversionSaga
+		recorded bool
 	)
 	if err := s.locked(ctx, tenantID, func(ctx context.Context) error {
 		var found bool
@@ -447,9 +448,17 @@ func (s *Service) RevertConversion(ctx context.Context, c Caller, tenantID strin
 		if r.DisputeID != "" {
 			saga.ReversalDisputeID = &r.DisputeID
 		}
+		recorded = true
 		return s.Sagas.Update(ctx, saga)
 	}); err != nil {
 		return ReversalResult{}, err
+	}
+	if recorded && s.Log != nil {
+		// HLD §11.6 / LLD §10.6: every RP-4 request raises the review
+		// trigger (BillingReviewTrigger, no page), once per recorded request.
+		s.logger(ctx).Warn("conversion reversal requested (RP-4) (review trigger)", map[string]any{
+			"tenant_id": tenantID, "kind": "conversion_reversal", "billing_subscription_id": sub.BillingSubscriptionID,
+			"refund": r.Refund, "dispute_id": r.DisputeID, "actor": actorOf(c), "alert": "BillingOperatorReviewNeeded"})
 	}
 	res, terminal, err := s.reverse(ctx, c, saga, sub)
 	if terminal != "" && s.Log != nil {
@@ -603,7 +612,11 @@ func (s *Service) completeReversal(ctx context.Context, c Caller, saga domain.Co
 		}
 	}
 	out := ReversalResult{ReversalStatus: "reverted", RPResponse: json.RawMessage(`{"status":200}`)}
-	fundsReturned := disp != nil && disp.ProviderStatus == "lost"
+	fundsReturned := disp != nil && disputeHoldsFunds(disp.ProviderStatus)
+	if fundsReturned && refund && s.Log != nil {
+		s.logger(ctx).Info("conversion reversal: refund skipped, the dispute already took the funds", map[string]any{
+			"tenant_id": tenantID, "dispute_id": disp.DisputeID, "dispute_status": disp.ProviderStatus})
+	}
 	if refund && !fundsReturned {
 		id, err := s.reversalRefund(ctx, c, tenantID, sub.BillingSubscriptionID, reason)
 		if err != nil {
@@ -807,4 +820,19 @@ func (s *Service) sagaRefunded(ctx context.Context, tenantID string) error {
 	}
 	saga.State = domain.SagaRefunded
 	return s.Sagas.Update(ctx, saga)
+}
+
+// disputeHoldsFunds reports whether a provider dispute in this status has
+// already taken the disputed amount back from Billing (§8.2, D-L10, rev
+// 0.69): a chargeback under way (needs_response, under_review) or lost. A
+// B-O8 refund then would pay the customer twice, so it is skipped; if the
+// dispute is later won, the operator refunds by hand (runbook). Inquiries
+// (warning_*) withdraw nothing and a won dispute returned the funds to
+// Billing, so those still refund.
+func disputeHoldsFunds(status string) bool {
+	switch status {
+	case "needs_response", "under_review", "lost":
+		return true
+	}
+	return false
 }

@@ -107,12 +107,14 @@ func execute(name string) int {
 	if cfg.BuildVersion == "" {
 		cfg.BuildVersion = buildVersion
 	}
-	log, err := logger.NewLogger(loggerEnv(cfg.AppEnv))
+	rawLog, err := logger.NewLogger(loggerEnv(cfg.AppEnv))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init logger: %v\n", err)
 		return exitFailed
 	}
-	defer func() { _ = gincommon.Shutdown(log) }()
+	// Every line passes the §10.1 redaction list (LOG_HASH_SALT).
+	log := app.RedactingLogger(rawLog, cfg.LogHashSalt)
+	defer func() { _ = gincommon.Shutdown(rawLog) }()
 	if len(problems) > 0 {
 		for _, p := range problems {
 			log.Error("invalid configuration", map[string]any{"key": p.Key, "reason": p.Reason})

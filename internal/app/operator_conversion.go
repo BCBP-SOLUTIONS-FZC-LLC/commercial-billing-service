@@ -85,10 +85,14 @@ func (s *Service) StubConversion(ctx context.Context, c Caller, tenantID string,
 	return out, err
 }
 
-// SagaAction is B-O9: retry, refund or resolved_manually (§9.3.1).
+// SagaAction is B-O9: retry, refund, resolved_manually or close_refunded
+// (§9.3.1).
 func (s *Service) SagaAction(ctx context.Context, c Caller, tenantID, sagaID string, r SagaActionRequest) (SagaView, error) {
-	if r.Action == "refund" {
+	switch r.Action {
+	case "refund":
 		return s.sagaRefund(ctx, c, tenantID, sagaID, r)
+	case "close_refunded":
+		return s.sagaCloseRefunded(ctx, c, tenantID, sagaID, r)
 	}
 	var out SagaView
 	err := s.locked(ctx, tenantID, func(ctx context.Context) error {
@@ -117,6 +121,12 @@ func (s *Service) SagaAction(ctx context.Context, c Caller, tenantID, sagaID str
 			if saga.State.Terminal() {
 				return domain.NewError(domain.ErrSagaAlreadyConfirmed, "the saga is closed").With("state", string(saga.State))
 			}
+			// §9.3.1: only awaiting_tenant_converted → confirmed (RP shows the
+			// conversion done but no TenantConverted will come). A failed or
+			// pending RP-3 is retried or refunded instead (rev 0.69).
+			if saga.State != domain.SagaAwaitingTenantConverted {
+				return domain.NewError(domain.ErrSagaAlreadyConfirmed, "only a saga awaiting TenantConverted can be resolved manually").With("state", string(saga.State))
+			}
 			saga.State, saga.ConfirmedAt, saga.NextAttemptAt = domain.SagaConfirmed, &now, nil
 			sub, err := s.Subs.Get(ctx, saga.BillingSubscriptionID)
 			if err != nil {
@@ -142,4 +152,85 @@ func (s *Service) SagaAction(ctx context.Context, c Caller, tenantID, sagaID str
 func sagaView(s domain.ConversionSaga) SagaView {
 	return SagaView{SagaID: s.SagaID, Kind: string(s.Kind), State: string(s.State), BillingSubscriptionID: s.BillingSubscriptionID,
 		NextAttemptAt: s.NextAttemptAt, ConfirmedAt: s.ConfirmedAt}
+}
+
+// sagaCloseRefunded is B-O9 close_refunded (§8.3, §9.3.1, rev 0.69): a direct
+// signup whose saga is already confirmed but which IAM could not complete
+// (IAMParkedTenantEventsStale; runbook stuck-conversion-saga.md step 6). The
+// operator first refunds the signup payment through B-O3 (category
+// signup_failed); this action then cancels the provider subscription now and
+// ends Billing's (signup_failed, no bus event, as the B-O9 refund path), and
+// closes the saga as refunded, so the customer is never billed again.
+func (s *Service) sagaCloseRefunded(ctx context.Context, c Caller, tenantID, sagaID string, r SagaActionRequest) (SagaView, error) {
+	var (
+		saga domain.ConversionSaga
+		sub  domain.Subscription
+	)
+	if err := s.Tx.RunInTenantTx(ctx, tenantID, func(ctx context.Context) error {
+		var found bool
+		var err error
+		if saga, found, err = s.Sagas.Get(ctx, sagaID); err != nil {
+			return err
+		}
+		if !found || saga.TenantID != tenantID {
+			return domain.NewError(domain.ErrSagaNotFound, "saga not found")
+		}
+		if saga.State != domain.SagaConfirmed || saga.Kind != domain.SagaDirectSignup {
+			return domain.NewError(domain.ErrSagaAlreadyConfirmed, "close_refunded applies only to a confirmed direct-signup saga").With("state", string(saga.State))
+		}
+		sub, err = s.Subs.Get(ctx, saga.BillingSubscriptionID)
+		return err
+	}); err != nil {
+		return SagaView{}, err
+	}
+	if sub.Status != domain.StatusEnded {
+		inv, found, err := s.conversionInvoice(ctx, tenantID)
+		if err != nil {
+			return SagaView{}, err
+		}
+		if found && inv.AmountPaidMinor-inv.AmountRefundedMinor > 0 {
+			return SagaView{}, domain.NewError(domain.ErrValidation, "refund the signup payment with B-O3 (category signup_failed) first").
+				With("refundable_minor", inv.AmountPaidMinor-inv.AmountRefundedMinor)
+		}
+		if sub.ProviderSubscriptionID != nil && sub.Provider != manualProvider {
+			prov, err := s.provider(sub.Provider)
+			if err != nil {
+				return SagaView{}, err
+			}
+			if err := prov.CancelNow(ctx, port.SubscriptionRef{ProviderSubscriptionID: *sub.ProviderSubscriptionID}, "cancel:"+sub.BillingSubscriptionID+":signup_close"); err != nil {
+				return SagaView{}, providerErr(err)
+			}
+		}
+	}
+	var out SagaView
+	err := s.locked(ctx, tenantID, func(ctx context.Context) error {
+		cur, ok, err := s.Sagas.Get(ctx, sagaID)
+		if err != nil || !ok {
+			return err
+		}
+		if cur.State != domain.SagaConfirmed {
+			out = sagaView(cur) // closed meanwhile: nothing more to do
+			return nil
+		}
+		latest, err := s.Subs.Get(ctx, cur.BillingSubscriptionID)
+		if err != nil {
+			return err
+		}
+		if latest.Status != domain.StatusEnded {
+			if err := s.endSignup(ctx, latest, "operator:B-O9"); err != nil {
+				return err
+			}
+		}
+		now := s.now()
+		res := "refund"
+		cur.State, cur.Resolution, cur.ResolutionReason, cur.ResolvedBy, cur.NextAttemptAt = domain.SagaRefunded, &res, &r.Reason, &c.UserID, nil
+		if err := s.Sagas.Update(ctx, cur); err != nil {
+			return err
+		}
+		out = sagaView(cur)
+		return s.Audit.Write(ctx, port.AuditEntry{TenantID: tenantID, EntryType: "billing.saga.resolved", Action: "saga.close_refunded",
+			ActorID: c.UserID, TargetType: "saga", TargetID: sagaID, SourceEventType: "SagaResolved", NaturalID: sagaID + ":close_refunded",
+			OccurredAt: now, IPAddress: c.ClientIP, UserAgent: c.UserAgent, Metadata: map[string]any{"action": "close_refunded", "reason": r.Reason}})
+	})
+	return out, err
 }

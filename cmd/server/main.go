@@ -61,15 +61,18 @@ func run() int {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	log, err := logger.NewLogger(loggerEnv(cfg.AppEnv))
+	rawLog, err := logger.NewLogger(loggerEnv(cfg.AppEnv))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init logger: %v\n", err)
 		return 1
 	}
+	// Every line passes the §10.1 redaction list (LOG_HASH_SALT); the raw
+	// logger is kept only for the final flush.
+	log := app.RedactingLogger(rawLog, cfg.LogHashSalt)
 	// Deferred first so it runs last: every log line of the shutdown (pool
 	// drain, tracer) is written before the logger and tracer flush.
 	defer func() {
-		if err := gincommon.Shutdown(log); err != nil {
+		if err := gincommon.Shutdown(rawLog); err != nil {
 			fmt.Fprintf(os.Stderr, "flush logger/tracer: %v\n", err)
 		}
 	}()

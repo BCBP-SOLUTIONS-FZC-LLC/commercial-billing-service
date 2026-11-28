@@ -192,6 +192,38 @@ func TestPaymentFailedEdges(t *testing.T) {
 	}
 }
 
+// §8.6.3 step 1 / §8.8.1 (rev 0.69): a failed renewal top-up invoice
+// (billing_reason subscription_update, recorded on the renewal_topup seat
+// purchase) enters dunning like a cycle invoice; any other
+// subscription_update invoice is still a customer purchase and ignored here.
+func TestPaymentFailedRenewalTopUpEntersDunning(t *testing.T) {
+	e := newEnv(t)
+	tenant, sub := e.signup(t, "pro", 4)
+	start := e.now.AddDate(0, 1, 0).Truncate(time.Second)
+	h := app.PaymentFailed{S: e.svc}
+	failed := func(id string) domain.ProviderObjectState {
+		cur := invoiceState(id, sub, "open", "subscription_update", start, int64(2))
+		cur.Fields["decline_code"] = "insufficient_funds"
+		return cur
+	}
+	exec(t, `INSERT INTO seat_purchases (purchase_id, tenant_id, billing_subscription_id, reason, seats_added, seats_before, seats_after,
+		proration_instant, amount_minor, currency, amount_source, status, requested_by, idempotency_key, provider_invoice_id)
+		VALUES (gen_random_uuid(), $1, $2, 'purchase', 1, 4, 5, now(), 2300, 'USD', 'provider_preview', 'pending_payment', $3, 'k-cust', 'in_cust')`,
+		tenant, sub, owner.UserID)
+	_, err := e.handle(tenant, h, callback("evt_pf_cust", "invoice.payment_failed", domain.KindInvoicePaymentFailed), failed("in_cust"))
+	ignored(t, err, "not_a_cycle_invoice")
+	exec(t, `INSERT INTO seat_purchases (purchase_id, tenant_id, billing_subscription_id, reason, seats_added, seats_before, seats_after,
+		proration_instant, amount_minor, currency, amount_source, status, requested_by, idempotency_key, provider_invoice_id, confirmed_at)
+		VALUES (gen_random_uuid(), $1, $2, 'renewal_topup', 2, 4, 6, now(), 0, 'USD', 'provider_preview', 'confirmed', $3, 'k-topup', 'in_topup', now())`,
+		tenant, sub, domain.CommercialSystemPrincipal)
+	if out, err := e.handle(tenant, h, callback("evt_pf_topup", "invoice.payment_failed", domain.KindInvoicePaymentFailed), failed("in_topup")); err != nil || out != "applied:past_due" {
+		t.Fatalf("top-up failure: %s %v", out, err)
+	}
+	if status(t, sub) != "past_due" || count(t, `SELECT count(*) FROM outbox_events WHERE tenant_id = $1 AND event_type = 'TenantPaymentPastDue'`, tenant) != 1 {
+		t.Fatalf("not in dunning: %s", status(t, sub))
+	}
+}
+
 // customer.subscription.deleted (§8.8.2): the reason follows the state
 // (past_due → dunning_exhausted, auto-renew on → auto_renew_off); open
 // downgrade and reduction are cancelled; failures roll back; a redelivery

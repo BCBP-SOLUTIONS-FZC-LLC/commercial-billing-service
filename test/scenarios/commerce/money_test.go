@@ -5,6 +5,7 @@ package commerce_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -639,6 +640,101 @@ func TestNoCoreEventWhileConversionUnwinds(t *testing.T) {
 	if n := outbox(t, t2, "TenantPaymentPastDue"); n != 0 {
 		t.Fatalf("past-due enqueued during B-O9: %d", n)
 	}
+}
+
+// §8.2 (rev 0.69): every RP-4 request raises the review trigger once (S-2,
+// HLD §11.6); a chargeback still under way has already taken the funds, so
+// B-O8 skips the refund instead of paying the customer twice (D-L10).
+func TestReversalReviewTriggerAndOpenChargeback(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant, sub := e.activeSubscription(t, "pro", 3)
+	exec(t, `UPDATE subscriptions SET converted_at = $2 WHERE billing_subscription_id = $1::uuid`, sub, e.now)
+	exec(t, `UPDATE billing_accounts SET iam_lifecycle = 'active' WHERE tenant_id = $1::uuid`, tenant)
+	e.mirror(t, tenant, sub, "in_conv_"+sub, "subscription_create", "paid", 20700)
+	exec(t, `UPDATE conversion_sagas SET state = 'confirmed', confirmed_at = now() WHERE billing_subscription_id = $1::uuid`, sub)
+	d := disputeState("dp_cb_"+sub, domain.ObjectDispute, map[string]any{"reason": "fraudulent", "payment_ref": "ch_1", "invoice": "in_conv_" + sub, "created": e.now})
+	if _, err := e.handle(tenant, app.DisputeOpened{S: e.svc}, callback("evt_dp_cb", "charge.dispute.created", domain.KindDisputeOpened), d); err != nil {
+		t.Fatal(err)
+	}
+	dispute := scalar[string](t, `SELECT dispute_id::text FROM disputes WHERE tenant_id = $1`, tenant)
+	refunds := len(e.p.called("Refund "))
+	res, err := e.svc.RevertConversion(ctx, operator, tenant, app.ReversalRequest{DisputeID: dispute, Refund: true,
+		Reason: "Fraudulent chargeback on the conversion payment"})
+	if err != nil || res.ReversalStatus != "reverted" || res.RefundID != nil {
+		t.Fatalf("reversal %+v %v", res, err)
+	}
+	if len(e.p.called("Refund ")) != refunds {
+		t.Fatal("refunded while the chargeback holds the funds")
+	}
+	if !e.log.has("INFO", "refund skipped, the dispute already took the funds", "needs_response") {
+		t.Fatalf("skip not logged: %v", e.log.lines)
+	}
+	if !e.log.has("WARN", "conversion reversal requested (RP-4) (review trigger)", tenant, "BillingOperatorReviewNeeded") {
+		t.Fatalf("review trigger not raised: %v", e.log.lines)
+	}
+	n := 0
+	for _, l := range e.log.lines {
+		if strings.Contains(l, "conversion reversal requested (RP-4)") && strings.Contains(l, tenant) {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("review trigger raised %d times", n)
+	}
+}
+
+// B-O9 close_refunded (§8.3, §9.3.1, rev 0.69, D-L9): a confirmed direct
+// signup IAM could not complete is closed after its payment was refunded
+// with B-O3: provider subscription cancelled, Billing's ended (signup_failed,
+// no event to Core), saga refunded, AL-5. Refused before the refund, for any
+// other saga, and once closed. resolved_manually now applies only to a saga
+// awaiting TenantConverted (F-8).
+func TestSagaCloseRefunded(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant, sub := e.activeSubscription(t, "pro", 3)
+	saga := scalar[string](t, `SELECT saga_id::text FROM conversion_sagas WHERE billing_subscription_id = $1`, sub)
+	act := func(action string) error {
+		_, err := e.svc.SagaAction(ctx, operator, tenant, saga, app.SagaActionRequest{Action: action, Reason: "IAM could not complete the signup"})
+		return err
+	}
+	exec(t, `UPDATE conversion_sagas SET state = 'failed' WHERE saga_id = $1`, saga)
+	isCode(t, "resolved_manually from failed", act("resolved_manually"), domain.ErrSagaAlreadyConfirmed)
+	exec(t, `UPDATE conversion_sagas SET state = 'awaiting_tenant_converted' WHERE saga_id = $1`, saga)
+	isCode(t, "close_refunded before confirmed", act("close_refunded"), domain.ErrSagaAlreadyConfirmed)
+
+	exec(t, `UPDATE conversion_sagas SET state = 'confirmed', confirmed_at = now() WHERE saga_id = $1`, saga)
+	e.mirror(t, tenant, sub, "in_conv_"+sub, "subscription_create", "paid", 20700)
+	isCode(t, "close_refunded before the refund", act("close_refunded"), domain.ErrValidation)
+	if status := scalar[string](t, `SELECT status::text FROM subscriptions WHERE billing_subscription_id = $1`, sub); status != "active" {
+		t.Fatalf("subscription %s", status)
+	}
+	exec(t, `UPDATE invoices SET amount_refunded_minor = amount_paid_minor WHERE tenant_id = $1`, tenant)
+	if err := act("close_refunded"); err != nil {
+		t.Fatal(err)
+	}
+	if got := scalar[string](t, `SELECT s.status::text||'/'||s.cancel_reason::text||'/'||g.state::text||'/'||g.resolution
+		FROM subscriptions s JOIN conversion_sagas g USING (billing_subscription_id) WHERE s.billing_subscription_id = $1`, sub); got != "ended/signup_failed/refunded/refund" {
+		t.Fatalf("closed %s", got)
+	}
+	if len(e.p.called("CancelNow! sub_"+sub+" cancel:"+sub+":signup_close")) != 1 {
+		t.Fatalf("provider cancel %v", e.p.called("CancelNow!"))
+	}
+	if n := count(t, `SELECT count(*) FROM pending_audit_entries WHERE tenant_id = $1 AND entry->>'action' = 'saga.close_refunded'`, tenant); n != 1 {
+		t.Fatalf("audit %d", n)
+	}
+	if n := outbox(t, tenant, "TenantSubscriptionCancelled"); n != 0 {
+		t.Fatalf("Core event %d", n)
+	}
+	isCode(t, "close_refunded twice", act("close_refunded"), domain.ErrSagaAlreadyConfirmed)
+
+	// A trial-conversion saga is B-O8's business, not close_refunded's.
+	t2, s2 := e.activeSubscription(t, "pro", 3)
+	saga2 := scalar[string](t, `SELECT saga_id::text FROM conversion_sagas WHERE billing_subscription_id = $1`, s2)
+	exec(t, `UPDATE conversion_sagas SET state = 'confirmed', confirmed_at = now(), kind = 'trial_conversion', rp_idempotency_key = 'k' WHERE saga_id = $1`, saga2)
+	_, err := e.svc.SagaAction(ctx, operator, t2, saga2, app.SagaActionRequest{Action: "close_refunded", Reason: "IAM could not complete the signup"})
+	isCode(t, "trial conversion", err, domain.ErrSagaAlreadyConfirmed)
 }
 
 // B-O9 refund (§9.3.1): refusals; the saga is refund_pending from the first

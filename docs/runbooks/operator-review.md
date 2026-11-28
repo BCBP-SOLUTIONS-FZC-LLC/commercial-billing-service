@@ -10,6 +10,7 @@ The paging rule is a Loki rule owned by the observability team (not in `deploy/m
 
 **What happened:** the provider took a payment Billing will not apply. The ledger row is `failed:<reason>` with no retry:
 - `failed:checkout_superseded` — the customer completed a checkout session Billing had already expired (a newer B-P2 replaced it, or it lapsed). Billing never links it to the ended incomplete subscription;
+- `paid_after_cancel` (`purchase_kind` `seats`, rev 0.69) — a customer seat purchase was cancelled (superseded by a renewal top-up, or at offboarding) but its proration invoice had already been paid when Billing went to void it. The customer paid for seats Billing will not grant: refund the invoice (B-O3).
 - `failed:paid_after_end` — the first invoice of a provider subscription was paid after Billing ended the subscription it belongs to. For a direct signup (B-I1) this is a 3-D Secure payment completed after Billing expired the charge (rev 0.68): the customer was charged and got `410 CHARGE_EXPIRED`; refund it.
 - `invoice_amount_mismatch` (rev 0.60, `BIL-PAY-7`) — a provider invoice Billing tied to a seat purchase, upgrade or token add-on was paid for another amount or currency than the purchase's. From `invoice.paid` the ledger row is `failed:invoice_amount_mismatch`; from `purchase-expiry` or a decline the purchase is closed as unpaid (expired or failed). Nothing is granted.
 

@@ -103,11 +103,16 @@ func TestSagaActionEdges(t *testing.T) {
 	if v, err := e.svc.SagaAction(ctx, operator, tenant, res.SagaID, retry); err != nil || v.State != "rp_convert_pending" {
 		t.Fatalf("overdue retry %+v %v", v, err)
 	}
+	// §9.3.1 (rev 0.69, F-8): resolved_manually only from
+	// awaiting_tenant_converted; a pending RP-3 is retried, not resolved.
+	_, err = e.svc.SagaAction(ctx, operator, tenant, res.SagaID, resolve)
+	wantCode(t, err, domain.ErrSagaAlreadyConfirmed)
+	exec(t, `UPDATE conversion_sagas SET state = 'awaiting_tenant_converted' WHERE saga_id = $1`, res.SagaID)
 	for _, name := range []string{"Subs.Get", "Emissions.Schedule", "Sagas.Update", "Audit.Write"} {
 		e.f.on(name, 0)
 		_, err := e.svc.SagaAction(ctx, operator, tenant, res.SagaID, resolve)
 		injected(t, err, name)
-		if got := sagaState(res.SagaID); got != "rp_convert_pending/retry" {
+		if got := sagaState(res.SagaID); got != "awaiting_tenant_converted/retry" {
 			t.Fatalf("%s: %s", name, got)
 		}
 	}

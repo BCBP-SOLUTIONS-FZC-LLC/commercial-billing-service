@@ -6,6 +6,19 @@ This service has never been deployed to any environment, and there is no release
 
 ## [Unreleased]
 
+### Fixed (2026-11-28 — alignment review step 1: money and security, LLD rev 0.69)
+
+From the HLD/LLD/code alignment review (`billing-hld-lld-code-alignment-report.md`, Commercial folder).
+
+- **Money: a failed renewal top-up now enters dunning** (§8.6.3, §8.8.1). `PaymentFailed` ignored the top-up's `subscription_update` invoice, so the subscription never went `past_due` and no `TenantPaymentPastDue` was sent. Test `TestPaymentFailedRenewalTopUpEntersDunning`.
+- **Money: a cancelled seat purchase's invoice is voided** (§8.5.1). At renewal (superseded by the top-up) and at offboarding, the open proration invoice is voided before the purchase is cancelled (`closeSeatPurchaseInvoice`); a failed void retries; a paid one is parked `paid_after_cancel` (SEV-2). Before, the customer could still pay for seats never granted.
+- **Security: log redaction implemented** (§10.1). `app.RedactingLogger` wraps the root logger of `cmd/server` and `cmd/jobs`: secrets and signatures, `client_secret`, payment-method ids (last 4 kept), e-mail addresses (salted SHA-256, `LOG_HASH_SALT`), `export_s3_key`, `reactivation_reason`. Golden test `TestRedactingLoggerGoldenLines`.
+- **Compliance: RP-4 review trigger** (§10.6, HLD §11.6). B-O8 logs `alert=BillingOperatorReviewNeeded` once per recorded reversal request.
+- **Security: reconciliation tenant from Billing's customer mapping** (`BIL-PAY-3`, §8.13), not the invoice metadata; the Stripe listing now carries the invoice's customer; a failed lookup is recorded unrepaired.
+- **Money: B-O8 skips the refund while a chargeback holds the funds** (§8.2, D-L10): `needs_response`, `under_review`, `lost`; inquiries (`warning_*`) and won disputes still refund.
+- **B-O9 `close_refunded`** (§5, §9.3.1, D-L9): closes a confirmed direct signup IAM could not complete, after its B-O3 refund (cancel at the provider, subscription ended, saga `refunded`); before, nothing could end it and it kept billing. `resolved_manually` now only from `awaiting_tenant_converted` (F-8). OpenAPI regenerated.
+- **Docs:** LLD rev 0.69; runbooks `operator-review.md`, `reversal-decision.md`, `stuck-conversion-saga.md`; invariants coverage (`BIL-PAY-3`).
+
 ### Fixed (2026-11-28 — Billing ↔ Signup BFF compatibility, LLD rev 0.68)
 
 - Checked against `bff-signup` `main` at `c2e9a1d`. B-I1 route, mesh principal, NetworkPolicy, `Idempotency-Key`, body and every status are compatible.

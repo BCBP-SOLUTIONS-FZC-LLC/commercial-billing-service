@@ -73,7 +73,7 @@ var sagaTransitions = map[SagaState][]SagaState{
 	// B-O8 records the request first (confirmed → reverting), then completes
 	// it (reverting → reverted). A terminal RP-4 answer drops the request
 	// (reverting → confirmed). Stay = an RP-4 retry.
-	SagaConfirmed: {SagaReverting},
+	SagaConfirmed: {SagaReverting, SagaRefunded}, // refunded: B-O9 close_refunded, direct signup (rev 0.69)
 	SagaReverting: {SagaReverting, SagaReverted, SagaConfirmed},
 }
 
