@@ -2,7 +2,7 @@
 
 This document describes the internal structure, dependency rules and runtime data flows of `commercial-billing-service`.
 
-`commercial-billing` is a **private Go service** (`github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service`, Go 1.26.11), deployed as a containerised microservice in namespace `billing` (HPA 2–4 replicas). It refines the **Commercial Domain HLD v0.65** and is specified by its LLD, [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md) (rev 0.66). The LLD is the source of truth: where this document and the LLD disagree, the LLD wins, and this document should be fixed.
+`commercial-billing` is a **private Go service** (`github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service`, Go 1.26.11), deployed as a containerised microservice in namespace `billing` (HPA 2–4 replicas). It refines the **Commercial Domain HLD v0.65** and is specified by its LLD, [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md) (rev 0.67). The LLD is the source of truth: where this document and the LLD disagree, the LLD wins, and this document should be fixed.
 
 **What Billing owns:**
 - subscriptions, renewals and seat licensing;

@@ -324,7 +324,7 @@ gateway:
     # Platform-realm jwt_authn provider (AuthZ LLD OP-G2). Rendered on the
     # operator route only when issuer and jwksURI are set per environment.
     jwt:
-      provider: platform-edge
+      provider: platform         # = AuthZ JWT_OPERATOR_PAYLOAD_KEY (OP-G3); the gateway writes the payload under this name
       issuer: ""
       jwksURI: ""
     # Every Billing operator route, B-O1 to B-O17 (§5.3, BL-OQ-9): a route

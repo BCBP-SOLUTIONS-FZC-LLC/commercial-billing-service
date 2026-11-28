@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Billing LLD | `commercial-lld-billing-service.md` rev 0.66 (base HLD v0.65). The LLD's §16.1 register is the source of truth for every BL-OQ item; this file holds the per-team detail and actions for the items that are **not closed** |
+| Billing LLD | `commercial-lld-billing-service.md` rev 0.67 (base HLD v0.65). The LLD's §16.1 register is the source of truth for every BL-OQ item; this file holds the per-team detail and actions for the items that are **not closed** |
 | Date | 2026-11-26 (IAM status updated from IAM's replies in the hand-off doc "Billing — IAM Open Items Hand-off", 2026-11-26); Entitlements findings F-5, F-6 and the RP queue-name note added 2026-11-27 (contract check, Billing LLD rev 0.59); Realm Provisioner compatibility check 2026-11-27 at `fac6ea0` (R-1 to R-6, Billing LLD rev 0.63), re-checked after RP #65/#66 at `d3f4e3c` (Billing LLD rev 0.64); Entitlements' fixes for BL-OQ-28 re-checked 2026-11-27 at `13ab5c7` (PR #4, Billing LLD rev 0.62) |
 | From | Commercial Team (Billing) |
 | Deployment state | No service is deployed to any environment. "Done" means merged **and** promoted with each environment (dev → staging → production) |
@@ -89,8 +89,8 @@ Signed by the **Commercial Team** (whole document, CD-4) and the **PCI owner gro
 **The provider must:**
 
 1. Trust the platform realm: issuer `https://auth.bcbpsolutions.com/realms/bcbp-platform`; JWKS `https://auth.bcbpsolutions.com/realms/bcbp-platform/protocol/openid-connect/certs`. Confirm the dev Keycloak's public host; the issuer must match the `iss` dev tokens carry.
-2. Apply only on `/api/v1/operator/*`. Platform tokens must not authenticate tenant routes; tenant tokens must not authenticate operator routes (AuthZ also enforces this, `DENY_ROLE_INSUFFICIENT`, but the gateway is the first control).
-3. Keep `ext_authz` (AuthZ Enrichment) on operator routes; it injects `x-tenant-roles: platform_operator`, `x-user-id`, `x-tenant-id`.
+2. Apply only on `/api/v1/operator/*`. Platform tokens must not authenticate tenant routes; tenant tokens must not authenticate operator routes (the gateway is the only token control here: AuthZ admits a tenant token on the operator prefix with its own roles, and Billing then refuses it with `403 INSUFFICIENT_ROLE`; AuthZ's `DENY_ROLE_INSUFFICIENT` applies the other way round, to operator tokens on tenant routes).
+3. Keep `ext_authz` (AuthZ Enrichment) on operator routes; it injects every platform-realm role in `x-tenant-roles` (e.g. `platform_operator,pci_owner_reviewer`), `x-user-id`, and `x-tenant-id` (path tenant or nil UUID).
 4. Write the verified payload (`sub`, `iss`, `realm_access.roles`) into `jwt_authn` filter metadata, and tell IAM the metadata key (the provider name). AuthZ reads it from `JWT_OPERATOR_PAYLOAD_KEY`.
 5. Strip client-supplied identity headers (`x-user-id`, `x-tenant-id`, `x-tenant-roles`, …) as on tenant routes.
 
@@ -136,6 +136,14 @@ The Gateway-level tenant providers must not also accept tenant tokens on these r
 | R-5, R-6 (2026-11-27, hygiene) | RP-3 `plan` not enum-checked; RP LLD §4.3/§5.1/§5.2 list Billing as `iam-system`; RP-11 described as Billing's "interim SSO guard"; RP-3/RP-4 Swagger error lists; RP-4 `reason` discarded vs LLD §5.4.1; stale AsyncAPI note on Billing's producer schema | **Done**, merged in RP #65 (`1137cd4`). See the hand-off | RP docs and Swagger match the code |
 
 #### AuthZ Enrichment (`iam-authz-enrichment`)
+
+**Compatibility check of 2026-11-28** (AuthZ `main` at `417fad8`, LLD v1.52, release `v0.2.0`; Billing LLD rev 0.67; hand-off `billing-handoff-to-authz-enrichment-compatibility.md`, Commercial folder). Headers, operator path, `billing-authz-q` and the B-W1 bypass are compatible. Open:
+
+| # | What | Action | Done when |
+|---|---|---|---|
+| AZ-1 / BL-OQ-30 (a) (**done**, merged in AuthZ PR #48 `1477b0f`, AE-52, release pending: exactly `POST /api/v1/tenants/{token tenant}/subscription/reactivate` exempt, other checks still run; B-P26 waits for the HLD owner) | Read-only gate (`check.go:134-136`, `policy.ViolatesReadOnly`) denies every mutation of a `cancelled` tenant, so B-P14 `POST …/subscription/reactivate` never reaches Billing: a cancelled tenant cannot pay to return | Exempt `POST /api/v1/tenants/{uuid}/subscription/reactivate` (and `PUT …/billing-contact` if the HLD owner agrees) | Unit test: a `read_only` tenant's POST to that path is allowed with normal headers; every other mutation still `DENY_TENANT_READ_ONLY`; LLD §8.7 and `deny-codes.json` describe the exemption |
+| AZ-2 / OP-G3 (**done** on the same branch: `platform` in staging and prod; effective once OP-G2 lands) | `JWT_OPERATOR_PAYLOAD_KEY` unset in staging and prod | Set it to `platform`, the operator provider name (Billing's chart now uses `platform`; Entitlements' and IAM's operator routes must use the same name, AuthZ holds one key) | An operator token decodes in each environment |
+| AZ-3 (**done** on the same branch; also SNS name `billing-events` in AuthZ LLD §7.3) | Docs: OP-G4 list stops at B-O15; §8.8 "not a `TenantSuspended` subscriber" (stale since AE-45); `values.yaml:129` says operators get `platform_operator` only; AsyncAPI marks Billing's producer `unknown` | Fix the text | Docs match the code |
 
 | # | What | Action | Done when |
 |---|---|---|---|
@@ -412,6 +420,9 @@ A-10 role + PCI names holders ────────────────�
 | BL-OQ-27 (b) | Trial limits after reversal | Entitlements | **Done** in code: E-1 to E-3 (`108939f`), E-4 decided keep the balance (PR #4, `52d7ac6` on main, not deployed) |
 | SRE-3 | Core `pending_tenant_events` (`000000_initial_schema`) before direct signup | IAM Core + SRE | Code ready (re-checked 2026-11-28 at `b7a2410`) |
 | — | C-1 `om:seat_usage` cache vs LLD; C-2 AsyncAPI `TenantSuspended` producer; C-3 no-op for a reverted conversion | IAM Core | **Done**: merged in PR #76 (`234bd54`, Core LLD 2.67); re-checked by Billing (Core unit 2982 and Postgres tests pass; no schema, route or Helm change) |
+| BL-OQ-30 (a) / AZ-1 | B-P14 exempt from AuthZ's read-only gate | IAM AuthZ Enrichment | Merged in AuthZ PR #48 (`1477b0f`, AE-52), not released; keep the UI fallback until live on every replica. B-P26 and the HLD reading wait for the Commercial HLD owner |
+| BL-OQ-30 (b) | A self-service settlement path for a `suspended` tenant (sign-in blocked) | Commercial HLD owner + IAM Core | Open (2026-11-28): decision needed |
+| — | AZ-2 `JWT_OPERATOR_PAYLOAD_KEY=platform`; AZ-3 docs | IAM AuthZ Enrichment | Merged in AuthZ PR #48 (`1477b0f`); release pending |
 | BL-OQ-3 | W-1 eligibility | Entitlements | **Done** (`dc9b654`) |
 | BL-OQ-3 | W-2 Billing access | Entitlements + Billing | Fixed in PR #4 (`52d7ac6` on main), not deployed; in-cluster check per environment open |
 | BL-OQ-28 / F-5 | Glue decode codec on the SQS consumer (all four Entitlements queues) | Entitlements | **Critical**; fixed in PR #4 (`52d7ac6` on main), not deployed. Gate before Billing publishes framed events |
