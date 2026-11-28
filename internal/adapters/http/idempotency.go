@@ -160,7 +160,9 @@ func (m *Idempotency) answerExisting(c *gin.Context, r idemRoute, e *domain.Idem
 
 // finish stores the outcome, or releases the key when it must not be
 // replayed: validation failures (the client fixes and retries), server and
-// dependency failures, and in-progress answers.
+// dependency failures, and retryable conflicts (in progress, concurrent
+// update, optimistic lock: §17 says retry, so a stored 409 would answer
+// every retry for 72 h; D-L3, rev 0.73).
 func (m *Idempotency) finish(c *gin.Context, r idemRoute, tenant, key string, cw *captureWriter) {
 	ctx := context.WithoutCancel(c.Request.Context())
 	status := cw.Status()
@@ -168,7 +170,7 @@ func (m *Idempotency) finish(c *gin.Context, r idemRoute, tenant, key string, cw
 	switch {
 	case c.GetBool(ctxKeepInFlight):
 		err = m.Tx.RunInTenantTx(ctx, tenant, func(ctx context.Context) error { return m.Repo.Unlock(ctx, tenant, r.scope, key) })
-	case status >= 500 || status == http.StatusBadRequest || status == http.StatusConflict && isInProgress(cw.buf.Bytes()):
+	case status >= 500 || status == http.StatusBadRequest || status == http.StatusConflict && isRetryableConflict(cw.buf.Bytes()):
 		err = m.Tx.RunInTenantTx(ctx, tenant, func(ctx context.Context) error { return m.Repo.Release(ctx, tenant, r.scope, key) })
 	default:
 		body := cw.buf.Bytes()
@@ -184,11 +186,15 @@ func (m *Idempotency) finish(c *gin.Context, r idemRoute, tenant, key string, cw
 	}
 }
 
-// isInProgress reads the captured gincommon problem with gincommon's own
-// decoder (BIL-API-6).
-func isInProgress(body []byte) bool {
+// isRetryableConflict reads the captured gincommon problem with gincommon's
+// own decoder (BIL-API-6): a 409 the client retries is never stored.
+func isRetryableConflict(body []byte) bool {
 	p, err := problem.Decode(bytes.NewReader(body))
-	return err == nil && p.ErrorCode == string(domain.ErrRequestInProgress)
+	if err != nil {
+		return false
+	}
+	code := domain.ErrorCode(p.ErrorCode)
+	return code == domain.ErrRequestInProgress || code == domain.ErrConcurrentUpdate || code == domain.ErrOptimisticLockConflict
 }
 
 // requestHash is SHA-256 of the method, path and compact JSON body (§4.2.19).

@@ -228,10 +228,10 @@ func (r *SubscriptionRepository) AppendHistory(ctx context.Context, h domain.Sta
 	return inTx(ctx, r.pool, func(q querier) error {
 		_, err := q.Exec(ctx, `
 			INSERT INTO subscription_status_history (tenant_id, billing_subscription_id, from_status, to_status, from_plan, to_plan,
-			  from_seats, to_seats, cause, payment_event_ref, actor_id)
-			VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11::uuid)`,
+			  from_seats, to_seats, cause, payment_event_ref, actor_id, cancel_request_reason, cancel_request_comment)
+			VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11::uuid, $12, $13)`,
 			h.TenantID, h.BillingSubscriptionID, h.FromStatus, h.ToStatus, h.FromPlan, h.ToPlan, h.FromSeats, h.ToSeats,
-			h.Cause, h.PaymentEventRef, h.ActorID)
+			h.Cause, h.PaymentEventRef, h.ActorID, h.CancelRequestReason, h.CancelRequestComment)
 		return err
 	})
 }

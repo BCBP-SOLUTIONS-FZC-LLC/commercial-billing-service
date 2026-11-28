@@ -19,9 +19,9 @@ func (s *Service) platformAudit(ctx context.Context, e port.AuditEntry) error {
 
 // AddPlanPrice is B-O11: a new price row; the current row for the key
 // ends where it starts (409 PRICE_OVERLAP on overlap).
-func (s *Service) AddPlanPrice(ctx context.Context, c Caller, r PlanPriceRequest) (domain.PlanPrice, error) {
+func (s *Service) AddPlanPrice(ctx context.Context, c Caller, r PlanPriceRequest) (PlanPriceView, error) {
 	if err := s.verifyPrice(ctx, r.Provider, r.ProviderPriceID, domain.Money{AmountMinor: r.UnitAmountMinor, Currency: r.Currency}, r.Interval); err != nil {
-		return domain.PlanPrice{}, err
+		return PlanPriceView{}, err
 	}
 	p := domain.PlanPrice{Plan: domain.PlanCode(r.Plan), Interval: domain.BillingInterval(r.Interval), Currency: r.Currency,
 		UnitAmountMinor: r.UnitAmountMinor, Provider: r.Provider, ProviderPriceID: nonEmpty(r.ProviderPriceID), EffectiveFrom: r.EffectiveFrom.UTC(),
@@ -37,7 +37,10 @@ func (s *Service) AddPlanPrice(ctx context.Context, c Caller, r PlanPriceRequest
 			Metadata: map[string]any{"plan": r.Plan, "interval": r.Interval, "currency": r.Currency, "unit_amount_minor": r.UnitAmountMinor,
 				"provider": r.Provider, "effective_from": p.EffectiveFrom, "reason": r.Reason}})
 	})
-	return p, err
+	if err != nil {
+		return PlanPriceView{}, err
+	}
+	return PlanPriceViewOf(p), nil
 }
 
 // UpsertTokenPack is B-O12: add, change or retire (active=false) a pack.

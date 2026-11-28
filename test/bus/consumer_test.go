@@ -73,7 +73,7 @@ func eventually(t *testing.T, what string, cond func() bool) {
 // iam-tenant-events) applies Glue-framed RP events to the account; a
 // future-time poison pill and a schema violation go straight to the DLQ
 // (BIL-EVT-3); usage-billing-q stores period totals.
-func TestConsumersEndToEnd(t *testing.T) {
+func TestBIL_OPS_2_ConsumersEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	topicName := unique("iam-tenant-events")
 	topic, err := snsClient().CreateTopic(ctx, &sns.CreateTopicInput{Name: &topicName})

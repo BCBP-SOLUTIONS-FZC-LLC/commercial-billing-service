@@ -206,7 +206,7 @@ func TestSeatProjectionJob(t *testing.T) {
 
 // §15.3, BIL-OPS-9: contact name and email nulled 90 days after
 // offboarding, provider email cleared; no row deleted, company kept.
-func TestPIIMinimisationJob(t *testing.T) {
+func TestBIL_OPS_9_PIIMinimisationJob(t *testing.T) {
 	e := newEnv(t)
 	tenant, sub := e.activeSubscription(t, "pro", 3)
 	mustNoErr(t, sql(context.Background(), `UPDATE billing_accounts SET billing_contact_name = 'Asha Rao', billing_contact_email = 'billing@acme.example',

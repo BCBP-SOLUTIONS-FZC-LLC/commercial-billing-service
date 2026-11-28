@@ -15,7 +15,7 @@ It never holds card data (PCI SAQ A), and it is on no per-request hot path.
 
 **Design:**
 - Refines the Commercial Domain HLD **v0.65**.
-- The LLD is [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md), rev 0.72 (revision history at the top). It is the source of truth for everything here.
+- The LLD is [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md), rev 0.74 (revision history at the top). It is the source of truth for everything here.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) has the diagrams and runtime flows.
 
 **State:**
@@ -685,9 +685,9 @@ Publishing the same `TenantConverted` again (same envelope `id`) does nothing: `
 |---|---|
 | `TestBIL_*` (named per invariant) | Every `BIL-*` invariant — the map is [`docs/invariants-coverage.md`](docs/invariants-coverage.md) |
 | Proration golden tests (`internal/domain`) | LLD §14.1 examples, including the below-minimum deferral (`BIL-SEAT-5`) |
-| `TestBIL_AUTH_RoleRouteMatrix` | Every role × tenant route pair (§5.2) |
+| `TestBIL_AUTH_1_RoleRouteMatrix` | Every role × tenant route pair (§5.2) |
 | `TestOpenAPIGolden` | `docs/swagger/openapi.json` equals the route table |
-| `TestEveryErrorIsAProblem` | RFC 9457 on every error path |
+| `TestBIL_API_6_EveryErrorIsAProblem` | RFC 9457 on every error path |
 | RLS suite (`test/postgres`) | `FORCE` RLS on every tenant table; cross-tenant, missing and invalid GUC cases (§14.5) |
 | `test/contract` | Produced payloads vs Core, RP, Audit and Entitlements consumed schemas |
 | `TestScrapePassesMetricsLint`, `TestReferencedPlatformMetricsAreRegistered`, `TestInventoryUpToDate` | Enterprise Platform Observability Standard |

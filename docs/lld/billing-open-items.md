@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Billing LLD | `commercial-lld-billing-service.md` rev 0.72 (base HLD v0.67). The LLD's §16.1 register is the source of truth for every BL-OQ item; this file holds the per-team detail and actions for the items that are **not closed** |
+| Billing LLD | `commercial-lld-billing-service.md` rev 0.74 (base HLD v0.68). The LLD's §16.1 register is the source of truth for every BL-OQ item; this file holds the per-team detail and actions for the items that are **not closed** |
 | Date | 2026-11-26 (IAM status updated from IAM's replies in the hand-off doc "Billing — IAM Open Items Hand-off", 2026-11-26); Entitlements findings F-5, F-6 and the RP queue-name note added 2026-11-27 (contract check, Billing LLD rev 0.59); Realm Provisioner compatibility check 2026-11-27 at `fac6ea0` (R-1 to R-6, Billing LLD rev 0.63), re-checked after RP #65/#66 at `d3f4e3c` (Billing LLD rev 0.64); Entitlements' fixes for BL-OQ-28 re-checked 2026-11-27 at `13ab5c7` (PR #4, Billing LLD rev 0.62); HLD v0.66 absorbed 2026-11-28 (Billing LLD rev 0.70: BL-OQ-29 and BL-OQ-30 closed, §3.1 done) |
 | From | Commercial Team (Billing) |
 | Deployment state | No service is deployed to any environment. "Done" means merged **and** promoted with each environment (dev → staging → production) |
@@ -13,7 +13,7 @@
 | Area | State |
 |---|---|
 | **Design decisions** | All nine partner-team decisions approved on 2026-11-23 (S-1 to S-9). Commercial Team additions to S-2, S-3, S-5, S-6 acknowledged by Finance, Product and Legal. No design question is open |
-| **HLD alignment** | D-1, D-5, D-8, D-9 accepted and written into HLD v0.65 (§17.8); Billing's compatibility checks written into HLD v0.66 (§17.9). HLD v0.67 (§17.10) brings in the decisions this LLD closed (HLD PR #3). All merged to `main` (HLD PRs #2 `24f9440` and #3 `14a42b9`; §3.1 done) |
+| **HLD alignment** | D-1, D-5, D-8, D-9 accepted and written into HLD v0.65 (§17.8); Billing's compatibility checks written into HLD v0.66 (§17.9). HLD v0.67 (§17.10) brings in the decisions this LLD closed (HLD PR #3). All merged to `main` (HLD PRs #2 `24f9440`, #3 `14a42b9` and #4 `9a9f3c4`, v0.68 §17.11; §3.1 done) |
 | **Final sign-off** | Not given yet. One step remains (§3.2) |
 | **Go-live** | Blocked by items owned by other teams (§4). Billing's design behaves safely until each closes: a feature flag stays off, a route returns `403`, or a call fails closed with `503` |
 
@@ -120,6 +120,7 @@ The Gateway-level tenant providers must not also accept tenant tokens on these r
 
 - **Done when:** in each environment, a `bcbp-platform` token (user with `platform_operator`, OTP completed) reaches `/api/v1/operator/...` and AuthZ logs `operator_access`; a tenant-realm token there gets `403`; a platform token on a tenant route gets `403`; platform-edge has told IAM the provider/metadata key.
 - **Asks of platform-edge:** (1) target date for OP-G2 in dev (also answers IAM's OP-G6); (2) the dev Keycloak public host, if not `auth.bcbpsolutions.com`; (3) the metadata key / provider name.
+- **Also asked (rev 0.73):** (4) the **gateway namespace**: the HLD named `envoy-gateway-system`, Billing's chart uses `gateway` (`networkPolicy.gatewayNamespace`, `gateway.parentRef.namespace`, `istio.gatewayPrincipal`); confirm which, so the chart and HLD v0.68 agree (D-H2, LLD §20.10 item 9). (5) The platform realm's **issuer and JWKS URL per environment**, for `gateway.operator.jwt.issuer` / `jwksURI` in staging and prod (D-L20, LLD §20.10 item 14).
 
 ### 4.2 IAM
 
@@ -412,6 +413,7 @@ A-10 role + PCI names holders ────────────────�
 | 3.1 | Merge and tag HLD v0.65 | Commercial HLD owner | **Done** (v0.65 and v0.66 merged, HLD PR #2 `24f9440`) |
 | 3.2 | Re-confirm §4, §5.4.4 | PCI owner group | Open |
 | BL-OQ-14 | OP-G2 gateway provider | Platform-edge | **Not started** |
+| D-H2 / D-L20 | Gateway namespace; operator issuer and JWKS per environment | Platform-edge | Asked 2026-11-28 (LLD rev 0.73) |
 | BL-OQ-14 | OP-G1 rollout, operator users | IAM Realm Provisioner | Merged; rollout open |
 | BL-OQ-14 | OP-G3 (payload key; issuer set), OP-G4, OP-G6 | IAM AuthZ Enrichment | Blocked on OP-G2 |
 | BL-OQ-25 | A-9 (a) B-O16 tests | IAM AuthZ | **Done** (#45, v0.2.0) |

@@ -49,20 +49,6 @@ func (s SagaState) CountsForOverdueAlert() bool {
 	return s == SagaPaymentConfirmed || s == SagaRPConvertPending || s == SagaAwaitingTenantConverted
 }
 
-// InitialSagaState returns the state a new saga starts in (§9.3.1): a trial
-// checkout payment, a B-O1 operator stub, or a B-I1 direct signup.
-func InitialSagaState(kind SagaKind) (SagaState, bool) {
-	switch kind {
-	case SagaTrialConversion:
-		return SagaPaymentConfirmed, true
-	case SagaOperatorStub:
-		return SagaRPConvertPending, true
-	case SagaDirectSignup:
-		return SagaAwaitingTenantConverted, true
-	}
-	return "", false
-}
-
 // sagaTransitions is the §9.3.1 state diagram.
 var sagaTransitions = map[SagaState][]SagaState{
 	SagaPaymentConfirmed:        {SagaRPConvertPending},

@@ -158,6 +158,19 @@ func TestRefundPaths(t *testing.T) {
 		len(e.p.called("Refund in_paid_"+sub+" 200 duplicate refund:"+ko.RefundID)) != 1 {
 		t.Fatalf("provider reasons %v", e.p.called("Refund"))
 	}
+
+	// D-L14 (rev 0.73): the five refunds still pending (500) count against
+	// what is left, so refunds in flight never pay back more than was paid:
+	// 20700 paid − 300 refunded − 500 pending = 19900.
+	_, err = e.svc.IssueRefund(ctx, withKey(operator, "ref-ovr-001"), tenant, refundReq(paid, 20000, "billing_error"))
+	isCode(t, "over the refundable amount", err, domain.ErrRefundExceedsPaid)
+	if ext(err, "refundable_minor") != int64(19900) {
+		t.Fatalf("refundable_minor %v", ext(err, "refundable_minor"))
+	}
+	e.p.on("Refund", answer{status: "succeeded"})
+	if rest, err := e.svc.IssueRefund(ctx, withKey(operator, "ref-rest-01"), tenant, refundReq(paid, 19900, "billing_error")); err != nil || rest.Status != "succeeded" {
+		t.Fatalf("the rest %+v %v", rest, err)
+	}
 }
 
 // BIL-ADD-3 / BIL-ADD-4: an add-on invoice refund that settles at once
@@ -857,8 +870,15 @@ func TestSagaRefundPaths(t *testing.T) {
 	if got := scalar[string](t, `SELECT status::text||'/'||cancel_reason::text FROM subscriptions WHERE billing_subscription_id = $1`, s2); got != "ended/signup_failed" {
 		t.Fatalf("subscription %s", got)
 	}
-	if n := len(e.p.called("Refund in_conv_" + s2 + " 20700 " + string(port.RefundReasonRequestedByCustomer))); n != 4 {
-		t.Fatalf("refund calls %d, want 4", n)
+	// D-L14 (rev 0.73): one refund under refund:signup:<sub>, resumed by
+	// every retry. The provider is called again with the same key only until
+	// it answers (the first call failed); four separate refunds before.
+	if n := count(t, `SELECT count(*) FROM refunds WHERE tenant_id = $1`, t2); n != 1 {
+		t.Fatalf("refund rows %d, want 1", n)
+	}
+	rid := scalar[string](t, `SELECT refund_id::text FROM refunds WHERE tenant_id = $1 AND idempotency_key = $2`, t2, "refund:signup:"+s2)
+	if n := len(e.p.called("Refund in_conv_" + s2 + " 20700 " + string(port.RefundReasonRequestedByCustomer) + " refund:" + rid)); n != 2 {
+		t.Fatalf("provider refund calls %d, want 2 with one key: %v", n, e.p.called("Refund "))
 	}
 	exec(t, `UPDATE conversion_sagas SET state = 'confirmed', confirmed_at = now() WHERE saga_id = $1`, saga2)
 	_, err = e.svc.SagaAction(ctx, operator, t2, saga2, act)

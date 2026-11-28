@@ -6,6 +6,23 @@ This service has never been deployed to any environment, and there is no release
 
 ## [Unreleased]
 
+### Changed (2026-11-28 — LLD rev 0.74: rebase on Commercial HLD v0.68)
+
+- **LLD rebased on HLD v0.68**, which records the alignment review's decisions (HLD §17.11): no operator plan, seat or add-on changes, Billing's 5xx release gate, PD-LLM-1 and ENT-D6 approved, the `manual` adapter exempt, the gateway namespace to confirm with Platform-edge. Each was already the LLD's position; docs only.
+
+### Fixed (2026-11-28 — alignment review step 5: remaining decisions, LLD rev 0.73)
+
+- **Money: refunds in flight count against what is left to refund** (D-L14). B-O3, B-O8 and B-O9 subtract pending refunds, so two refunds cannot together pay back more than was paid. B-O9 `refund` now uses one key per subscription (`refund:signup:<id>`): a retry without a client `Idempotency-Key` used to start a second refund of the whole payment.
+- **Webhooks in provider order** (D-L11, `BIL-PAY-5`): a claimed batch is processed in `provider_created_at` order (`UPDATE … RETURNING` has none).
+- **Security (`BIL-AUTH-4`):** B-I1 refuses `commercial-system` (by `x-user-id` or role) even behind the Signup BFF's mesh principal; the route reads no CD-19 identity, so the shared check never saw it.
+- **Invariant tests** (D-L15): every one of the 76 `BIL-*` invariants has a test named after its ID (28 renamed, 1 split, 11 new); `docs/invariants-coverage.md` updated (74 done, 2 partial).
+- **Collection pause** (D-L2): B-P5, B-P10 and B-P11 answer `409 COLLECTION_PAUSED`.
+- **Idempotency** (D-L3): a retryable `409` (`REQUEST_IN_PROGRESS`, `CONCURRENT_UPDATE`, `OPTIMISTIC_LOCK_CONFLICT`) is no longer stored and replayed for 72 h.
+- **Reasons kept** (D-L5, C-5): B-P12's cancellation reason and comment on the history row; B-O5's reason on the run and in its audit entry (migration `000011_request_reasons`).
+- **Smaller fixes:** refund events settled in the operator's request carry the operator (C-1); job events carry `user_agent: commercial-billing/job:<name>` (C-2); the renewal top-up row uses the account's currency (C-3); B-O11 answers snake_case (C-4); `view_invoices` needs `billing.download_invoice` (C-7); `internal/domain` imports only the standard library (C-8); a depguard rule keeps `net/http` and Stripe out of `adapters/postgres` (C-9); the unused `InitialSagaState` is removed (D-L12).
+- **First deploy:** `check-first-deploy.sh` step 4 requires `STRIPE_FINAL_RETRY_ACTION=cancel`, confirming the Dashboard-only final-retry setting (`DUNNING_FINAL_ACTION`, D-L19).
+- **LLD rev 0.73:** the remaining decisions D-L4, D-L6 to D-L8, D-L13, D-L16 to D-L18 and D-L20, and the stale text L-7 to L-18; §20.10 items 9 (gateway namespace, to confirm with Platform-edge) and 14 (operator issuer and JWKS per environment).
+
 ### Changed (2026-11-28 — alignment review step 4: rebase on Commercial HLD v0.67, LLD rev 0.72)
 
 - **LLD rebased on HLD v0.67**, which brings the decisions this LLD had closed into the HLD (HLD §17.10). The settle-only sign-in for a suspended owner is **CD-59** (HLD v0.66 numbered it CD-57, already used for the Model Gateway choices). Docs only; no code change.

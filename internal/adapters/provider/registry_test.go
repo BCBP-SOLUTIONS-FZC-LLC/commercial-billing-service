@@ -99,7 +99,7 @@ func TestBIL_PROV_1_and_2_Gate(t *testing.T) {
 }
 
 // A different suite version or adapter version does not enable (BIL-PROV-2).
-func TestVersionMustMatchExactly(t *testing.T) {
+func TestBIL_PROV_2_VersionMustMatchExactly(t *testing.T) {
 	stripe := fakeProvider{name: "stripe", version: "1.0.1+stripeapi.2026-11-15.acacia"}
 	certs := &fakeCerts{valid: map[string]bool{"stripe|1.0.0+stripeapi.2026-10-28.acacia|cert-1.0": true}}
 	r, _ := New([]port.PaymentProvider{stripe}, []string{"stripe"}, certs, "cert-1.0", nil)

@@ -53,7 +53,7 @@ func TestAdjustment(t *testing.T) {
 
 // B-O3 on an add-on invoice: category rule (BIL-ADD-3), proportional
 // tokens, and on succeeded TenantQuotaAddOnChanged {refund} (BIL-ADD-4).
-func TestAddonRefund(t *testing.T) {
+func TestBIL_ADD_4_AddonRefund(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	tenant, _ := e.converted(t)

@@ -24,16 +24,16 @@ func (s *Service) CancelSubscription(ctx context.Context, c Caller, tenantID str
 }
 
 func (s *Service) cancelSubscription(ctx context.Context, c Caller, tenantID string, r CancelRequest) (SubscriptionView, error) {
-	return s.setAutoRenew(ctx, c, tenantID, r.RecordVersion, false, "api:B-P12")
+	return s.setAutoRenew(ctx, c, tenantID, r.RecordVersion, false, "api:B-P12", nonEmpty(r.Reason), nonEmpty(r.Comment))
 }
 
 // ResumeSubscription is B-P13: undo a pending cancellation before the
 // period ends.
 func (s *Service) ResumeSubscription(ctx context.Context, c Caller, tenantID string, r ResumeRequest) (SubscriptionView, error) {
-	return s.setAutoRenew(ctx, c, tenantID, r.RecordVersion, true, "api:B-P13")
+	return s.setAutoRenew(ctx, c, tenantID, r.RecordVersion, true, "api:B-P13", nil, nil)
 }
 
-func (s *Service) setAutoRenew(ctx context.Context, c Caller, tenantID string, version int64, renew bool, cause string) (SubscriptionView, error) {
+func (s *Service) setAutoRenew(ctx context.Context, c Caller, tenantID string, version int64, renew bool, cause string, reason, comment *string) (SubscriptionView, error) {
 	var (
 		sub      domain.Subscription
 		change   *domain.PlanChangeRequest
@@ -113,7 +113,8 @@ func (s *Service) setAutoRenew(ctx context.Context, c Caller, tenantID string, v
 			}
 		}
 		from := updated.Status
-		return s.history(ctx, updated, &from, cause, actorOf(c), nil, nil, nil)
+		return s.historyEntry(ctx, updated, domain.StatusHistoryEntry{TenantID: updated.TenantID, BillingSubscriptionID: updated.BillingSubscriptionID,
+			FromStatus: &from, ToStatus: updated.Status, Cause: cause, ActorID: actorOf(c), CancelRequestReason: reason, CancelRequestComment: comment}, nil, nil)
 	})
 	if err != nil {
 		return SubscriptionView{}, err

@@ -335,3 +335,21 @@ func TestReductionPaths(t *testing.T) {
 		t.Fatalf("events %d", n)
 	}
 }
+
+// D-L2 (rev 0.73, §8.10 BIL-SUB-7): while collection is paused, scheduling
+// or cancelling a seat reduction (B-P10, B-P11) and cancelling a scheduled
+// downgrade (B-P5) answer 409 COLLECTION_PAUSED.
+func TestCollectionPausedRefusesScheduleChanges(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant, sub := e.activeSubscription(t, "pro", 10)
+	exec(t, `UPDATE subscriptions SET collection_paused = true, collection_paused_by = 'operator' WHERE billing_subscription_id = $1::uuid`, sub)
+	_, err := e.svc.ScheduleReduction(ctx, owner, tenant, app.ReductionRequest{TargetSeats: 5})
+	isCode(t, "B-P10", err, domain.ErrCollectionPaused)
+	exec(t, `INSERT INTO seat_change_schedules (schedule_id, tenant_id, billing_subscription_id, target_seats, effective_at, requested_by)
+		VALUES (gen_random_uuid(), $1, $2, 5, now() + interval '10 days', '00000000-0000-0000-0000-0000000000c1')`, tenant, sub)
+	isCode(t, "B-P11", e.svc.CancelReduction(ctx, owner, tenant), domain.ErrCollectionPaused)
+	exec(t, `INSERT INTO plan_change_requests (change_id, tenant_id, billing_subscription_id, from_plan, to_plan, direction, status, requested_by, idempotency_key)
+		VALUES (gen_random_uuid(), $1, $2, 'pro', 'starter', 'downgrade', 'scheduled', '00000000-0000-0000-0000-0000000000c1', 'k-paused-dg')`, tenant, sub)
+	isCode(t, "B-P5", e.svc.CancelPlanChange(ctx, owner, tenant), domain.ErrCollectionPaused)
+}

@@ -109,3 +109,26 @@ func TestLedgerDeferGivesBackTheAttempt(t *testing.T) {
 		t.Fatalf("deferred row %+v", e)
 	}
 }
+
+// BIL-PAY-5 (D-L11, rev 0.73): one tenant's rows claimed in the same batch
+// come back in provider order, whatever order they were received in.
+func TestBIL_PAY_5_ClaimedBatchInProviderOrder(t *testing.T) {
+	ctx := context.Background()
+	mustExec(t, superPool, `DELETE FROM payment_event_ledger`)
+	ledger := pgadapter.NewLedgerRepository(systemPool)
+	tA := newID()
+	base := time.Now().Add(-time.Hour)
+	for _, e := range []domain.LedgerEntry{
+		ledgerRow(&tA, "evt_o3", base.Add(3*time.Second)),
+		ledgerRow(&tA, "evt_o1", base.Add(1*time.Second)),
+		ledgerRow(&tA, "evt_o2", base.Add(2*time.Second)),
+	} {
+		if _, err := ledger.Insert(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := ledger.Claim(ctx, 10, time.Minute)
+	if err != nil || len(got) != 3 || got[0].ProviderEventID != "evt_o1" || got[1].ProviderEventID != "evt_o2" || got[2].ProviderEventID != "evt_o3" {
+		t.Fatalf("claimed %+v %v", got, err)
+	}
+}

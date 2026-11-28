@@ -88,7 +88,7 @@ func TestE2E_CommercialSystemRejectedInbound(t *testing.T) {
 
 // E2E-SEC-4 — operator routes: platform_operator only, and closed outside
 // dev/test until IAM's operator path is live (BIL-AUTH-2, BIL-AUTH-6).
-func TestE2E_OperatorGate(t *testing.T) {
+func TestBIL_AUTH_6_E2E_OperatorGate(t *testing.T) {
 	tenant := newTenant()
 	path := "/api/v1/operator/tenants/" + tenant + "/subscription"
 

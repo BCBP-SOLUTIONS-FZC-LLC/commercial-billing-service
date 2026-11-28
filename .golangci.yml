@@ -43,6 +43,18 @@ linters:
               desc: "logs go through gincommon's logger (port.Logger)"
             - pkg: "github.com/rs/zerolog"
               desc: "logs go through gincommon's logger (port.Logger)"
+        # BIL-OPS-3 (C-9, rev 0.73): the database adapter holds transactions,
+        # so it never makes an HTTP call (no provider, IAM or Entitlements
+        # call inside an open transaction, BIL-CONC-2).
+        postgres-no-http:
+          files:
+            - "**/internal/adapters/postgres/**"
+            - "!$test"
+          deny:
+            - pkg: "net/http$"
+              desc: "BIL-OPS-3: no HTTP call from the database adapter (no HTTP inside an open transaction)"
+            - pkg: "github.com/stripe"
+              desc: "BIL-OPS-3 / BIL-PCI-1: no provider call from the database adapter"
         # BIL-OPS-10: metrics are gincommon's types and constructors
         # (gincommon.CounterVec, NewCounterVec, NewShared*Vec,
         # MetricsRegisterer, MetricsHandler); no production package names

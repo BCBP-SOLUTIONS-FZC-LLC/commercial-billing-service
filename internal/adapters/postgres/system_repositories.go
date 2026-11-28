@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -288,6 +289,14 @@ func (r *LedgerRepository) Claim(ctx context.Context, limit int, claimFor time.D
 			out = append(out, e)
 		}
 		return rows.Err()
+	})
+	// UPDATE … RETURNING has no defined order: one tenant's rows in a batch
+	// are handed to the processor in provider order (BIL-PAY-5, D-L11 rev 0.73).
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].ProviderCreatedAt.Equal(out[j].ProviderCreatedAt) {
+			return out[i].ProviderCreatedAt.Before(out[j].ProviderCreatedAt)
+		}
+		return out[i].ProviderEventID < out[j].ProviderEventID
 	})
 	return out, err
 }

@@ -577,6 +577,29 @@ type CollectionPauseRequest struct {
 	Reason string `json:"reason" binding:"required,min=10,max=1000"`
 }
 
+// PlanPriceView is B-O11's 201 body: the stored price row (C-4, rev 0.73;
+// snake_case like every other response).
+type PlanPriceView struct {
+	PriceID         string     `json:"price_id"`
+	Plan            string     `json:"plan"`
+	Interval        string     `json:"interval"`
+	Currency        string     `json:"currency"`
+	UnitAmountMinor int64      `json:"unit_amount_minor"`
+	Provider        string     `json:"provider"`
+	ProviderPriceID *string    `json:"provider_price_id"`
+	EffectiveFrom   time.Time  `json:"effective_from"`
+	EffectiveTo     *time.Time `json:"effective_to"`
+	CreatedBy       string     `json:"created_by"`
+	Reason          string     `json:"reason"`
+}
+
+// PlanPriceViewOf renders a price-book row.
+func PlanPriceViewOf(p domain.PlanPrice) PlanPriceView {
+	return PlanPriceView{PriceID: p.PriceID, Plan: string(p.Plan), Interval: string(p.Interval), Currency: p.Currency,
+		UnitAmountMinor: p.UnitAmountMinor, Provider: p.Provider, ProviderPriceID: p.ProviderPriceID, EffectiveFrom: p.EffectiveFrom,
+		EffectiveTo: p.EffectiveTo, CreatedBy: p.CreatedBy, Reason: p.Reason}
+}
+
 // PlanPriceRequest is B-O11.
 type PlanPriceRequest struct {
 	Plan            string    `json:"plan" binding:"required,oneof=starter pro enterprise"`
@@ -674,7 +697,7 @@ type OperatorAPI interface {
 	RevertConversion(ctx context.Context, c Caller, tenantID string, r ReversalRequest) (ReversalResult, error)                    // B-O8
 	SagaAction(ctx context.Context, c Caller, tenantID, sagaID string, r SagaActionRequest) (SagaView, error)                      // B-O9
 	SetCollectionPause(ctx context.Context, c Caller, tenantID string, r CollectionPauseRequest) (SubscriptionView, error)         // B-O10
-	AddPlanPrice(ctx context.Context, c Caller, r PlanPriceRequest) (domain.PlanPrice, error)                                      // B-O11
+	AddPlanPrice(ctx context.Context, c Caller, r PlanPriceRequest) (PlanPriceView, error)                                         // B-O11
 	UpsertTokenPack(ctx context.Context, c Caller, r TokenPackRequest) (json.RawMessage, error)                                    // B-O12
 	ReplayWebhookEvent(ctx context.Context, c Caller, provider, providerEventID string, r OperatorReason) error                    // B-O13
 	SubmitCertification(ctx context.Context, c Caller, r CertificationRequest) (CertificationView, error)                          // B-O14

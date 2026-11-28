@@ -47,7 +47,7 @@ func serve(r *Router, method, path, body string) *httptest.ResponseRecorder {
 }
 
 // Every error path is gincommon's RFC 9457 response.
-func TestEveryErrorIsAProblem(t *testing.T) {
+func TestBIL_API_6_EveryErrorIsAProblem(t *testing.T) {
 	r := NewRouter(RouterConfig{GinConfig: testGin(), Routes: []func(gin.IRouter){func(g gin.IRouter) {
 		g.GET("/domain", func(c *gin.Context) {
 			writeError(c, domain.NewError(domain.ErrPlanChangeBlocked, "remove SSO first").With("blockers", []string{"sso_idp_configured"}))

@@ -88,7 +88,7 @@ func setup(rows []domain.LedgerEntry, h port.PaymentEventHandler, prov *fakeProv
 		MaxAttempts: 10, Now: func() time.Time { return now }}, l, tx
 }
 
-func TestProcessorOutcomes(t *testing.T) {
+func TestBIL_PAY_3_ProcessorOutcomes(t *testing.T) {
 	applied := handlerFunc(func(context.Context, string, domain.PaymentEvent, domain.ProviderObjectState) (string, error) {
 		return "applied:conversion_payment", nil
 	})

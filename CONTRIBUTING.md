@@ -241,19 +241,19 @@ When you implement, change or test an invariant, update its row in [`docs/invari
 These tests carry the service's money, security and isolation guarantees. Don't weaken or delete them without a design conversation:
 
 - **`TestBIL_RLS_1_EveryTenantTableForcesRLS`**, **`TestRLSIsolationEveryTable`**, **`TestRLSWithCheck`** (`test/postgres`): every tenant table forces RLS; a tenant can't read or write another's rows; a missing or invalid `app.tenant_id` sees nothing (§14.5).
-- **`TestBIL_SUB_3_OneLiveSubscription`**, **`TestBIL_SEAT_1_and_2_OneOpen`** (`test/postgres`): the partial unique indexes behind one live subscription and one open purchase or schedule. They hold even if a code path forgets the lock.
+- **`TestBIL_SUB_3_OneLiveSubscription`**, **`TestBIL_SEAT_1_OneOpenPurchase`**, **`TestBIL_SEAT_2_OneOpenSchedule`** (`test/postgres`): the partial unique indexes behind one live subscription and one open purchase or schedule. They hold even if a code path forgets the lock.
 - **`TestBIL_PROV_4_CertificationGuard`** (`test/postgres`): `trg_pc_guard` and `chk_pc_two_people`. A certification can't pass without a second person, and records are immutable.
 - **`TestBIL_PAY_5_ClaimOrderAndRetry`** (`test/postgres`): webhook rows are claimed per tenant in provider order.
-- **`TestIdempotencyReclaimAndUnlock`** (`test/postgres`) and **`TestB_I1`** (`internal/adapters/http`): one charge per key, `409 REQUEST_IN_PROGRESS` in flight, the B-I1 key rules and the 3-D Secure retry.
-- **`TestEventEnqueuerAtomicity`** (`test/postgres`): a rolled-back business transaction leaves no outbox row.
+- **`TestBIL_IDEM_3_IdempotencyReclaimAndUnlock`** (`test/postgres`) and **`TestB_I1`** (`internal/adapters/http`): one charge per key, `409 REQUEST_IN_PROGRESS` in flight, the B-I1 key rules and the 3-D Secure retry.
+- **`TestBIL_EVT_2_EventEnqueuerAtomicity`** (`test/postgres`): a rolled-back business transaction leaves no outbox row.
 - **`TestBIL_SEAT_5_ProrationGoldenTable`** (`internal/domain`): the LLD §14.1 golden table, including the below-minimum deferral. If the table changes, the LLD changes first.
-- **`TestBIL_AUTH_RoleRouteMatrix`**: every role × tenant route pair.
-- **`TestEveryErrorIsAProblem`**: RFC 9457 on every error path.
+- **`TestBIL_AUTH_1_RoleRouteMatrix`**: every role × tenant route pair.
+- **`TestBIL_API_6_EveryErrorIsAProblem`**: RFC 9457 on every error path.
 - **`TestOpenAPIGolden`**: the committed OpenAPI equals the route table.
 - **`test/contract`**: produced payloads against every consumer's schema.
 - **`TestScrapePassesMetricsLint`**, **`TestReferencedPlatformMetricsAreRegistered`**: the observability standard.
 - **`test/e2e`:**
-  - `TestE2E_TenantIsolation`, `TestE2E_RolePermissions`, `TestE2E_CommercialSystemRejectedInbound`, `TestE2E_OperatorGate`, `TestE2E_DirectSignupCallerAndKey`, `TestE2E_WebhookSignatureAndLedger`: the security guards over real HTTP;
+  - `TestE2E_TenantIsolation`, `TestE2E_RolePermissions`, `TestE2E_CommercialSystemRejectedInbound`, `TestBIL_AUTH_6_E2E_OperatorGate`, `TestE2E_DirectSignupCallerAndKey`, `TestE2E_WebhookSignatureAndLedger`: the security guards over real HTTP;
   - `TestE2E_DirectSignupConcurrentDuplicates`: eight concurrent B-I1 calls with one key, exactly one charge;
   - `TestE2E_EveryCatalogueRouteIsMounted`: every endpoint ID is on the router.
 
@@ -325,9 +325,9 @@ CI enforces each of these:
 | Import `pgx`, `pgconn`, `database/sql`, an ORM or a migration tool; use pgcommon outside `adapters/postgres`, `bootstrap`, `certify`, `cmd`; compare SQLSTATE literals; `set_config` / `SET LOCAL` by hand | pgcommon pools, `RunInTx*`, `Is*` helpers, `GUCProvider` (`BIL-OPS-1`, `BIL-OPS-11`) | depguard `database`, `database-boundary`; forbidigo; `check-pgcommon.sh` |
 | Hand-write an error response, problem model, error DTO, problem parser or recovery | `domain.NewError` → gincommon; `problem.Decode` to read one (`BIL-API-6`) | `check-problem-details.sh` |
 | Import Prometheus, or OpenTelemetry outside `adapters/observability`; log with `log`, `slog`, `zap`, `fmt.Print*` | gincommon's metric types, tracer and logger (`BIL-OPS-10`) | depguard `observability`, `metrics`; forbidigo |
-| Trust a tenant, user or role from a request body | CD-19 headers or XFCC (`BIL-API-1`) | `TestValidation`, `TestTenantGuards` |
+| Trust a tenant, user or role from a request body | CD-19 headers or XFCC (`BIL-API-1`) | `TestBIL_API_1_Validation`, `TestBIL_API_2_TenantGuards` |
 | Derive a provider idempotency key from request input | Billing ids (`BIL-IDEM-2`) | Review, flow tests |
-| Apply a webhook from its payload, or resolve its tenant from metadata | Ledger first, `FetchCurrent` re-read, customer mapping (`BIL-PAY-*`) | `TestB_W1`, webhook processor tests |
+| Apply a webhook from its payload, or resolve its tenant from metadata | Ledger first, `FetchCurrent` re-read, customer mapping (`BIL-PAY-*`) | `TestBIL_PAY_1_B_W1`, webhook processor tests |
 | Turn on `FEATURE_DIRECT_SIGNUP`, `FEATURE_TOKEN_ADDONS` or `AUTO_REVERT_ON_EFW`, or work around the operator `403` gate | Flags flip per environment in Helm, by decision | Review, `test/helm` |
 | Edit generated files (`docs/swagger/openapi.json`, `eventbus/schemas/*.json`, `docs/observability/metric-registry.md`) | Regenerate them | Golden and drift tests, `schema-check`; a Claude Code hook blocks the edit |
 | Commit `.env` or any secret | `.env-example`; `ExternalSecret` in Kubernetes | `.gitignore`, review |

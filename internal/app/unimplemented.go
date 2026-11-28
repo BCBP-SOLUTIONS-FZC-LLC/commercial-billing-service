@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/platform-gincommon/v2/pkg/problem"
 )
 
@@ -226,8 +225,8 @@ func (Unimplemented) SetCollectionPause(_ context.Context, _ Caller, _ string, _
 }
 
 // AddPlanPrice is B-O11.
-func (Unimplemented) AddPlanPrice(_ context.Context, _ Caller, _ PlanPriceRequest) (domain.PlanPrice, error) {
-	return domain.PlanPrice{}, notImplemented("B-O11", "6")
+func (Unimplemented) AddPlanPrice(_ context.Context, _ Caller, _ PlanPriceRequest) (PlanPriceView, error) {
+	return PlanPriceView{}, notImplemented("B-O11", "6")
 }
 
 // UpsertTokenPack is B-O12.

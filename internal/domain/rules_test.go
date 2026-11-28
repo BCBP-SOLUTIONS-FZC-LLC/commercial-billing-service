@@ -2,6 +2,8 @@ package domain
 
 import (
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -263,5 +265,41 @@ func TestEventPayloadValidation(t *testing.T) {
 	}
 	if len(ProducedEventTypes) != 6 {
 		t.Error("six produced event types; BillingPeriodRolled is not emitted")
+	}
+}
+
+// BIL-SUB-1: suspended, trial_expired and offboarded are IAM's. Billing
+// produces exactly its six event types, none of which sets them; no Billing
+// subscription status is one of them, so no status-bearing payload can carry
+// one; and offboarding ends a subscription without a cancellation event.
+func TestBIL_SUB_1_NoEventSetsAnIAMOwnedStatus(t *testing.T) {
+	want := []EventType{EventTenantPlanChanged, EventTenantSeatsChanged, EventTenantPaymentPastDue,
+		EventTenantSubscriptionCancelled, EventTenantReactivated, EventTenantQuotaAddOnChanged}
+	if !slices.Equal(ProducedEventTypes, want) {
+		t.Fatalf("produced event types %v, want %v", ProducedEventTypes, want)
+	}
+	iamOwned := []string{"suspended", "trial_expired", "offboarded"}
+	for _, et := range ProducedEventTypes {
+		name := strings.ToLower(string(et))
+		for _, s := range []string{"suspend", "trialexpired", "offboard"} {
+			if strings.Contains(name, s) {
+				t.Errorf("Billing produces %s", et)
+			}
+		}
+	}
+	for _, st := range AllSubscriptionStatuses {
+		if slices.Contains(iamOwned, string(st)) {
+			t.Errorf("Billing subscription status %q is IAM's", st)
+		}
+	}
+	now := time.Date(2026, 11, 20, 9, 14, 3, 0, time.UTC)
+	if err := (TenantSubscriptionCancelled{TenantID: "t", CancelledAt: now, Reason: CancelOffboarded}).Validate(); !errors.Is(err, ErrInvalidPayload) {
+		t.Error("a cancellation event for offboarding was accepted")
+	}
+	for _, s := range iamOwned {
+		p := TenantReactivated{TenantID: "t", Source: ReactivationSource, ReactivatedAt: now, PreviousStatus: SubscriptionStatus(s)}
+		if err := p.Validate(); !errors.Is(err, ErrInvalidPayload) {
+			t.Errorf("TenantReactivated with previous_status %q accepted", s)
+		}
 	}
 }

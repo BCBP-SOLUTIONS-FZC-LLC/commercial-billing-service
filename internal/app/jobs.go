@@ -325,7 +325,7 @@ func (s *Service) completeRenewal(ctx context.Context, sch domain.SeatChangeSche
 			return nil
 		}
 		err = s.emit(ctx, domain.TenantSeatsChanged{TenantID: sch.TenantID, LicensedSeats: final, PreviousLicensedSeats: &before,
-			Reason: reason, BillingRef: ref, BillingSubscriptionID: sub.BillingSubscriptionID}, port.EventMeta{Actor: domain.CommercialSystemPrincipal})
+			Reason: reason, BillingRef: ref, BillingSubscriptionID: sub.BillingSubscriptionID}, jobMeta("seat-renewal"))
 		return err
 	})
 }
@@ -355,9 +355,15 @@ func (s *Service) chargeTopUp(ctx context.Context, sub domain.Subscription, sch 
 				return err
 			}
 		}
+		acct, err := s.Accounts.Get(ctx, sub.TenantID)
+		if err != nil {
+			return err
+		}
+		// The account's currency, not DEFAULT_CURRENCY (C-3, rev 0.73). The
+		// amount is the provider's, on the top-up invoice (amount_minor 0).
 		p = domain.SeatPurchase{PurchaseID: newID(), TenantID: sub.TenantID, BillingSubscriptionID: sub.BillingSubscriptionID,
 			Reason: domain.SeatReasonRenewalTopUp, SeatsAdded: final - renewal, SeatsBefore: renewal, SeatsAfter: final,
-			ProrationInstant: s.now(), Currency: s.Settings.DefaultCurrency, AmountSource: domain.AmountSourceProvider,
+			ProrationInstant: s.now(), Currency: acct.Currency, AmountSource: domain.AmountSourceProvider,
 			Status: domain.PurchasePendingPayment, RequestedBy: domain.CommercialSystemPrincipal}
 		p.IdempotencyKey = "topup:" + sch.ScheduleID
 		return s.SeatPurchases.Insert(ctx, p)
@@ -576,7 +582,14 @@ func (s *Service) subFor(ctx context.Context, tenantID, subID string) (domain.Su
 }
 
 // expiryMeta is the envelope metadata of a change purchase-expiry settles.
-func expiryMeta() port.EventMeta { return port.EventMeta{Actor: domain.CommercialSystemPrincipal} }
+// jobMeta is the envelope metadata of a job-driven change (§7.3.1): actor
+// commercial-system, ip "system", user agent commercial-billing/job:<name>
+// (C-2, rev 0.73).
+func jobMeta(name string) port.EventMeta {
+	return port.EventMeta{Actor: domain.CommercialSystemPrincipal, UserAgent: "commercial-billing/job:" + name}
+}
+
+func expiryMeta() port.EventMeta { return jobMeta("purchase-expiry") }
 
 func (s *Service) expireSeatPurchase(ctx context.Context, w port.StaleWork) error {
 	var p domain.SeatPurchase

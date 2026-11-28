@@ -21,7 +21,7 @@ func status(t *testing.T, sub string) string {
 // TenantPaymentPastDue (invoice_ref is Billing's id), a second failure
 // emits nothing (BIL-EVT-7), B-P14 gives the open-invoice link, the paid
 // invoice reactivates with TenantReactivated {previous_status: past_due}.
-func TestDunningAndRecovery(t *testing.T) {
+func TestBIL_EVT_7_DunningAndRecovery(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	tenant, sub := e.activeSubscription(t, "pro", 10)
@@ -168,5 +168,28 @@ func TestReactivationOnAnotherIntervalUpdatesSubscription(t *testing.T) {
 		JOIN subscription_items i USING (billing_subscription_id) JOIN plan_prices p ON p.price_id = i.price_id
 		WHERE s.billing_subscription_id = $1`, sub); got != other+"/"+other+"/price_pro_"+other {
 		t.Fatalf("after the reactivation checkout: %s (was %s)", got, before)
+	}
+}
+
+// D-L5 (rev 0.73): B-P12 keeps the owner's reason and comment on the
+// status-history row of the cancellation; B-P13 (resume) records none.
+func TestCancellationReasonStored(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant, sub := e.activeSubscription(t, "pro", 3)
+	if _, err := e.svc.CancelSubscription(ctx, owner, tenant, app.CancelRequest{RecordVersion: e.version(t, sub), Reason: "missing_features",
+		Comment: "We need SSO for every department."}); err != nil {
+		t.Fatal(err)
+	}
+	if got := scalar[string](t, `SELECT cancel_request_reason||'/'||cancel_request_comment FROM subscription_status_history
+		WHERE billing_subscription_id = $1 AND cause = 'api:B-P12'`, sub); got != "missing_features/We need SSO for every department." {
+		t.Fatalf("history %s", got)
+	}
+	if _, err := e.svc.ResumeSubscription(ctx, owner, tenant, app.ResumeRequest{RecordVersion: e.version(t, sub)}); err != nil {
+		t.Fatal(err)
+	}
+	if n := scalar[int](t, `SELECT count(*) FROM subscription_status_history WHERE billing_subscription_id = $1 AND cause = 'api:B-P13'
+		AND cancel_request_reason IS NULL AND cancel_request_comment IS NULL`, sub); n != 1 {
+		t.Fatalf("B-P13 rows without a reason: %d", n)
 	}
 }

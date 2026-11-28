@@ -81,6 +81,8 @@ type StatusHistoryEntry struct {
 	PaymentEventRef       *string
 	ActorID               string
 	OccurredAt            time.Time
+	// B-P12's reason and comment on the cancellation row (D-L5, rev 0.73).
+	CancelRequestReason, CancelRequestComment *string
 }
 
 // PlanPrice is a price-book row (§4.2.2): per seat per interval.
