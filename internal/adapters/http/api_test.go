@@ -422,6 +422,20 @@ func TestOperatorGuards(t *testing.T) {
 	if w := do(r, req{"POST", path, body, op}); w.Code != 501 {
 		t.Errorf("B-O17 reviewer: %d %s", w.Code, w.Body.String())
 	}
+	// What AuthZ Enrichment actually sends on an operator route (AE-50): the
+	// nil-UUID tenant when the path has none, and every platform-realm role,
+	// Keycloak defaults included. Every operator route still reaches the use
+	// case (the path tenant or platform_tenant is used, not the header).
+	const nilTenant = "00000000-0000-0000-0000-000000000000"
+	kc := "default-roles-bcbp-platform,offline_access,uma_authorization,platform_operator,pci_owner_reviewer"
+	for _, rt := range Routes() {
+		if !strings.HasPrefix(rt.ID, "B-O") {
+			continue
+		}
+		if w := call(r, rt, identity(nilTenant, kc), true); w.Code != 501 {
+			t.Errorf("%s with AuthZ's nil tenant and Keycloak roles: %d %s", rt.ID, w.Code, w.Body.String())
+		}
+	}
 	// Every operator route: platform_operator reaches the use case; a
 	// mutation without Idempotency-Key is 400; a short reason is 400.
 	for _, rt := range Routes() {

@@ -6,6 +6,16 @@ This service has never been deployed to any environment, and there is no release
 
 ## [Unreleased]
 
+### Fixed (2026-11-28 — Billing ↔ AuthZ Enrichment compatibility, LLD rev 0.67)
+
+- Checked against `iam-authz-enrichment` `main` at `417fad8` (release `v0.2.0`). Headers, the operator path (all platform-realm roles forwarded, nil-UUID tenant, B-O1 to B-O17), `billing-authz-q` and the B-W1 bypass are compatible.
+- **Break found, new BL-OQ-30:** AuthZ's read-only gate denies every mutation of a `cancelled` tenant, so B-P14 (reactivate) never reaches Billing; a `suspended` tenant cannot sign in. LLD §8.8.3 and §8.9 now say so; AuthZ is asked to exempt B-P14, and the suspended path needs an HLD decision.
+- **Operator gateway:** the operator `jwt_authn` provider is named `platform` (was `platform-edge`), matching the Platform-edge spec and AuthZ's `JWT_OPERATOR_PAYLOAD_KEY`.
+- **Test:** every operator route accepts AuthZ's real headers (nil-UUID `x-tenant-id`, Keycloak role list).
+- **Docs:** operator header contract (§5.2), B-O17 role (§5.3), §13.1 provider name, AuthZ LLD v1.52; open items AZ-1 to AZ-3.
+- **Hand-off to AuthZ Enrichment:** `billing-handoff-to-authz-enrichment-compatibility.md`.
+- **AuthZ's reply** (`authz-enrichment-reply-to-billing-compatibility.md`): AZ-1 (AE-52: only B-P14 exempt from the read-only gate), AZ-2 (`JWT_OPERATOR_PAYLOAD_KEY=platform`) and AZ-3 merged in AuthZ PR #48 (`1477b0f`), release pending. Billing reviewed it (AuthZ's tests pass). B-P14 stays owner-only in Billing (`subscription.change_plan`). B-P26 and the HLD reading wait for the Commercial HLD owner; BL-OQ-30 (b) is still open.
+
 ### Fixed (2026-11-28 — Billing ↔ Org & Membership compatibility, LLD rev 0.66)
 
 - Checked against `iam-org-membership` `main` at `b7a2410`. I-11, I-18 and `billing-orgm-q` are compatible; Core's consumed schemas are byte-identical (now recorded at `b7a2410`).
