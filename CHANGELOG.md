@@ -6,6 +6,10 @@ This service has never been deployed to any environment, and there is no release
 
 ## [Unreleased]
 
+### Changed (2026-11-28 — alignment review step 4: rebase on Commercial HLD v0.67, LLD rev 0.72)
+
+- **LLD rebased on HLD v0.67**, which brings the decisions this LLD had closed into the HLD (HLD §17.10). The settle-only sign-in for a suspended owner is **CD-59** (HLD v0.66 numbered it CD-57, already used for the Model Gateway choices). Docs only; no code change.
+
 ### Fixed (2026-11-28 — alignment review step 3: functional fixes F-1 to F-13, LLD rev 0.71)
 
 - **Money: B-P4 no longer re-applies an upgrade a callback already applied** (F-5, `BIL-CONC-2`). After `ChangePrice`, the request is re-read under the lock; before, a racing `invoice.paid` led to two `TenantPlanChanged` or put the applied change back to `pending_payment`. Test `TestUpgradeSettledByCallbackDuringProviderCall`.

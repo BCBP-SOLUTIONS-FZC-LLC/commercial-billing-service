@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Billing LLD | `commercial-lld-billing-service.md` rev 0.71 (base HLD v0.66). The LLD's §16.1 register is the source of truth for every BL-OQ item; this file holds the per-team detail and actions for the items that are **not closed** |
+| Billing LLD | `commercial-lld-billing-service.md` rev 0.72 (base HLD v0.67). The LLD's §16.1 register is the source of truth for every BL-OQ item; this file holds the per-team detail and actions for the items that are **not closed** |
 | Date | 2026-11-26 (IAM status updated from IAM's replies in the hand-off doc "Billing — IAM Open Items Hand-off", 2026-11-26); Entitlements findings F-5, F-6 and the RP queue-name note added 2026-11-27 (contract check, Billing LLD rev 0.59); Realm Provisioner compatibility check 2026-11-27 at `fac6ea0` (R-1 to R-6, Billing LLD rev 0.63), re-checked after RP #65/#66 at `d3f4e3c` (Billing LLD rev 0.64); Entitlements' fixes for BL-OQ-28 re-checked 2026-11-27 at `13ab5c7` (PR #4, Billing LLD rev 0.62); HLD v0.66 absorbed 2026-11-28 (Billing LLD rev 0.70: BL-OQ-29 and BL-OQ-30 closed, §3.1 done) |
 | From | Commercial Team (Billing) |
 | Deployment state | No service is deployed to any environment. "Done" means merged **and** promoted with each environment (dev → staging → production) |
@@ -13,7 +13,7 @@
 | Area | State |
 |---|---|
 | **Design decisions** | All nine partner-team decisions approved on 2026-11-23 (S-1 to S-9). Commercial Team additions to S-2, S-3, S-5, S-6 acknowledged by Finance, Product and Legal. No design question is open |
-| **HLD alignment** | D-1, D-5, D-8, D-9 accepted and written into HLD v0.65 (§17.8); Billing's compatibility checks written into HLD v0.66 (§17.9). Both merged to `main` (HLD PR #2, `24f9440`; §3.1 done) |
+| **HLD alignment** | D-1, D-5, D-8, D-9 accepted and written into HLD v0.65 (§17.8); Billing's compatibility checks written into HLD v0.66 (§17.9). HLD v0.67 (§17.10) brings in the decisions this LLD closed (HLD PR #3). All merged to `main` (HLD PRs #2 `24f9440` and #3 `14a42b9`; §3.1 done) |
 | **Final sign-off** | Not given yet. One step remains (§3.2) |
 | **Go-live** | Blocked by items owned by other teams (§4). Billing's design behaves safely until each closes: a feature flag stays off, a route returns `403`, or a call fails closed with `503` |
 
@@ -36,7 +36,7 @@
 
 | Team | Service / repository | Open items | Holds back |
 |---|---|---|---|
-| **Commercial HLD owner** | `commercial-hld-docs` | ~~Merge HLD v0.65; BL-OQ-29~~ **done**: v0.65 and v0.66 merged (HLD PR #2, `24f9440`); BL-OQ-29 adopted in v0.66 §9.3. Still: CD-57 settle-only sign-in with IAM (BL-OQ-30 b) | — |
+| **Commercial HLD owner** | `commercial-hld-docs` | ~~Merge HLD v0.65; BL-OQ-29~~ **done**: v0.65 and v0.66 merged (HLD PR #2, `24f9440`); BL-OQ-29 adopted in v0.66 §9.3. Still: CD-59 (was CD-57) settle-only sign-in with IAM (BL-OQ-30 b) | — |
 | **PCI owner group** | — | Re-confirm §4 and §5.4.4 (rev 0.21+); name `pci_owner_reviewer` holders; approve first certification | **Final sign-off**; first provider certification |
 | **Platform-edge** | Envoy Gateway (ingress) | BL-OQ-14: **OP-G2** | **Every operator route**, so paid launch too |
 | **IAM: Realm Provisioner** | `iam-realm-provisioner` | OP-G1 rollout and operator users; confirm A-10 (a) role (#62) and RP #63 live per environment (both merged); compatibility hand-off R-1 to R-6 done and merged (RP #65, `1137cd4`; re-checked at RP `main` `d3f4e3c`, 2026-11-27, no wire break) | Operator sign-in; provider certification; reversal reset |
@@ -427,7 +427,7 @@ A-10 role + PCI names holders ────────────────�
 | SRE-3 | Core `pending_tenant_events` (`000000_initial_schema`) before direct signup | IAM Core + SRE | Code ready (re-checked 2026-11-28 at `b7a2410`) |
 | — | C-1 `om:seat_usage` cache vs LLD; C-2 AsyncAPI `TenantSuspended` producer; C-3 no-op for a reverted conversion | IAM Core | **Done**: merged in PR #76 (`234bd54`, Core LLD 2.67); re-checked by Billing (Core unit 2982 and Postgres tests pass; no schema, route or Helm change) |
 | BL-OQ-30 (a) / AZ-1 | B-P14 exempt from AuthZ's read-only gate | IAM AuthZ Enrichment | Merged in AuthZ PR #48 (`1477b0f`, AE-52), not released; keep the UI fallback until live on every replica. B-P26 stays denied and the reading is confirmed (HLD v0.66 §17.9 V-1) |
-| BL-OQ-30 (b) | A self-service settlement path for a `suspended` tenant (sign-in blocked) | IAM Core, Realm Provisioner, AuthZ Enrichment | **Decided** (HLD v0.66 CD-57): settle-only sign-in for the `billing_lapse` owner, Billing settlement routes only; build open, support until then. No Billing change |
+| BL-OQ-30 (b) | A self-service settlement path for a `suspended` tenant (sign-in blocked) | IAM Core, Realm Provisioner, AuthZ Enrichment | **Decided** (HLD v0.66, CD-59 since v0.67): settle-only sign-in for the `billing_lapse` owner, Billing settlement routes only; build open, support until then. No Billing change |
 | — | AZ-2 `JWT_OPERATOR_PAYLOAD_KEY=platform`; AZ-3 docs | IAM AuthZ Enrichment | Merged in AuthZ PR #48 (`1477b0f`); release pending |
 | BL-OQ-3 | W-1 eligibility | Entitlements | **Done** (`dc9b654`) |
 | BL-OQ-3 | W-2 Billing access | Entitlements + Billing | Fixed in PR #4 (`52d7ac6` on main), not deployed; in-cluster check per environment open |
