@@ -57,11 +57,14 @@ func TestE2E_DocumentsServed(t *testing.T) {
 // E2E-INFRA-3 — a route behind a feature flag that is off is not
 // registered: it answers gincommon's 404 problem, not 403 or 501 (§12).
 func TestE2E_FeatureFlagOffUnregistersRoutes(t *testing.T) {
-	s := newServer(t, opts{devLike: true, disabled: map[string]bool{"B-I1": true, "B-P19": true, "B-P20": true}})
+	s := newServer(t, opts{devLike: true, disabled: map[string]bool{"B-I1": true, "B-P19": true, "B-P20": true, "B-O18": true}})
 	tenant := newTenant()
 	expectProblem(t, s.post(t, "/api/v1/internal/subscriptions/authorize-and-charge", bff(tenant), chargeBody(tenant, "pro", 5)),
 		http.StatusNotFound, "")
 	expectProblem(t, s.get(t, tp(tenant, "/token-packs"), owner(tenant)), http.StatusNotFound, "")
+	// B-O18 with FEATURE_TRIAL_CAP_OVERRIDE off (rev 0.75).
+	expectProblem(t, s.call(t, http.MethodPut, "/api/v1/operator/tenants/"+tenant+"/trial-addon-cap", idem(operator(tenant)),
+		`{"max_packs":5,"max_amount_minor":50000,"reason":"Enterprise PoC approved by Sales"}`), http.StatusNotFound, "")
 	// A route not behind those flags is still there.
 	if r := s.get(t, tp(tenant, "/subscription"), owner(tenant)); r.status == http.StatusNotFound && !strings.Contains(string(r.body), "SUBSCRIPTION_NOT_FOUND") {
 		t.Fatalf("B-P1 unregistered: %s", r.body)

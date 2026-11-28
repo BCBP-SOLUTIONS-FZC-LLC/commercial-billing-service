@@ -18,11 +18,11 @@ This file provides guidance to Claude Code when working with **commercial-billin
 - tenant routes B-P1…B-P26 (`/api/v1/tenants/:id/…`, through the gateway with CD-19 headers);
 - internal B-I1 (Signup BFF only, mTLS principal from `X-Forwarded-Client-Cert`);
 - webhook B-W1 `POST /api/v1/webhooks/:provider` (provider signature only);
-- operator routes B-O1…B-O17 (`/api/v1/operator/…`; `403` until `OPERATOR_PATH_LIVE=true`, `BIL-AUTH-6`).
+- operator routes B-O1…B-O18 (`/api/v1/operator/…`; `403` until `OPERATOR_PATH_LIVE=true`, `BIL-AUTH-6`).
 
 **Status:** Phases 0–8 are implemented. Phases 0–5 sit on the stacked branches `feat/billing-phase-0-scaffolding` … `feat/billing-phase-5-api`; phases 6–8 and all later work (platform-library routing, RFC 9457, observability standard, tests, CI/CD, and the two production-readiness review rounds of LLD rev 0.59 and 0.60) are on `feat/billing-phase-6-flows`. `main` holds only the LLD. Nothing is deployed to any environment. Go-live still waits on cross-team items (`docs/lld/billing-open-items.md`), the Stripe adapter 1.1.0 certification and the LLD §20.10 checks.
 
-**LLD:** `docs/lld/commercial-lld-billing-service.md` (rev 0.74 at the time of writing; read the header) is the source of truth. **Implement what it says; don't invent endpoints, fields, events, statuses or config.** Open items and hand-offs to other teams: `docs/lld/billing-open-items.md` (there is no `docs/handoff/` directory any more). Invariant coverage: `docs/invariants-coverage.md`.
+**LLD:** `docs/lld/commercial-lld-billing-service.md` (rev 0.75 at the time of writing; read the header) is the source of truth. **Implement what it says; don't invent endpoints, fields, events, statuses or config.** Open items and hand-offs to other teams: `docs/lld/billing-open-items.md` (there is no `docs/handoff/` directory any more). Invariant coverage: `docs/invariants-coverage.md`.
 
 Detail lives in the topic files next to this one:
 - `key-files.md`: per-file notes;
@@ -111,7 +111,7 @@ Each invariant is referenced by ID in a comment at its enforcement point and has
 
 ## Safe defaults (never flip in code)
 
-`FEATURE_DIRECT_SIGNUP=false`, `FEATURE_TOKEN_ADDONS=false`, `USAGE_BILLING_CONSUMER_ENABLED=false`, `AUTO_REVERT_ON_EFW=false`, `AUTO_PAUSE_ON_OPERATOR_SUSPENSION=true`, `OPERATOR_PATH_LIVE=false`. Don't add workarounds around the operator `403` gate.
+`FEATURE_DIRECT_SIGNUP=false`, `FEATURE_TOKEN_ADDONS=false`, `USAGE_BILLING_CONSUMER_ENABLED=false`, `AUTO_REVERT_ON_EFW=false`, `AUTO_PAUSE_ON_OPERATOR_SUSPENSION=true`, `OPERATOR_PATH_LIVE=false`, `FEATURE_TRIAL_CAP_OVERRIDE=false` (B-O18 waits for Audit Log's `billing.trial_addon_cap.changed`). Don't add workarounds around the operator `403` gate.
 
 ---
 

@@ -259,6 +259,11 @@ func (Unimplemented) ReviewCertification(_ context.Context, _ Caller, _ string, 
 	return CertificationView{}, notImplemented("B-O17", "6")
 }
 
+// SetTrialAddonCap is B-O18.
+func (Unimplemented) SetTrialAddonCap(_ context.Context, _ Caller, _ string, _ TrialAddonCapRequest) (TrialAddonCapView, error) {
+	return TrialAddonCapView{}, notImplemented("B-O18", "6")
+}
+
 // AuthorizeAndCharge is B-I1.
 func (Unimplemented) AuthorizeAndCharge(_ context.Context, _ Caller, _ AuthorizeChargeRequest) (ChargeResult, error) {
 	return ChargeResult{}, notImplemented("B-I1", "6")

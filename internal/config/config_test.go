@@ -74,6 +74,7 @@ func TestDefaultsMatchLLD(t *testing.T) {
 		{"FeatureDirectSignup", c.FeatureDirectSignup, false},
 		{"FeatureTokenAddons", c.FeatureTokenAddons, false},
 		{"FeatureSeatPurchase", c.FeatureSeatPurchase, true},
+		{"FeatureTrialCapOverride", c.FeatureTrialCapOverride, false},
 	}
 	for _, tc := range checks {
 		if tc.got != tc.want {
@@ -137,6 +138,7 @@ func TestRangesEnforced(t *testing.T) {
 		"DUNNING_FINAL_ACTION":        "mark_unpaid",
 		"OTEL_TRACES_SAMPLER_ARG":     "1.5",
 		"FEATURE_TOKEN_ADDONS":        "maybe",
+		"FEATURE_TRIAL_CAP_OVERRIDE":  "yes-please",
 		"SAGA_ALERT_AFTER":            "20m",
 		"APP_ENV":                     "production",
 		"ENABLED_PAYMENT_PROVIDERS":   "stripe,adyen",

@@ -50,7 +50,7 @@ Per-file notes on wiring decisions and where invariants are enforced. When a not
 
 ## Adapters (`internal/adapters`)
 
-- **`http/api.go`**: prefixes (`/api/v1/tenants/:id`, `/api/v1/operator`). **`routes.go`**: the route table (44 IDs: B-P1…B-P26, B-I1, B-O1…B-O17; B-W1 is the webhook adapter's): ID, method, path, idempotency rule, handler. **`router.go`**: groups, middleware, probes. **`middleware.go`**: CD-19 headers and the XFCC principal (last element). **`errors.go`**: `writeError` → `gincommon.AbortWithProblem`.
+- **`http/api.go`**: prefixes (`/api/v1/tenants/:id`, `/api/v1/operator`). **`routes.go`**: the route table (45 IDs: B-P1…B-P26, B-I1, B-O1…B-O18; B-W1 is the webhook adapter's): ID, method, path, idempotency rule, handler. **`router.go`**: groups, middleware, probes. **`middleware.go`**: CD-19 headers and the XFCC principal (last element). **`errors.go`**: `writeError` → `gincommon.AbortWithProblem`.
 - **`http/idempotency.go`**: §9.2: claim `idempotency_records`, replay the stored response (the same JSON, not the same bytes: `response_body` is `jsonb`) with `Idempotent-Replayed: true`, `409 REQUEST_IN_PROGRESS` + `Retry-After`; B-I1 body mismatch → `409 SUBSCRIPTION_ALREADY_EXISTS`, elsewhere `422 IDEMPOTENCY_KEY_REUSED`.
 - **`http/bind.go`**: local JSON decode (unknown fields rejected on tenant/operator routes, tolerated on B-I1, §10.4); errors via `gincommon.BindingError`.
 - **`http/openapi.go`**: OpenAPI 3.1 generated from the route table and DTOs, served at `/openapi.json`; `docs/swagger/openapi.json` is kept equal by `TestOpenAPIGolden`.

@@ -42,9 +42,9 @@ type Route struct {
 }
 
 // Routes returns the catalogue in registration order: 26 tenant routes,
-// B-I1 and 17 operator routes (B-W1 is mounted by the webhook adapter).
+// B-I1 and 18 operator routes (B-W1 is mounted by the webhook adapter).
 func Routes() []Route {
-	out := make([]Route, 0, 44)
+	out := make([]Route, 0, 45)
 	for _, r := range tenantRoutes {
 		out = append(out, r.Route)
 	}
@@ -117,6 +117,9 @@ func (a *APIConfig) registerOperator(r gin.IRouter) {
 	op := r.Group(operatorPrefix, append(append([]gin.HandlerFunc{countOperatorAction(ids, a.OnOperatorAction)}, gincommon.ProtectedMiddlewares(a.GinConfig)...),
 		rejectSystemCaller(), requireOperator(a.OperatorPathLive, a.DevLike), bodyLimit(apiBodyLimit), requireJSONContentType())...)
 	for _, d := range operatorRoutes {
+		if a.Disabled[d.ID] {
+			continue
+		}
 		chain := append([]gin.HandlerFunc{}, d.extra...)
 		chain = append(chain, a.Idem.handle(idemRoute{scope: d.ID, mode: d.Idem, tenant: operatorTenant}))
 		op.Handle(d.Method, d.Path[len(operatorPrefix):], append(chain, d.handler.make(a))...)

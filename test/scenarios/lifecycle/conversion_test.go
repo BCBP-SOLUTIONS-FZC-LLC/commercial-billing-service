@@ -508,10 +508,17 @@ func TestConfirmConversionEdges(t *testing.T) {
 		t.Fatalf("unmatched not recorded: %d", e.metrics.get("unmatched_conversion"))
 	}
 
-	for _, name := range []string{"Sagas.BySubscription", "Sagas.Update", "Subs.Update"} {
+	// Rev 0.75: the tenant's trial add-on cap override is deleted with the
+	// confirmation (BIL-ADD-5).
+	exec(t, `INSERT INTO trial_addon_caps (tenant_id, max_packs, max_amount_minor, reason, set_by)
+		VALUES ($1, 5, 50000, 'Enterprise PoC approved by Sales', $1)`, tenant)
+	for _, name := range []string{"Sagas.BySubscription", "Sagas.Update", "Addons.DeleteTrialCap", "Subs.Update"} {
 		e.f.on(name, 0)
 		_, err := confirm(conv)
 		injected(t, err, name)
+	}
+	if n := count(t, `SELECT count(*) FROM trial_addon_caps WHERE tenant_id = $1`, tenant); n != 1 {
+		t.Fatalf("override deleted by a failed confirmation: %d", n)
 	}
 	if got := scalar[string](t, `SELECT state::text FROM conversion_sagas WHERE saga_id = $1`, res.SagaID); got != "rp_convert_pending" {
 		t.Fatalf("after failures %s", got)
@@ -533,6 +540,9 @@ func TestConfirmConversionEdges(t *testing.T) {
 	}
 	if n := count(t, `SELECT count(*) FROM scheduled_emissions WHERE ref_id = $1 AND payload_builder = 'seats_after_conversion'`, res.BillingSubscriptionID); n != 1 {
 		t.Fatalf("emissions %d", n)
+	}
+	if n := count(t, `SELECT count(*) FROM trial_addon_caps WHERE tenant_id = $1`, tenant); n != 0 {
+		t.Fatalf("override kept after the confirmation: %d", n)
 	}
 	if ok, err := confirm(conv); !ok || err != nil { // redelivery: no-op
 		t.Fatalf("redelivery: %v %v", ok, err)

@@ -924,6 +924,13 @@ func (s *Service) confirmConversion(ctx context.Context, ev TenantLifecycleEvent
 	if err := s.Sagas.Update(ctx, saga); err != nil {
 		return false, err
 	}
+	if s.Addons != nil {
+		// §7.1, §8.7 (rev 0.75): no trial-era cap exception reaches the
+		// subscription (BIL-ADD-5).
+		if err := s.Addons.DeleteTrialCap(ctx, ev.TenantID); err != nil {
+			return false, err
+		}
+	}
 	s.metrics().SagaConfirmed(string(saga.Kind), now.Sub(saga.PaymentConfirmedAt))
 	sub, err := s.Subs.Update(ctx, saga.BillingSubscriptionID, 0, func(x *domain.Subscription) {
 		if x.ConvertedAt == nil {

@@ -230,6 +230,13 @@ func (p *Provider) EnsureCustomer(_ context.Context, in port.CustomerInput, key 
 	return port.CustomerRef{ProviderCustomerID: "cus_" + in.TenantID[:8]}, nil
 }
 
+// ChargeOneOff implements port.PaymentProvider: a one-off invoice paid at
+// once (token add-ons, §8.7).
+func (p *Provider) ChargeOneOff(_ context.Context, in port.OneOffCharge, key string) (port.ChargeResult, error) {
+	p.record(fmt.Sprintf("ChargeOneOff %s x%d %d %s", in.PriceRef, in.Quantity, in.Amount.AmountMinor, key))
+	return port.ChargeResult{Invoice: port.InvoiceRef{ProviderInvoiceID: "in_" + key}, Outcome: port.PaymentOutcome{Status: port.PaymentPaid}}, nil
+}
+
 // AttachDefaultPaymentMethod implements port.PaymentProvider.
 func (p *Provider) AttachDefaultPaymentMethod(_ context.Context, _ port.CustomerRef, pm, key string) error {
 	p.record("AttachDefaultPaymentMethod " + pm + " " + key)
@@ -373,12 +380,14 @@ func (r *RP) Realm(context.Context, string) (port.RealmView, error) { return por
 // Entitlements is an EntitlementsReader with a fixed finite quota.
 type Entitlements struct {
 	Limit *int64
-	Err   error
+	// Eligibility is addon_eligibility.llm_tokens ("" = not served).
+	Eligibility string
+	Err         error
 }
 
 // TokenQuota implements port.EntitlementsReader.
 func (e *Entitlements) TokenQuota(context.Context, string) (port.TokenQuota, error) {
-	return port.TokenQuota{MonthlyLimit: e.Limit}, e.Err
+	return port.TokenQuota{MonthlyLimit: e.Limit, Eligibility: e.Eligibility}, e.Err
 }
 
 // Fakes are the outbound fakes a Service is built on.

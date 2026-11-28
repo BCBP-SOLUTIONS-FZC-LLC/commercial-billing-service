@@ -166,6 +166,9 @@ type accounts struct {
 func (r accounts) Get(ctx context.Context, t string) (domain.BillingAccount, error) {
 	return f2(r.f, "Accounts.Get", func() (domain.BillingAccount, error) { return r.AccountRepo.Get(ctx, t) })
 }
+func (r accounts) Create(ctx context.Context, a domain.BillingAccount) error {
+	return f1(r.f, "Accounts.Create", func() error { return r.AccountRepo.Create(ctx, a) })
+}
 func (r accounts) ReturnToTrial(ctx context.Context, t string, at time.Time) error {
 	return f1(r.f, "Accounts.ReturnToTrial", func() error { return r.AccountRepo.ReturnToTrial(ctx, t, at) })
 }
@@ -360,6 +363,18 @@ func (r addons) Update(ctx context.Context, p domain.QuotaAddonPurchase) error {
 }
 func (r addons) ConfirmedTokensSince(ctx context.Context, t, pack string, since time.Time) (int64, error) {
 	return f2(r.f, "Addons.ConfirmedTokensSince", func() (int64, error) { return r.AddonRepo.ConfirmedTokensSince(ctx, t, pack, since) })
+}
+func (r addons) TrialUsage(ctx context.Context, t string) (domain.TrialAddonUsage, error) {
+	return f2(r.f, "Addons.TrialUsage", func() (domain.TrialAddonUsage, error) { return r.AddonRepo.TrialUsage(ctx, t) })
+}
+func (r addons) TrialCap(ctx context.Context, t string) (domain.TrialAddonCap, bool, error) {
+	return f3(r.f, "Addons.TrialCap", func() (domain.TrialAddonCap, bool, error) { return r.AddonRepo.TrialCap(ctx, t) })
+}
+func (r addons) UpsertTrialCap(ctx context.Context, c domain.TrialAddonCap, v int64) (domain.TrialAddonCap, error) {
+	return f2(r.f, "Addons.UpsertTrialCap", func() (domain.TrialAddonCap, error) { return r.AddonRepo.UpsertTrialCap(ctx, c, v) })
+}
+func (r addons) DeleteTrialCap(ctx context.Context, t string) error {
+	return f1(r.f, "Addons.DeleteTrialCap", func() error { return r.AddonRepo.DeleteTrialCap(ctx, t) })
 }
 
 type money struct {
@@ -611,6 +626,14 @@ func (p *provider) ChargeOneOff(_ context.Context, in port.OneOffCharge, key str
 	return port.ChargeResult{Invoice: r.Invoice, Outcome: r.Outcome}, err
 }
 
+// EnsureCustomer is scriptable (a trial tenant's first add-on purchase).
+func (p *provider) EnsureCustomer(ctx context.Context, in port.CustomerInput, key string) (port.CustomerRef, error) {
+	if a := p.take("EnsureCustomer", "EnsureCustomer! "+in.Currency+" "+key, key); a.err != nil {
+		return port.CustomerRef{}, a.err
+	}
+	return p.Provider.EnsureCustomer(ctx, in, key)
+}
+
 func (p *provider) PayOpenInvoiceLink(_ context.Context, ref port.InvoiceRef) (port.URLWithExpiry, error) {
 	a := p.take("PayOpenInvoiceLink", "PayOpenInvoiceLink "+ref.ProviderInvoiceID, "")
 	return port.URLWithExpiry{URL: "https://invoice.example/" + ref.ProviderInvoiceID}, a.err
@@ -770,13 +793,20 @@ type ent struct {
 	elig  string
 	err   error
 	calls int
+	hook  func() // runs once, before the next answer (a change racing the read)
 }
 
 func (e *ent) TokenQuota(context.Context, string) (port.TokenQuota, error) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	hook := e.hook
+	e.hook = nil
 	e.calls++
-	return port.TokenQuota{MonthlyLimit: e.limit, Eligibility: e.elig}, e.err
+	q, err := port.TokenQuota{MonthlyLimit: e.limit, Eligibility: e.elig}, e.err
+	e.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return q, err
 }
 
 // logger records what the use cases log.

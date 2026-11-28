@@ -157,8 +157,13 @@ func TestBIL_ADD_1_Eligibility(t *testing.T) {
 		want IneligibleReason
 	}{
 		{ok, ""},
-		{mod(func(i *AddonEligibilityInput) { i.IAMLifecycle = LifecycleTrial }), IneligibleTrial},
-		{mod(func(i *AddonEligibilityInput) { i.SubscriptionStatus = "" }), IneligibleTrial},
+		// A live subscription with IAM lifecycle trial (paid, TenantConverted
+		// not yet received) and no subscription with an active lifecycle are
+		// neither paid-active nor trial tenants.
+		{mod(func(i *AddonEligibilityInput) { i.IAMLifecycle = LifecycleTrial }), IneligibleNotActive},
+		{mod(func(i *AddonEligibilityInput) { i.SubscriptionStatus = "" }), IneligibleNotActive},
+		{mod(func(i *AddonEligibilityInput) { i.EntitlementsReason = "eligible" }), ""},
+		{mod(func(i *AddonEligibilityInput) { i.EntitlementsReason = "tenant_suspended" }), "tenant_suspended"},
 		{mod(func(i *AddonEligibilityInput) { i.SubscriptionStatus = StatusPastDue }), IneligibleNotActive},
 		{mod(func(i *AddonEligibilityInput) { i.IAMLifecycle = LifecycleSuspended }), IneligibleNotActive},
 		{mod(func(i *AddonEligibilityInput) { i.CollectionPaused = true }), IneligibleCollectionPaused},
@@ -170,6 +175,33 @@ func TestBIL_ADD_1_Eligibility(t *testing.T) {
 		if eligible != (tc.want == "") || reason != tc.want {
 			t.Errorf("%+v → %v %q, want %q", tc.in, eligible, reason, tc.want)
 		}
+	}
+
+	// BIL-ADD-1 (b), rev 0.75: a trial tenant (no live subscription,
+	// lifecycle trial) is eligible while Entitlements reports llm_tokens
+	// eligible, the quota is finite and the caller is the owner.
+	trial := AddonEligibilityInput{IAMLifecycle: LifecycleTrial, EntitlementsKnown: true, TokenQuotaFinite: true, EntitlementsReason: "eligible", Owner: true}
+	tmod := func(f func(*AddonEligibilityInput)) AddonEligibilityInput { c := trial; f(&c); return c }
+	for _, tc := range []struct {
+		in   AddonEligibilityInput
+		want IneligibleReason
+	}{
+		{trial, ""},
+		{tmod(func(i *AddonEligibilityInput) { i.EntitlementsKnown = false }), IneligibleNotAvailable},
+		{tmod(func(i *AddonEligibilityInput) { i.EntitlementsReason = "" }), IneligibleTrialInactive},
+		{tmod(func(i *AddonEligibilityInput) { i.EntitlementsReason = "trial" }), IneligibleTrialInactive},
+		{tmod(func(i *AddonEligibilityInput) { i.EntitlementsReason = "trial_inactive"; i.Owner = false }), IneligibleTrialInactive},
+		{tmod(func(i *AddonEligibilityInput) { i.EntitlementsReason = "unlimited_quota" }), IneligibleUnlimitedQuota},
+		{tmod(func(i *AddonEligibilityInput) { i.TokenQuotaFinite = false }), IneligibleUnlimitedQuota},
+		{tmod(func(i *AddonEligibilityInput) { i.Owner = false }), IneligibleOwnerOnly},
+	} {
+		eligible, reason := AddonEligibility(tc.in)
+		if eligible != (tc.want == "") || reason != tc.want {
+			t.Errorf("trial %+v → %v %q, want %q", tc.in, eligible, reason, tc.want)
+		}
+	}
+	if !IsTrialTenant("", LifecycleTrial) || IsTrialTenant(StatusActive, LifecycleTrial) || IsTrialTenant("", LifecycleActive) {
+		t.Error("trial tenant: no live subscription and lifecycle trial")
 	}
 
 	limit := int64(10_000_000)
@@ -184,6 +216,36 @@ func TestBIL_ADD_1_Eligibility(t *testing.T) {
 	}
 	if _, has := CapRemaining(nil, 0); has {
 		t.Error("no cap → ok=false")
+	}
+}
+
+// BIL-ADD-5 (rev 0.75): the default trial cap is 1 pack / 5000; an
+// override stays within 10 packs / 200000; whichever limit is reached first
+// refuses a purchase, counting what is already used.
+func TestBIL_ADD_5_TrialCap(t *testing.T) {
+	d := DefaultTrialAddonCap("t")
+	if d.MaxPacks != 1 || d.MaxAmountMinor != 5000 || d.TenantID != "t" || d.RecordVersion != 0 {
+		t.Fatalf("default %+v", d)
+	}
+	if !WithinTrialCap(d, TrialAddonUsage{}, 1, 4900) || WithinTrialCap(d, TrialAddonUsage{}, 2, 200) ||
+		WithinTrialCap(d, TrialAddonUsage{}, 1, 5001) || WithinTrialCap(d, TrialAddonUsage{Packs: 1, AmountMinor: 4900}, 1, 1) {
+		t.Error("default cap: packs and amount, whichever first")
+	}
+	if !WithinTrialCap(d, TrialAddonUsage{}, 1, 5000) {
+		t.Error("the cap boundary is allowed")
+	}
+	raised := TrialAddonCap{MaxPacks: 5, MaxAmountMinor: 50000}
+	if !WithinTrialCap(raised, TrialAddonUsage{Packs: 4, AmountMinor: 45000}, 1, 5000) || WithinTrialCap(raised, TrialAddonUsage{Packs: 4, AmountMinor: 45100}, 1, 5000) {
+		t.Error("raised cap by amount")
+	}
+	for _, c := range []struct {
+		packs  int
+		amount int64
+		ok     bool
+	}{{1, 1, true}, {10, 200000, true}, {0, 5000, false}, {11, 5000, false}, {5, 0, false}, {5, 200001, false}} {
+		if ValidTrialCapLimits(c.packs, c.amount) != c.ok {
+			t.Errorf("limits %d/%d valid=%v", c.packs, c.amount, !c.ok)
+		}
 	}
 }
 

@@ -42,6 +42,7 @@ var summaries = map[string]string{
 	"B-O11": "Add a price row (closes the current one)", "B-O12": "Add, change or retire a token pack", "B-O13": "Re-process a ledger row (§20.2)",
 	"B-O14": "Record a certification run produced by cmd/certify", "B-O15": "Revoke a certification",
 	"B-O16": "Finalise or void a draft held during a collection pause", "B-O17": "Approve or reject a submitted certification run (pci_owner_reviewer)",
+	"B-O18": "Raise a trial tenant's token add-on cap (FEATURE_TRIAL_CAP_OVERRIDE; mandatory reason)",
 }
 
 // queryTypes are the routes with query parameters.

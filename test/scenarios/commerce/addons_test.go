@@ -18,15 +18,19 @@ func addonEvents(t *testing.T, purchaseID string) int {
 	return count(t, `SELECT count(*) FROM outbox_events WHERE event_type = 'TenantQuotaAddOnChanged' AND payload->'data'->>'billing_ref' = $1`, purchaseID)
 }
 
-// B-P19 (§6, BIL-ADD-1): a tenant without an account is a trial; storage
-// failures surface; the Entitlements display cache serves repeat reads for
+// B-P19 (§6, BIL-ADD-1): a tenant without an account is a trial tenant,
+// read from Entitlements too (rev 0.75): DEFAULT_CURRENCY packs and the
+// default trial cap, trial_inactive while Entitlements does not report the
+// trial active; storage failures surface; the Entitlements display cache serves repeat reads for
 // 60 s, after which a W-1 ineligibility reason from Entitlements wins; a
 // purchase always reads Entitlements fresh.
 func TestAddonCatalogPaths(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	cat, err := e.svc.ListTokenPacks(ctx, owner, newTenant())
-	if err != nil || cat.Eligible || cat.IneligibleReason == nil || *cat.IneligibleReason != "trial" || len(cat.Items) != 0 || e.ent.calls != 0 {
+	if err != nil || cat.Eligible || cat.IneligibleReason == nil || *cat.IneligibleReason != "trial_inactive" || len(cat.Items) != 2 ||
+		cat.Items[0].Price.Currency != "USD" || e.ent.calls != 1 || cat.TrialCap == nil ||
+		*cat.TrialCap != (app.TrialCapView{MaxPacks: 1, MaxAmountMinor: 5000, Currency: "USD"}) {
 		t.Fatalf("no account %+v %v (entitlements calls %d)", cat, err, e.ent.calls)
 	}
 	tenant, _ := e.converted(t, "pro", 5)
@@ -38,7 +42,7 @@ func TestAddonCatalogPaths(t *testing.T) {
 	e.now = e.now.Add(2 * time.Minute) // past the cache entry the failed read stored
 	calls := e.ent.calls
 	cat, err = e.svc.ListTokenPacks(ctx, owner, tenant)
-	if err != nil || !cat.Eligible || len(cat.Items) != 2 || *cat.MonthlyCapRemainingTokens != 20_000_000 || e.ent.calls != calls+1 {
+	if err != nil || !cat.Eligible || len(cat.Items) != 2 || *cat.MonthlyCapRemainingTokens != 20_000_000 || e.ent.calls != calls+1 || cat.TrialCap != nil {
 		t.Fatalf("catalog %+v %v", cat, err)
 	}
 	e.ent.elig = "tenant_suspended"

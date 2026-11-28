@@ -348,4 +348,12 @@ var operatorRoutes = []routeDef{
 		}
 		return a.Operator.ReviewCertification(c.Request.Context(), w, id, r)
 	}), requirePCIReviewer()),
+	// B-O18 (rev 0.75): registered only with FEATURE_TRIAL_CAP_OVERRIDE=true.
+	route("B-O18", mPut, op+"/tenants/:id/trial-addon-cap", idemRequired, withBody(200, true, func(a *APIConfig, c *gin.Context, w app.Caller, r app.TrialAddonCapRequest) (app.TrialAddonCapView, error) {
+		t, err := param(c, "id")
+		if err != nil {
+			return app.TrialAddonCapView{}, err
+		}
+		return a.Operator.SetTrialAddonCap(c.Request.Context(), w, t, r)
+	})),
 }

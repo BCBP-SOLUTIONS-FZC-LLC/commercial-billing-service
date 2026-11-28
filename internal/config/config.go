@@ -178,6 +178,9 @@ type Config struct {
 	FeatureDirectSignup bool
 	FeatureTokenAddons  bool
 	FeatureSeatPurchase bool
+	// FeatureTrialCapOverride gates B-O18 (rev 0.75) until Audit Log has
+	// billing.trial_addon_cap.changed (BL-OQ-31 (c)).
+	FeatureTrialCapOverride bool
 }
 
 // Problem is one invalid or missing setting.
@@ -391,6 +394,7 @@ func LoadFromFor(getenv func(string) string, b Binary) (Config, []Problem) {
 	c.FeatureDirectSignup = l.boolean("FEATURE_DIRECT_SIGNUP", false)
 	c.FeatureTokenAddons = l.boolean("FEATURE_TOKEN_ADDONS", false)
 	c.FeatureSeatPurchase = l.boolean("FEATURE_SEAT_PURCHASE", true)
+	c.FeatureTrialCapOverride = l.boolean("FEATURE_TRIAL_CAP_OVERRIDE", false)
 
 	return c, l.problems
 }

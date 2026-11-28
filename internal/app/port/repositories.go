@@ -263,6 +263,29 @@ type AddonRepo interface {
 	List(ctx context.Context, tenantID, afterID string, limit int) ([]domain.QuotaAddonPurchase, error)
 	Update(ctx context.Context, p domain.QuotaAddonPurchase) error
 	ConfirmedTokensSince(ctx context.Context, tenantID, packCode string, since time.Time) (int64, error)
+	// TrialUsage sums pack_quantity and amount_minor over the tenant's
+	// trial_purchase rows that are not failed, expired or cancelled
+	// (BIL-ADD-5).
+	TrialUsage(ctx context.Context, tenantID string) (domain.TrialAddonUsage, error)
+	TrialCapRepo
+}
+
+// ErrTrialCapChanged is UpsertTrialCap's answer when the row's
+// record_version is not the expected one (a concurrent B-O18).
+var ErrTrialCapChanged = errors.New("trial add-on cap changed concurrently")
+
+// TrialCapRepo stores trial_addon_caps (§4.2.25, B-O18, BIL-ADD-5).
+type TrialCapRepo interface {
+	// TrialCap returns the tenant's override; found is false when it has
+	// none (the default cap applies).
+	TrialCap(ctx context.Context, tenantID string) (domain.TrialAddonCap, bool, error)
+	// UpsertTrialCap inserts the override (expectedVersion 0) or updates it
+	// when its record_version is expectedVersion, bumping it; otherwise
+	// ErrTrialCapChanged. It returns the stored row.
+	UpsertTrialCap(ctx context.Context, c domain.TrialAddonCap, expectedVersion int64) (domain.TrialAddonCap, error)
+	// DeleteTrialCap removes the override (conversion confirmed, §7.1); no
+	// row is not an error.
+	DeleteTrialCap(ctx context.Context, tenantID string) error
 }
 
 // CertificationRun is a B-O14 submission as stored.
