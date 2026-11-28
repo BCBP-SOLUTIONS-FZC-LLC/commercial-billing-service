@@ -314,13 +314,37 @@ func (s *Service) reconcile(ctx context.Context, run port.ReconRun) (map[string]
 					continue
 				}
 				findingKind := "missing_ledger_event"
+				tenantID := ""
 				if kind == port.ReconInvoices {
-					if it.Metadata["tenant_id"] == "" && it.Metadata["billing_subscription_id"] == "" && it.Metadata["purchase_id"] == "" {
-						continue // not one of Billing's invoices as far as metadata shows
+					// BIL-PAY-3: the tenant is Billing's own customer mapping,
+					// never the invoice metadata (rev 0.69). An invoice of a
+					// customer Billing doesn't map is not Billing's.
+					customer, _ := it.Fields["customer"].(string)
+					if customer == "" {
+						continue
 					}
-					findingKind = "invoice_missing"
+					t, found, err := s.Customers.TenantForCustomer(ctx, run.Provider, customer)
+					if err != nil {
+						// Recorded, not repaired; the run goes on (the next run retries).
+						note := "tenant lookup failed: " + err.Error()
+						f := port.ReconFinding{Kind: "invoice_missing", RepairNote: &note,
+							ProviderValue: mustJSON(map[string]string{"id": it.Ref.ID, "status": it.Status})}
+						if err := s.Recon.AddFinding(ctx, run.RunID, f); err != nil {
+							return err
+						}
+						counts["findings"]++
+						continue
+					}
+					if !found {
+						continue
+					}
+					if m := it.Metadata["tenant_id"]; m != "" && m != t && s.Log != nil {
+						s.logger(ctx).Warn("reconciliation: invoice metadata names another tenant; Billing's customer mapping wins", map[string]any{
+							"tenant_id": t, "metadata_tenant_id": m, "provider_invoice_id": it.Ref.ID})
+					}
+					tenantID, findingKind = t, "invoice_missing"
 				}
-				f := port.ReconFinding{TenantID: it.Metadata["tenant_id"], Kind: findingKind,
+				f := port.ReconFinding{TenantID: tenantID, Kind: findingKind,
 					ProviderValue: mustJSON(map[string]string{"id": it.Ref.ID, "status": it.Status})}
 				if kind == port.ReconInvoices {
 					repair(&f, func() error { return s.mirrorMissing(ctx, prov, run.Provider, f.TenantID, it.Ref) })

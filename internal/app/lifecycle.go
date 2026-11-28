@@ -174,11 +174,25 @@ type PaymentFailed struct{ S *Service }
 // Handle implements port.PaymentEventHandler.
 func (h PaymentFailed) Handle(ctx context.Context, tenantID string, ev domain.PaymentEvent, cur domain.ProviderObjectState) (string, error) {
 	s := h.S
-	if reason, _ := cur.Fields["billing_reason"].(string); reason != "subscription_cycle" {
+	reason, _ := cur.Fields["billing_reason"].(string)
+	if reason != "subscription_cycle" && reason != "subscription_update" {
 		return "", &port.IgnoredEvent{Reason: "not_a_cycle_invoice"}
 	}
 	if err := s.Lock.LockTenant(ctx, tenantID); err != nil {
 		return "", err
+	}
+	if reason == "subscription_update" {
+		// A renewal top-up (§8.6.3 step 1) is charged with the renewal and
+		// follows dunning like a cycle invoice (§8.8.1); any other
+		// subscription_update invoice is a customer purchase, settled by
+		// its own flow (rev 0.69).
+		p, found, err := s.SeatPurchases.ByProviderInvoice(ctx, tenantID, cur.Ref.ID)
+		if err != nil {
+			return "", err
+		}
+		if !found || p.Reason != domain.SeatReasonRenewalTopUp {
+			return "", &port.IgnoredEvent{Reason: "not_a_cycle_invoice"}
+		}
 	}
 	sub, err := s.subscriptionFor(ctx, tenantID, ev.Provider, cur)
 	if err != nil {

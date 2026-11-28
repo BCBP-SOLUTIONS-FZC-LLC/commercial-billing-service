@@ -318,7 +318,7 @@ func TestReconciliationAutoRepair(t *testing.T) {
 				Kind: domain.KindInvoicePaid, CustomerRef: cus, Object: domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: "in_rep_" + sub},
 				ProviderCreatedAt: time.Now().UTC(), Payload: payload}}}},
 		port.ReconInvoices: {{Ref: domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: "in_rep_" + sub}, Status: "open",
-			Metadata: map[string]string{"tenant_id": tenant, "billing_subscription_id": sub}}},
+			Metadata: map[string]string{"tenant_id": tenant, "billing_subscription_id": sub}, Fields: map[string]any{"customer": cus}}},
 	}
 	run, err := e.svc.StartReconciliation(ctx, operator, app.ReconciliationRequest{Provider: "stripe", WindowStart: time.Now().Add(-time.Hour),
 		WindowEnd: time.Now(), AutoRepair: true, Reason: "Repair run for the auto-repair test"})

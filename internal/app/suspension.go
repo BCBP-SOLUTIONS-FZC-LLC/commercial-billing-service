@@ -134,6 +134,19 @@ func (s *Service) operatorView(ctx context.Context, c Caller, tenantID string) (
 // Billing's subscription (offboarded). No bus event: IAM already knows.
 func (s *Service) closeOffboarded(ctx context.Context, tenantID, subID string) error {
 	var sub domain.Subscription
+	if err := s.Tx.RunInTenantTx(ctx, tenantID, func(ctx context.Context) error {
+		var err error
+		sub, err = s.Subs.Get(ctx, subID)
+		return err
+	}); err != nil {
+		return err
+	}
+	// Void the open seat purchase's invoice before it is cancelled (§8.5.1).
+	if sub.Status != domain.StatusEnded {
+		if err := s.closeSeatPurchaseInvoice(ctx, sub, false); err != nil {
+			return err
+		}
+	}
 	if err := s.locked(ctx, tenantID, func(ctx context.Context) error {
 		var err error
 		if sub, err = s.Subs.Get(ctx, subID); err != nil {

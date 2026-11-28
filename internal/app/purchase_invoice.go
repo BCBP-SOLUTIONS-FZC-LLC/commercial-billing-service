@@ -266,3 +266,33 @@ func metadataPurchaseID(cur domain.ProviderObjectState) string {
 	}
 	return id
 }
+
+// closeSeatPurchaseInvoice closes the invoice of the subscription's open
+// customer seat purchase before Billing cancels the purchase (§8.5.1: at a
+// renewal that supersedes it, or at offboarding): the open proration invoice
+// is voided outside any transaction so the customer can no longer pay for
+// seats that will never be granted. An invoice already paid is parked for an
+// operator refund (SEV-2 BillingPaymentParked). A failed void returns the
+// error, so the caller retries before cancelling. A renewal top-up is left
+// alone (skipTopUp): it follows dunning.
+func (s *Service) closeSeatPurchaseInvoice(ctx context.Context, sub domain.Subscription, skipTopUp bool) error {
+	var (
+		p     domain.SeatPurchase
+		found bool
+	)
+	if err := s.Tx.RunInTenantTx(ctx, sub.TenantID, func(ctx context.Context) error {
+		var err error
+		p, found, err = s.SeatPurchases.Open(ctx, sub.BillingSubscriptionID)
+		return err
+	}); err != nil || !found || (skipTopUp && p.Reason == domain.SeatReasonRenewalTopUp) {
+		return err
+	}
+	inv, err := s.closeInvoice(ctx, sub.Provider, p.ProviderInvoiceID, seatTarget(deref(sub.ProviderSubscriptionID), p), "seatpur:"+p.PurchaseID+":void")
+	if err != nil {
+		return err
+	}
+	if inv.Paid {
+		s.purchasePaymentParked(ctx, sub.TenantID, string(port.PurchaseKindSeats), p.PurchaseID, inv.ID, "paid_after_cancel", "")
+	}
+	return nil
+}

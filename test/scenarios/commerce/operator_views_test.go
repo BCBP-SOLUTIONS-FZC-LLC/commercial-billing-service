@@ -130,8 +130,14 @@ func provSub(id string, status string, meta map[string]string) domain.ProviderOb
 	return domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectSubscription, ID: id}, Status: status, Metadata: meta}
 }
 
-func provInv(id string, meta map[string]string) domain.ProviderObjectState {
-	return domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: id}, Status: "open", Metadata: meta}
+// provInv is a provider invoice of customer (BIL-PAY-3: reconciliation maps
+// the tenant from Billing's customer mapping, not the metadata).
+func provInv(id, customer string, meta map[string]string) domain.ProviderObjectState {
+	st := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectInvoice, ID: id}, Status: "open", Metadata: meta, Fields: map[string]any{}}
+	if customer != "" {
+		st.Fields["customer"] = customer
+	}
+	return st
 }
 
 func provEvt(id string, body *domain.PaymentEvent) domain.ProviderObjectState {
@@ -208,19 +214,19 @@ func TestReconciliationAutoRepairPaths(t *testing.T) {
 			{Items: []domain.ProviderObjectState{provSub("sub_"+subs[2], "canceled", nil), provSub("sub_"+subs[3], "incomplete_expired", nil),
 				provSub("sub_"+subs[4], "incomplete", nil)}},
 		},
-		port.ReconInvoices: {{Items: []domain.ProviderObjectState{provInv("in_known_"+x, map[string]string{"tenant_id": a}), provInv("in_nometa_"+x, nil),
-			provInv("in_purchase_"+x, map[string]string{"purchase_id": x}), provInv("in_fetchfail_"+x, map[string]string{"tenant_id": a}),
-			provInv("in_missing_"+x, map[string]string{"tenant_id": a})}}},
+		port.ReconInvoices: {{Items: []domain.ProviderObjectState{provInv("in_known_"+x, cus, map[string]string{"tenant_id": a}), provInv("in_nometa_"+x, "", nil),
+			provInv("in_purchase_"+x, cus, map[string]string{"purchase_id": x}), provInv("in_fetchfail_"+x, cus, map[string]string{"tenant_id": a}),
+			provInv("in_missing_"+x, cus, map[string]string{"tenant_id": newTenant()})}}}, // metadata names another tenant: ignored
 		port.ReconEvents: {{Items: []domain.ProviderObjectState{provEvt("evt_nobody_"+x, nil), provEvt("evt_custfail_"+x, body("evt_custfail_"+x, cus, "")),
 			provEvt("evt_cust_"+x, body("evt_cust_"+x, cus, "in_missing_"+x)), provEvt("evt_anon_"+x, body("evt_anon_"+x, "", ""))}}},
 	}
 	e.p.fetchErr = map[string]error{"in_fetchfail_" + x: errProvider}
-	e.fail("Customers.TenantForCustomer", 0)
+	e.fail("Customers.TenantForCustomer", 3) // after the three invoice lookups: the event path's lookup fails
 	v, err := e.recon(t, "stripe", true)
 	if err != nil || v.Status != "completed" {
 		t.Fatalf("run %+v %v", v, err)
 	}
-	if v.Counts["subscriptions"] != 7 || v.Counts["invoices"] != 5 || v.Counts["events"] != 4 || v.Counts["findings"] != 13 || v.Counts["repaired"] != 5 {
+	if v.Counts["subscriptions"] != 7 || v.Counts["invoices"] != 5 || v.Counts["events"] != 4 || v.Counts["findings"] != 13 || v.Counts["repaired"] != 6 {
 		t.Fatalf("counts %+v", v.Counts)
 	}
 	type key struct{ kind, value string }
@@ -247,7 +253,10 @@ func TestReconciliationAutoRepairPaths(t *testing.T) {
 	expect("status_mismatch", map[string]string{"status": "incomplete_expired"}, true, "")
 	expect("status_mismatch", map[string]string{"status": "incomplete"}, false, "not auto-repaired")
 	expect("orphan_provider_object", map[string]string{"subscription": "sub_orphan_" + x, "status": "active"}, false, "")
-	expect("invoice_missing", map[string]string{"id": "in_purchase_" + x, "status": "open"}, false, "repair failed: invoice has no tenant_id")
+	// BIL-PAY-3 (rev 0.69): the tenant is Billing's customer mapping, so an
+	// invoice whose metadata names no tenant (or another one) is still
+	// attributed to the customer's tenant.
+	expect("invoice_missing", map[string]string{"id": "in_purchase_" + x, "status": "open"}, true, "")
 	expect("invoice_missing", map[string]string{"id": "in_fetchfail_" + x, "status": "open"}, false, "repair failed")
 	expect("invoice_missing", map[string]string{"id": "in_missing_" + x, "status": "open"}, true, "")
 	expect("missing_ledger_event", map[string]string{"id": "evt_nobody_" + x, "status": "invoice.paid"}, false, "did not include the event body")
@@ -266,6 +275,9 @@ func TestReconciliationAutoRepairPaths(t *testing.T) {
 	if n := count(t, `SELECT count(*) FROM invoices WHERE provider_invoice_id = $1 AND tenant_id = $2`, "in_missing_"+x, a); n != 1 {
 		t.Fatalf("mirrored %d", n)
 	}
+	if n := count(t, `SELECT count(*) FROM invoices WHERE provider_invoice_id = $1 AND tenant_id = $2`, "in_purchase_"+x, a); n != 1 {
+		t.Fatalf("purchase invoice not attributed to the customer's tenant: %d", n)
+	}
 	if n := len(e.p.called("ListSince subscriptions p1")); n != 1 {
 		t.Fatalf("second page %v", e.p.called("ListSince"))
 	}
@@ -278,7 +290,8 @@ func TestReconciliationFailurePaths(t *testing.T) {
 	tenant, s := e.activeSubscription(t, "pro", 1)
 	orphan := []port.ReconPage{{Items: []domain.ProviderObjectState{provSub("sub_orphan2_"+s, "active", map[string]string{"billing_subscription_id": s})}}}
 	mismatch := []port.ReconPage{{Items: []domain.ProviderObjectState{provSub("sub_"+s, "past_due", nil)}}}
-	missing := []port.ReconPage{{Items: []domain.ProviderObjectState{provInv("in_gone_"+s, map[string]string{"tenant_id": tenant})}}}
+	cus := scalar[string](t, `SELECT provider_customer_id FROM billing_accounts WHERE tenant_id = $1`, tenant)
+	missing := []port.ReconPage{{Items: []domain.ProviderObjectState{provInv("in_gone_"+s, cus, map[string]string{"tenant_id": tenant})}}}
 	exec(t, `INSERT INTO payment_event_ledger (provider, provider_event_id, event_type, normalised_kind, livemode, provider_created_at, payload, status, outcome)
 		VALUES ('stripe', $1, 'invoice.paid', 'invoice_paid', false, now(), '{}', 'failed', 'failed:unknown_customer')`, "evt_nocus2_"+s)
 	cases := []struct {

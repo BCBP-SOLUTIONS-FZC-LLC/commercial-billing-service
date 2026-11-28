@@ -320,6 +320,11 @@ func (s *Service) completeRenewal(ctx context.Context, sch domain.SeatChangeSche
 // quantity is applied at the provider even if the payment fails; the
 // invoice then follows dunning. A retry reuses the open top-up row and key.
 func (s *Service) chargeTopUp(ctx context.Context, sub domain.Subscription, sch domain.SeatChangeSchedule, renewal, final int) (*domain.SeatPurchase, error) {
+	// A customer purchase from the old period is cancelled below: void its
+	// invoice first, so it cannot be paid for seats never granted (§8.5.1).
+	if err := s.closeSeatPurchaseInvoice(ctx, sub, true); err != nil {
+		return nil, err
+	}
 	var p domain.SeatPurchase
 	if err := s.locked(ctx, sub.TenantID, func(ctx context.Context) error {
 		open, found, err := s.SeatPurchases.Open(ctx, sub.BillingSubscriptionID)

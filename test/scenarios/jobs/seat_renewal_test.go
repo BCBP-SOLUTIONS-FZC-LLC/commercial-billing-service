@@ -253,7 +253,9 @@ func TestSeatRenewalCompletionWithoutChangeEmitsNoEvent(t *testing.T) {
 
 // §8.6.3 step 1: an open customer seat purchase from the old period cannot
 // complete any more and is cancelled when the renewal top-up is recorded;
-// a failure cancelling it leaves everything for the next run.
+// its open invoice is voided first (§8.5.1, rev 0.69: otherwise the customer
+// could still pay for seats never granted); a failure voiding or cancelling
+// it leaves everything for the next run.
 func TestSeatRenewalTopUpCancelsOpenCustomerPurchase(t *testing.T) {
 	e := newEnv(t)
 	tenant, sub, sch, r := e.reduction(10, 3, 5)
@@ -261,11 +263,16 @@ func TestSeatRenewalTopUpCancelsOpenCustomerPurchase(t *testing.T) {
 	e.run(e.svc.RunSeatRenewal)
 	e.renewed(sub, r)
 	e.exec(`INSERT INTO seat_purchases (purchase_id, tenant_id, billing_subscription_id, reason, seats_added, seats_before, seats_after,
-		proration_instant, amount_minor, currency, amount_source, status, requested_by, idempotency_key)
-		VALUES (gen_random_uuid(), $1, $2, 'purchase', 1, 10, 11, now(), 2300, 'USD', 'provider_preview', 'pending_payment', $3, 'k-open-cust')`,
+		proration_instant, amount_minor, currency, amount_source, status, requested_by, idempotency_key, provider_invoice_id)
+		VALUES (gen_random_uuid(), $1, $2, 'purchase', 1, 10, 11, now(), 2300, 'USD', 'provider_preview', 'pending_payment', $3, 'k-open-cust', 'in_open_cust')`,
 		tenant, sub, owner.UserID)
 	e.now = r.Add(10 * time.Minute)
 	e.fakes.Core.Usage = port.SeatUsage{ActiveUsers: 8, LicensedSeats: 10}
+	e.f.fail("prov.VoidInvoice", 0)
+	e.failRenewal(sch, "applying/5/-/-")
+	if st := scalar[string](t, `SELECT status::text FROM seat_purchases WHERE idempotency_key = 'k-open-cust'`); st != "pending_payment" {
+		t.Fatalf("customer purchase cancelled although its invoice was not voided: %s", st)
+	}
 	e.f.fail("SeatPurchases.Update", 0)
 	e.failRenewal(sch, "applying/5/-/-")
 	if st := scalar[string](t, `SELECT status::text FROM seat_purchases WHERE idempotency_key = 'k-open-cust'`); st != "pending_payment" {
@@ -275,6 +282,10 @@ func TestSeatRenewalTopUpCancelsOpenCustomerPurchase(t *testing.T) {
 	e.run(e.svc.RunSeatRenewal)
 	if st := scalar[string](t, `SELECT status::text FROM seat_purchases WHERE idempotency_key = 'k-open-cust'`); st != "cancelled" {
 		t.Fatalf("customer purchase %s", st)
+	}
+	pid := scalar[string](t, `SELECT purchase_id::text FROM seat_purchases WHERE idempotency_key = 'k-open-cust'`)
+	if got := e.prov.called("VoidInvoice in_open_cust seatpur:" + pid + ":void"); len(got) == 0 {
+		t.Fatalf("open invoice not voided: %v", e.prov.called("VoidInvoice"))
 	}
 	if got := e.schedule(sch); got != "applied/5/8/-" {
 		t.Fatalf("schedule %s", got)
