@@ -111,7 +111,7 @@ func envOf(container any) map[string]string {
 }
 
 // Names, namespace and identity (CD-19, §13.1).
-func TestNamesAndNamespace(t *testing.T) {
+func TestBIL_OPS_4_NamesAndNamespace(t *testing.T) {
 	for _, vf := range envFiles {
 		docs := render(t, vf)
 		for _, d := range docs {

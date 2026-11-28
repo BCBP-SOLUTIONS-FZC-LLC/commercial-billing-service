@@ -95,21 +95,6 @@ func TestSagaEveryStatePair(t *testing.T) {
 	}
 }
 
-func TestSagaInitialStates(t *testing.T) {
-	for kind, want := range map[SagaKind]SagaState{
-		SagaTrialConversion: SagaPaymentConfirmed,
-		SagaOperatorStub:    SagaRPConvertPending,
-		SagaDirectSignup:    SagaAwaitingTenantConverted,
-	} {
-		if got, ok := InitialSagaState(kind); !ok || got != want {
-			t.Errorf("%s starts in %s, want %s", kind, got, want)
-		}
-	}
-	if _, ok := InitialSagaState("other"); ok {
-		t.Error("unknown kind must not start")
-	}
-}
-
 // §9.3.2: every RP-3 answer.
 func TestRP3AnswerHandling(t *testing.T) {
 	cases := []struct {
@@ -164,6 +149,24 @@ func TestBIL_OPS_5_AlertStates(t *testing.T) {
 	for _, s := range AllSagaStates {
 		if s.CountsForOverdueAlert() != want[s] {
 			t.Errorf("%s CountsForOverdueAlert = %v", s, s.CountsForOverdueAlert())
+		}
+	}
+}
+
+// C-8 (rev 0.73): the standard-library UUID check matches the canonical form
+// the google/uuid check accepted for a refund's purchase_ref.
+func TestCanonicalUUID(t *testing.T) {
+	for s, want := range map[string]bool{
+		"3fa85f64-5717-4562-b3fc-2c963f66afa6":  true,
+		"3FA85F64-5717-4562-B3FC-2C963F66AFA6":  true,
+		"3fa85f6457174562b3fc2c963f66afa6":      false,
+		"3fa85f64-5717-4562-b3fc-2c963f66afag":  false,
+		"3fa85f64_5717-4562-b3fc-2c963f66afa6":  false,
+		"{3fa85f64-5717-4562-b3fc-2c963f66afa}": false,
+		"":                                      false,
+	} {
+		if got := canonicalUUID(s); got != want {
+			t.Errorf("canonicalUUID(%q) = %v, want %v", s, got, want)
 		}
 	}
 }

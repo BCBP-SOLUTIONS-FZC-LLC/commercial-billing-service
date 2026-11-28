@@ -18,6 +18,7 @@
 #   AWS_REGION, AWS credentials        read access to SNS, SQS, Glue
 #   BILLING_DB_DSN                     admin_readonly on the billing database
 #   STRIPE_API_KEY                     the environment's restricted key (read-only use)
+#   STRIPE_FINAL_RETRY_ACTION          "cancel" once the Dashboard setting is checked (step 4)
 #   WEBHOOK_URL                        https://<gateway>/api/v1/webhooks/stripe
 #   KUBE_CONTEXT                       kubectl context of the environment (optional)
 set -euo pipefail
@@ -98,6 +99,12 @@ if ! grep -qx '\*' <<<"$enabled"; then
   for t in "${required[@]}"; do grep -qx "$t" <<<"$enabled" || stop "webhook endpoint lacks $t (§7.4)"; done
 fi
 pass "webhook endpoint with the §7.4 event types"
+# DUNNING_FINAL_ACTION=cancel (§8.8, §12): the provider's final-retry action is a
+# Stripe Dashboard setting the API does not expose, so a person confirms it:
+# Settings → Billing → Subscriptions → "If all retries for a payment fail" →
+# cancel the subscription (rev 0.73, D-L19).
+[[ "${STRIPE_FINAL_RETRY_ACTION:-}" == "cancel" ]] || stop "confirm the Stripe final-retry action is 'cancel the subscription', then set STRIPE_FINAL_RETRY_ACTION=cancel (DUNNING_FINAL_ACTION, §8.8)"
+pass "final retry cancels the subscription (confirmed, DUNNING_FINAL_ACTION)"
 
 # ── 5. Deploy ───────────────────────────────────────────────────────────
 begin 5 "Deploy"

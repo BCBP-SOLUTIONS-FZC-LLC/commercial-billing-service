@@ -1190,10 +1190,6 @@
         },
         "type": "object"
       },
-      "PlanPrice": {
-        "properties": {},
-        "type": "object"
-      },
       "PlanPriceRequest": {
         "properties": {
           "currency": {
@@ -1249,6 +1245,52 @@
           "reason",
           "unit_amount_minor"
         ],
+        "type": "object"
+      },
+      "PlanPriceView": {
+        "properties": {
+          "created_by": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "effective_from": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "effective_to": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "interval": {
+            "type": "string"
+          },
+          "plan": {
+            "type": "string"
+          },
+          "price_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "provider_price_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "unit_amount_minor": {
+            "type": "integer"
+          }
+        },
         "type": "object"
       },
       "Problem": {
@@ -2222,7 +2264,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PlanPrice"
+                  "$ref": "#/components/schemas/PlanPriceView"
                 }
               }
             },

@@ -26,8 +26,9 @@ func NewReconRepository(sysPool *pgcommon.Pool) *ReconRepository {
 // RECONCILIATION_RUNNING.
 func (r *ReconRepository) Queue(ctx context.Context, run port.ReconRun) error {
 	err := inTx(ctx, r.sys, func(q querier) error {
-		_, err := q.Exec(ctx, `INSERT INTO reconciliation_runs (run_id, provider, window_start, window_end, auto_repair, status, started_by)
-			VALUES ($1::uuid, $2, $3, $4, $5, 'queued', $6::uuid)`, run.RunID, run.Provider, run.WindowStart, run.WindowEnd, run.AutoRepair, run.StartedBy)
+		_, err := q.Exec(ctx, `INSERT INTO reconciliation_runs (run_id, provider, window_start, window_end, auto_repair, status, started_by, reason)
+			VALUES ($1::uuid, $2, $3, $4, $5, 'queued', $6::uuid, NULLIF($7, ''))`, run.RunID, run.Provider, run.WindowStart, run.WindowEnd, run.AutoRepair,
+			run.StartedBy, run.Reason)
 		return err
 	})
 	switch {
@@ -45,8 +46,8 @@ func (r *ReconRepository) Claim(ctx context.Context, worker string) (port.ReconR
 	err := inTx(ctx, r.sys, func(q querier) error {
 		return q.QueryRow(ctx, `UPDATE reconciliation_runs SET status = 'running', claimed_by = $1, started_at = now()
 			WHERE run_id = (SELECT run_id FROM reconciliation_runs WHERE status = 'queued' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
-			RETURNING run_id::text, provider, window_start, window_end, auto_repair, started_by::text`, worker).
-			Scan(&run.RunID, &run.Provider, &run.WindowStart, &run.WindowEnd, &run.AutoRepair, &run.StartedBy)
+			RETURNING run_id::text, provider, window_start, window_end, auto_repair, started_by::text, coalesce(reason, '')`, worker).
+			Scan(&run.RunID, &run.Provider, &run.WindowStart, &run.WindowEnd, &run.AutoRepair, &run.StartedBy, &run.Reason)
 	})
 	if errors.Is(err, pgcommon.ErrNoRows) {
 		return run, false, nil

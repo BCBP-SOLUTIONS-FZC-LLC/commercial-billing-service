@@ -76,6 +76,14 @@ func TestReconciliation(t *testing.T) {
 		AND entry->'target'->>'id' = $1`, run.RunID); n != 1 {
 		t.Fatalf("audit %d", n)
 	}
+	// C-5 (rev 0.73): the operator's reason is kept on the run and in its audit entry.
+	if got := scalar[string](t, `SELECT reason FROM reconciliation_runs WHERE run_id = $1`, run.RunID); got != "Monthly reconciliation" {
+		t.Fatalf("run reason %q", got)
+	}
+	if n := scalar[int](t, `SELECT count(*) FROM pending_audit_entries WHERE entry->'target'->>'id' = $1
+		AND entry::text LIKE '%Monthly reconciliation%'`, run.RunID); n != 1 {
+		t.Fatalf("reason not in the audit entry")
+	}
 }
 
 // §8.8.4: offboarding voids the tenant's open invoices.

@@ -13,7 +13,7 @@ import (
 
 // §9.2 on the real schema: in-flight lock, takeover after the lock, unlock
 // for a 3-D Secure retry, and a record past its expiry being a new request.
-func TestIdempotencyReclaimAndUnlock(t *testing.T) {
+func TestBIL_IDEM_3_IdempotencyReclaimAndUnlock(t *testing.T) {
 	ctx := context.Background()
 	repo := pgadapter.NewIdempotencyRepository(appPool)
 	runner := pgadapter.NewTxRunner(appPool)

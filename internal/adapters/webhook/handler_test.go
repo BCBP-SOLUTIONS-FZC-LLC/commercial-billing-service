@@ -71,7 +71,7 @@ func serve(h *Handler, path, body string) *httptest.ResponseRecorder {
 	return w
 }
 
-func TestB_W1(t *testing.T) {
+func TestBIL_PAY_1_B_W1(t *testing.T) {
 	failures := 0
 	newHandler := func(p fakeProvider, l *fakeLedger) *Handler {
 		return &Handler{Providers: lookup{"stripe": p, "manual": fakeProvider{}}, Ledger: l, Customers: customers{"cus_1": "t1"},
@@ -128,4 +128,46 @@ func TestB_W1(t *testing.T) {
 // isProblem: every B-W1 error is gincommon's RFC 9457 response.
 func isProblem(w *httptest.ResponseRecorder) bool {
 	return strings.HasPrefix(w.Header().Get("Content-Type"), "application/problem+json") && strings.Contains(w.Body.String(), `"type"`)
+}
+
+// BIL-AUTH-5: B-W1 binds no tenant and trusts no header but the provider
+// signature. CD-19 identity headers naming another tenant neither admit a
+// badly signed callback nor change the tenant, which comes from Billing's
+// customer mapping only.
+func TestBIL_AUTH_5_WebhookTrustsOnlyTheSignature(t *testing.T) {
+	identity := map[string]string{"x-user-id": "4b1e8a52-1111-4222-8333-944455556666", "x-tenant-id": "t-other",
+		"x-tenant-roles": "tenant_owner,platform_operator"}
+	post := func(h *Handler, withIdentity bool) *httptest.ResponseRecorder {
+		r := gin.New()
+		h.Register(r)
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/stripe", strings.NewReader(`{"id":"evt_1"}`))
+		req.Header.Set("Stripe-Signature", "t=1,v1=abc")
+		if withIdentity {
+			for k, v := range identity {
+				req.Header.Set(k, v)
+			}
+		}
+		r.ServeHTTP(w, req)
+		return w
+	}
+	newHandler := func(verifyOK bool, l *fakeLedger) *Handler {
+		return &Handler{Providers: lookup{"stripe": fakeProvider{webhooks: true, verifyOK: verifyOK}}, Ledger: l,
+			Customers: customers{"cus_1": "t1"}, MaxBodyBytes: 1024}
+	}
+
+	// A bad signature is refused whatever identity the headers claim.
+	l := &fakeLedger{}
+	if w := post(newHandler(false, l), true); w.Code != http.StatusBadRequest || len(l.inserted) != 0 {
+		t.Fatalf("bad signature with identity headers: %d stored=%d", w.Code, len(l.inserted))
+	}
+	// A valid callback needs no identity, and identity headers do not bind
+	// the tenant: it is the customer mapping's.
+	for _, withIdentity := range []bool{false, true} {
+		l := &fakeLedger{}
+		w := post(newHandler(true, l), withIdentity)
+		if w.Code != http.StatusOK || len(l.inserted) != 1 || l.inserted[0].TenantID == nil || *l.inserted[0].TenantID != "t1" {
+			t.Fatalf("identity headers %v: %d %+v", withIdentity, w.Code, l.inserted)
+		}
+	}
 }

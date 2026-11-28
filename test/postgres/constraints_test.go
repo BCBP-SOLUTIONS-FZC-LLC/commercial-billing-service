@@ -71,14 +71,19 @@ func TestCheckoutRequestedSeatsBound(t *testing.T) {
 	}
 }
 
-// BIL-SEAT-1 / BIL-SEAT-2: one open purchase and one open schedule.
-func TestBIL_SEAT_1_and_2_OneOpen(t *testing.T) {
+// BIL-SEAT-1: one open seat purchase per subscription (uq_sp_one_open).
+func TestBIL_SEAT_1_OneOpenPurchase(t *testing.T) {
 	s := seedTenant(t)
 	ins := `INSERT INTO seat_purchases (purchase_id, tenant_id, billing_subscription_id, seats_added, seats_before, seats_after, proration_instant,
 	          amount_minor, currency, amount_source, status, requested_by, idempotency_key)
 	        VALUES ($1, $2, $3, 1, 10, 11, now(), 100, 'USD', 'provider_preview', 'pending_payment', $4, $5)`
 	mustExec(t, superPool, ins, newID(), s.Tenant, s.Sub, commercialSystem, "key-open-1")
 	want(t, "23505", "second open seat purchase", ins, newID(), s.Tenant, s.Sub, commercialSystem, "key-open-2")
+}
+
+// BIL-SEAT-2: one open seat change schedule per subscription (uq_scs_one_open).
+func TestBIL_SEAT_2_OneOpenSchedule(t *testing.T) {
+	s := seedTenant(t)
 	// The seed already has an open schedule.
 	want(t, "23505", "second open schedule", `
 		INSERT INTO seat_change_schedules (schedule_id, tenant_id, billing_subscription_id, target_seats, effective_at, requested_by)

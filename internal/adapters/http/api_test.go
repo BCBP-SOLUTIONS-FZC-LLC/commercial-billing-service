@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -94,15 +95,21 @@ func (passTx) RunInTenantTx(ctx context.Context, _ string, fn func(context.Conte
 // recorder counts use-case calls; everything else is Unimplemented (501).
 type recorder struct {
 	app.Unimplemented
-	mu       sync.Mutex
-	checkout int
-	charge   func() (app.ChargeResult, error)
+	mu          sync.Mutex
+	checkout    int
+	checkoutErr error
+	charge      func() (app.ChargeResult, error)
 }
 
 func (r *recorder) StartCheckout(context.Context, app.Caller, string, app.CheckoutRequest) (app.CheckoutResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.checkout++
+	if r.checkoutErr != nil {
+		err := r.checkoutErr
+		r.checkoutErr = nil
+		return app.CheckoutResult{}, err
+	}
 	return app.CheckoutResult{CheckoutSessionID: someID, CheckoutURL: "https://checkout.example/cs_1", BillingSubscriptionID: someID}, nil
 }
 
@@ -224,7 +231,7 @@ func TestCatalogue(t *testing.T) {
 // §5.2 / BIL-AUTH-1, -2, -7: every role × tenant route. A role without the
 // route's permission is 403 INSUFFICIENT_PERMISSION before the use case; a
 // role with it reaches the use case (501 until Phase 6).
-func TestBIL_AUTH_RoleRouteMatrix(t *testing.T) {
+func TestBIL_AUTH_1_RoleRouteMatrix(t *testing.T) {
 	r, _, _ := newAPI(t, true)
 	roles := []string{domain.RoleTenantOwner, domain.RoleTenantAdmin, domain.RoleTenderAdmin, domain.RoleMember, domain.RolePlatformOperator, ""}
 	for _, rt := range Routes() {
@@ -271,7 +278,7 @@ func TestBIL_AUTH_7_OverlapRule(t *testing.T) {
 }
 
 // BIL-API-2, BIL-AUTH-4, 401 without identity, 415.
-func TestTenantGuards(t *testing.T) {
+func TestBIL_API_2_TenantGuards(t *testing.T) {
 	r, _, _ := newAPI(t, true)
 	path := "/api/v1/tenants/" + tenantA + "/subscription"
 	if w := do(r, req{"GET", path, "", identity(tenantB, "tenant_owner")}); w.Code != 403 || errorCode(w) != "INSUFFICIENT_ROLE" {
@@ -300,7 +307,7 @@ func TestTenantGuards(t *testing.T) {
 }
 
 // §10.4: unknown fields and out-of-range values are 400 VALIDATION_ERROR.
-func TestValidation(t *testing.T) {
+func TestBIL_API_1_Validation(t *testing.T) {
 	r, rec, _ := newAPI(t, true)
 	h := identity(tenantA, "tenant_owner")
 	h[headerIdempotencyKey] = "key-validation-1"
@@ -325,7 +332,7 @@ func TestValidation(t *testing.T) {
 }
 
 // §9.2: required keys, replay, reuse with another body, key format.
-func TestIdempotency(t *testing.T) {
+func TestBIL_API_3_Idempotency(t *testing.T) {
 	r, rec, _ := newAPI(t, true)
 	path := "/api/v1/tenants/" + tenantA + "/subscription/checkout"
 	body := validBodies["B-P2"]
@@ -352,6 +359,18 @@ func TestIdempotency(t *testing.T) {
 	_ = do(r, req{"POST", path, `{"plan":"x"}`, h})
 	if w := do(r, req{"POST", path, body, h}); w.Code != 201 {
 		t.Fatalf("after 400: %d", w.Code)
+	}
+	// D-L3 (rev 0.73): a retryable 409 is not stored, so the retry with the
+	// same key runs instead of replaying the conflict for 72 h.
+	for i, code := range []domain.ErrorCode{domain.ErrConcurrentUpdate, domain.ErrOptimisticLockConflict} {
+		h[headerIdempotencyKey] = fmt.Sprintf("checkout-409-%d", i)
+		rec.checkoutErr = domain.NewError(code, "conflict")
+		if w := do(r, req{"POST", path, body, h}); w.Code != 409 || errorCode(w) != string(code) {
+			t.Fatalf("%s: %d %s", code, w.Code, errorCode(w))
+		}
+		if w := do(r, req{"POST", path, body, h}); w.Code != 201 || w.Header().Get("Idempotent-Replayed") != "" {
+			t.Fatalf("retry after %s: %d", code, w.Code)
+		}
 	}
 }
 
@@ -400,8 +419,88 @@ func TestB_I1(t *testing.T) {
 	}
 }
 
+// BIL-AUTH-3: B-I1 admits only the Signup BFF's mesh principal, the nearest
+// hop of X-Forwarded-Client-Cert. No certificate, another service account
+// or a forged earlier element naming the BFF is 403 INSUFFICIENT_ROLE
+// before the use case runs.
+func TestBIL_AUTH_3_OnlyTheSignupBFFPrincipal(t *testing.T) {
+	r, _, _ := newAPI(t, true)
+	calls := 0
+	path := "/api/v1/internal/subscriptions/authorize-and-charge"
+	body := `{"tenant_id":"` + tenantA + `","plan_code":"pro","licensed_seats":10,"payment_method_ref":"pm_1"}`
+	for name, xfcc := range map[string]string{
+		"no certificate":         "",
+		"another service":        strings.Replace(bffXFCC, "ns/bff/sa/bff-signup", "ns/bff/sa/bff-public", 1),
+		"forged earlier element": `URI=spiffe://cluster.local/ns/bff/sa/bff-signup,By=spiffe://cluster.local/ns/billing/sa/commercial-billing;URI=spiffe://cluster.local/ns/evil/sa/attacker`,
+	} {
+		h := map[string]string{"x-tenant-id": tenantA, headerIdempotencyKey: "charge:" + tenantA}
+		if xfcc != "" {
+			h[headerXFCC] = xfcc
+		}
+		r2, rec, _ := newAPI(t, true)
+		rec.charge = func() (app.ChargeResult, error) { calls++; return app.ChargeResult{}, nil }
+		if w := do(r2, req{"POST", path, body, h}); w.Code != 403 || errorCode(w) != "INSUFFICIENT_ROLE" {
+			t.Errorf("%s: %d %s", name, w.Code, errorCode(w))
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("refused callers reached the use case %d times", calls)
+	}
+	// Control: the BFF itself is admitted.
+	h := map[string]string{"x-tenant-id": tenantA, headerIdempotencyKey: "charge:" + tenantA, headerXFCC: bffXFCC}
+	if w := do(r, req{"POST", path, body, h}); w.Code != 201 {
+		t.Fatalf("bff-signup: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// BIL-AUTH-4: commercial-system (by principal id or by role) is refused
+// inbound on every tenant, internal and operator route, before the use case.
+func TestBIL_AUTH_4_SystemCallerRejectedOnEveryRoute(t *testing.T) {
+	r, rec, _ := newAPI(t, true)
+	charged := 0
+	rec.charge = func() (app.ChargeResult, error) { charged++; return app.ChargeResult{}, nil }
+	for _, rt := range Routes() {
+		roles := domain.RoleTenantOwner
+		if strings.HasPrefix(rt.ID, "B-O") {
+			roles = "platform_operator,pci_owner_reviewer"
+		}
+		for name, h := range map[string]map[string]string{
+			"principal": identity(tenantA, roles),
+			"role":      identity(tenantA, roles+","+domain.RoleCommercialSystem),
+		} {
+			if name == "principal" {
+				h["x-user-id"] = domain.CommercialSystemPrincipal
+			}
+			if rt.ID == "B-I1" {
+				// B-I1 identifies its caller by mesh principal only (no CD-19
+				// identity is read there): commercial-system arrives as
+				// Billing's own service account and is refused.
+				h[headerXFCC] = strings.Replace(bffXFCC, "ns/bff/sa/bff-signup", "ns/billing/sa/commercial-billing", 1)
+				h[headerIdempotencyKey] = "charge:" + tenantA
+				w := do(r, req{rt.Method, rt.Path, `{"tenant_id":"` + tenantA + `","plan_code":"pro","licensed_seats":10,"payment_method_ref":"pm_1"}`, h})
+				if w.Code != 403 || errorCode(w) != "INSUFFICIENT_ROLE" {
+					t.Errorf("%s by %s: %d %s", rt.ID, name, w.Code, errorCode(w))
+				}
+				// rev 0.73: also refused behind the BFF's own principal.
+				h[headerXFCC] = bffXFCC
+				w = do(r, req{rt.Method, rt.Path, `{"tenant_id":"` + tenantA + `","plan_code":"pro","licensed_seats":10,"payment_method_ref":"pm_1"}`, h})
+				if w.Code != 403 || errorCode(w) != "INSUFFICIENT_ROLE" {
+					t.Errorf("%s by %s behind the BFF principal: %d %s", rt.ID, name, w.Code, errorCode(w))
+				}
+				continue
+			}
+			if w := call(r, rt, h, true); w.Code != 403 || errorCode(w) != "INSUFFICIENT_ROLE" {
+				t.Errorf("%s by %s: %d %s", rt.ID, name, w.Code, errorCode(w))
+			}
+		}
+	}
+	if rec.checkout != 0 || charged != 0 {
+		t.Fatalf("commercial-system reached a use case: checkout=%d charge=%d", rec.checkout, charged)
+	}
+}
+
 // BIL-AUTH-2/6, B-O17's pci_owner_reviewer, operator idempotency.
-func TestOperatorGuards(t *testing.T) {
+func TestBIL_AUTH_2_OperatorGuards(t *testing.T) {
 	path := "/api/v1/operator/billing/provider-certifications/" + someID + "/review"
 	body := validBodies["B-O17"]
 	op := identity(tenantA, "platform_operator")

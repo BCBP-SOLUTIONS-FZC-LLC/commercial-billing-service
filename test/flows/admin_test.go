@@ -14,7 +14,7 @@ import (
 
 // B-O11 closes the current row and adds the new one; overlap → 409; AL-5
 // under platform_tenant. B-O12 adds a pack.
-func TestPriceBook(t *testing.T) {
+func TestBIL_AUD_1_PriceBook(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	from := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)

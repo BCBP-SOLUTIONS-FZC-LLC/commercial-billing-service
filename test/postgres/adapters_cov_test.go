@@ -120,7 +120,7 @@ func TestInboxRunnerTenantAndPrune(t *testing.T) {
 
 // Update with a stale record_version is 409 OPTIMISTIC_LOCK_CONFLICT with
 // the current version, and nothing changes.
-func TestSubscriptionUpdateStaleVersion(t *testing.T) {
+func TestBIL_CONC_3_SubscriptionUpdateStaleVersion(t *testing.T) {
 	ctx := context.Background()
 	tenant, subID := newAccountAndSubscription(t)
 	subs := pgadapter.NewSubscriptionRepository(appPool)

@@ -34,7 +34,7 @@ func spans(t *testing.T) *tracetest.InMemoryExporter {
 
 // Spans from the app layer are gincommon spans with the §11.3 attributes;
 // errors are recorded; log lines get trace_id and span_id.
-func TestTracerThroughGincommon(t *testing.T) {
+func TestBIL_OPS_10_TracerThroughGincommon(t *testing.T) {
 	exp := spans(t)
 	app.SetTracer(observability.NewTracer("commercial-billing"))
 	t.Cleanup(func() { app.SetTracer(port.NopTracer{}) })

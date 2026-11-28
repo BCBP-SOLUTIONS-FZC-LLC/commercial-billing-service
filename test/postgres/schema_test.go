@@ -15,8 +15,8 @@ import (
 func TestMigrationsAppliedAndIdempotent(t *testing.T) {
 	ctx := context.Background()
 	v, dirty, err := pgadapter.DomainVersion(ctx, migrateDSN)
-	if err != nil || dirty || v != 10 {
-		t.Fatalf("domain version %d dirty=%v err=%v, want 10 clean", v, dirty, err)
+	if err != nil || dirty || v != 11 {
+		t.Fatalf("domain version %d dirty=%v err=%v, want 11 clean", v, dirty, err)
 	}
 	if err := pgadapter.MigrateSchema(ctx, migrateDSN, nil); err != nil {
 		t.Fatalf("re-run must be a no-op: %v", err)
@@ -123,7 +123,7 @@ func TestRLSWithCheck(t *testing.T) {
 
 // §14.5: billing_app has no access to the ledger or reconciliation tables;
 // the price book is read-only for it; billing_system can write them.
-func TestRoleGrants(t *testing.T) {
+func TestBIL_RLS_3_RoleGrants(t *testing.T) {
 	ctx := context.Background()
 	for _, tbl := range []string{"payment_event_ledger", "reconciliation_runs", "reconciliation_findings"} {
 		_, err := count(ctx, appPool, fmt.Sprintf(`SELECT count(*) FROM %s`, tbl))

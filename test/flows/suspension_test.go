@@ -95,7 +95,7 @@ func TestOperatorPauseOverride(t *testing.T) {
 
 // §8.8.4 offboarding: open purchase cancelled, provider subscription
 // cancelled now, subscription ended (offboarded), no bus event.
-func TestOffboarding(t *testing.T) {
+func TestBIL_SUB_2_Offboarding(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	tenant, sub := e.activeSubscription(t, "pro", 10)

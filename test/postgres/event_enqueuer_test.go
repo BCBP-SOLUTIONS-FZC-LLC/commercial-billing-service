@@ -63,7 +63,7 @@ func newEnqueuer(t *testing.T) *pgadapter.EventEnqueuer {
 
 // BIL-EVT-1/2/5: events commit with the change, ordered per tenant, with
 // strictly increasing Billing-clock times within one transaction.
-func TestEventEnqueuer(t *testing.T) {
+func TestBIL_EVT_1_EventEnqueuer(t *testing.T) {
 	ctx := context.Background()
 	enq := newEnqueuer(t)
 	runner := pgadapter.NewTxRunner(appPool)
@@ -135,7 +135,7 @@ func TestEventEnqueuer(t *testing.T) {
 
 // BIL-EVT-2: a rolled-back change leaves no event; nothing is written
 // outside a transaction; an invalid payload is refused.
-func TestEventEnqueuerAtomicity(t *testing.T) {
+func TestBIL_EVT_2_EventEnqueuerAtomicity(t *testing.T) {
 	ctx := context.Background()
 	enq := newEnqueuer(t)
 	runner := pgadapter.NewTxRunner(appPool)

@@ -3,6 +3,7 @@ package http
 import (
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -210,6 +211,14 @@ func authorizeAndCharge(a *APIConfig) gin.HandlerFunc {
 			writeError(c, err)
 			return
 		}
+		// BIL-AUTH-4 (rev 0.73): B-I1 reads no CD-19 identity, so the
+		// system-caller check reads the raw headers: commercial-system is
+		// refused even behind the BFF's principal.
+		if c.GetHeader("x-user-id") == domain.CommercialSystemPrincipal ||
+			slices.Contains(strings.Split(strings.ReplaceAll(c.GetHeader("x-tenant-roles"), " ", ""), ","), domain.RoleCommercialSystem) {
+			writeError(c, domain.NewError(domain.ErrInsufficientRole, "commercial-system is not accepted inbound"))
+			return
+		}
 		who := caller(c)
 		if !strings.EqualFold(r.TenantID, who.TenantID) { // BIL-API-1
 			writeError(c, domain.NewError(domain.ErrTenantMismatch, "tenant_id must equal x-tenant-id"))
@@ -302,7 +311,7 @@ var operatorRoutes = []routeDef{
 		}
 		return a.Operator.SetCollectionPause(c.Request.Context(), w, t, r)
 	})),
-	route("B-O11", mPost, op+"/billing/plan-prices", idemRequired, withBody(201, true, func(a *APIConfig, c *gin.Context, w app.Caller, r app.PlanPriceRequest) (domain.PlanPrice, error) {
+	route("B-O11", mPost, op+"/billing/plan-prices", idemRequired, withBody(201, true, func(a *APIConfig, c *gin.Context, w app.Caller, r app.PlanPriceRequest) (app.PlanPriceView, error) {
 		return a.Operator.AddPlanPrice(c.Request.Context(), w, r)
 	})),
 	route("B-O12", mPost, op+"/billing/token-packs", idemRequired, withBody(201, true, func(a *APIConfig, c *gin.Context, w app.Caller, r app.TokenPackRequest) (any, error) {

@@ -140,7 +140,7 @@ func (s *Service) StartReconciliation(ctx context.Context, c Caller, r Reconcili
 		return ReconciliationRunView{}, domain.NewError(domain.ErrValidation, "the window spans at most 35 days")
 	}
 	run := port.ReconRun{RunID: newID(), Provider: r.Provider, WindowStart: r.WindowStart.UTC(), WindowEnd: r.WindowEnd.UTC(),
-		AutoRepair: r.AutoRepair, StartedBy: c.UserID}
+		AutoRepair: r.AutoRepair, StartedBy: c.UserID, Reason: r.Reason}
 	if err := s.Recon.Queue(ctx, run); err != nil {
 		return ReconciliationRunView{}, err
 	}
@@ -167,7 +167,6 @@ func (s *Service) GetReconciliationRun(ctx context.Context, _ Caller, runID stri
 	return out, nil
 }
 
-// providerStatus maps a provider subscription status to Billing's.
 // seatAndPlanFindings compares a live subscription's seat quantity and
 // price with the provider's (§8.13, F-10 rev 0.71). An open seat purchase or
 // pending upgrade explains a difference while it settles, so none is
@@ -225,6 +224,7 @@ func int64Field(v any) (int64, bool) {
 	return 0, false
 }
 
+// providerStatus maps a provider subscription status to Billing's.
 func providerStatus(st string) domain.SubscriptionStatus {
 	switch st {
 	case "active", "trialing":
@@ -270,7 +270,7 @@ func (s *Service) RunReconciliation(ctx context.Context, _ int) (int, error) {
 		return s.platformAudit(ctx, port.AuditEntry{EntryType: "commercial.cross_tenant_job.ran", Action: "reconciliation." + status,
 			TargetType: "reconciliation_run", TargetID: run.RunID, SourceEventType: "ReconciliationRunFinished", NaturalID: run.RunID,
 			OccurredAt: s.now(), Metadata: map[string]any{"provider": run.Provider, "window_start": run.WindowStart, "window_end": run.WindowEnd,
-				"counts": counts, "started_by": run.StartedBy}})
+				"counts": counts, "started_by": run.StartedBy, "reason": run.Reason}})
 	})
 }
 

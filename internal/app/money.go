@@ -177,9 +177,14 @@ func (s *Service) refund(ctx context.Context, c Caller, tenantID, invoiceID stri
 			return domain.NewError(domain.ErrValidation, "only a paid invoice can be refunded")
 		case currency != inv.Currency:
 			return domain.NewError(domain.ErrCurrencyMismatch, "the currency differs from the invoice's")
-		case amount > inv.AmountPaidMinor-inv.AmountRefundedMinor:
+		}
+		left, err := s.refundableMinor(ctx, inv)
+		if err != nil {
+			return err
+		}
+		if amount > left {
 			return domain.NewError(domain.ErrRefundExceedsPaid, "the amount exceeds what is left to refund").
-				With("refundable_minor", inv.AmountPaidMinor-inv.AmountRefundedMinor)
+				With("refundable_minor", left)
 		}
 		if inv.Kind == domain.InvoiceTokenAddon {
 			if !domain.AddonRefundAllowed(domain.AddonRefundCategory(category)) { // BIL-ADD-3
@@ -239,13 +244,52 @@ func (s *Service) refund(ctx context.Context, c Caller, tenantID, invoiceID stri
 		}
 		switch res.Status {
 		case domain.RefundSucceeded:
-			return s.refundSettled(ctx, &f, true, webhookMeta())
+			return s.refundSettled(ctx, &f, true, refundMeta(c)) // settled in the caller's request (C-1)
 		case domain.RefundFailed:
-			return s.refundSettled(ctx, &f, false, webhookMeta())
+			return s.refundSettled(ctx, &f, false, refundMeta(c))
 		}
 		return nil
 	})
 	return f, err
+}
+
+// refundMeta is the envelope metadata of a refund settled in its own
+// request: the operator's (C-1, rev 0.73), or the system's when the saga
+// worker completes a reversal without an operator.
+func refundMeta(c Caller) port.EventMeta {
+	if c.UserID == "" {
+		return webhookMeta()
+	}
+	return metaFor(c)
+}
+
+// refundableMinor is what is left to refund on a paid invoice: paid minus
+// refunded minus refunds still pending at the provider, so two refunds in
+// flight cannot together pay back more than was paid (D-L14, rev 0.73).
+// Runs in the caller's transaction.
+func (s *Service) refundableMinor(ctx context.Context, inv domain.Invoice) (int64, error) {
+	left := inv.AmountPaidMinor - inv.AmountRefundedMinor
+	refunds, err := s.Money.RefundsForInvoice(ctx, inv.InvoiceID)
+	if err != nil {
+		return 0, err
+	}
+	for _, r := range refunds {
+		if r.Status == domain.RefundPending {
+			left -= r.AmountMinor
+		}
+	}
+	return max(left, 0), nil
+}
+
+// refundableNow is refundableMinor in its own transaction.
+func (s *Service) refundableNow(ctx context.Context, tenantID string, inv domain.Invoice) (int64, error) {
+	var left int64
+	err := s.Tx.RunInTenantTx(ctx, tenantID, func(ctx context.Context) error {
+		var err error
+		left, err = s.refundableMinor(ctx, inv)
+		return err
+	})
+	return left, err
 }
 
 // refundSettled applies a refund outcome under the lock: the invoice's
@@ -716,10 +760,14 @@ func (s *Service) reversalRefund(ctx context.Context, c Caller, tenantID, billin
 		return &f.RefundID, err
 	}
 	inv, ok, err := s.conversionInvoice(ctx, tenantID)
-	if err != nil || !ok || inv.AmountPaidMinor-inv.AmountRefundedMinor <= 0 {
+	if err != nil || !ok {
 		return nil, err
 	}
-	f, err := s.refund(ctx, rc, tenantID, inv.InvoiceID, inv.AmountPaidMinor-inv.AmountRefundedMinor, inv.Currency,
+	left, err := s.refundableNow(ctx, tenantID, inv)
+	if err != nil || left <= 0 {
+		return nil, err
+	}
+	f, err := s.refund(ctx, rc, tenantID, inv.InvoiceID, left, inv.Currency,
 		domain.RefundCategoryConversionReversal, reason)
 	if err != nil {
 		return nil, err
@@ -785,8 +833,31 @@ func (s *Service) sagaRefund(ctx context.Context, c Caller, tenantID, sagaID str
 	if err != nil {
 		return SagaView{}, err
 	}
-	if found && inv.AmountPaidMinor-inv.AmountRefundedMinor > 0 {
-		if _, err := s.refund(ctx, c, tenantID, inv.InvoiceID, inv.AmountPaidMinor-inv.AmountRefundedMinor, inv.Currency,
+	// One key per subscription (D-L14, rev 0.73): a retry without a client
+	// Idempotency-Key resumes the refund an earlier attempt recorded, with
+	// its own amount, instead of starting a second one.
+	rc := c
+	rc.IdempotencyKey = "refund:signup:" + sub.BillingSubscriptionID
+	var prev domain.Refund
+	var resumed bool
+	if err := s.Tx.RunInTenantTx(ctx, tenantID, func(ctx context.Context) error {
+		var err error
+		prev, resumed, err = s.Money.RefundByKey(ctx, tenantID, rc.IdempotencyKey)
+		return err
+	}); err != nil {
+		return SagaView{}, err
+	}
+	left := int64(0)
+	switch {
+	case resumed:
+		left = prev.AmountMinor
+	case found:
+		if left, err = s.refundableNow(ctx, tenantID, inv); err != nil {
+			return SagaView{}, err
+		}
+	}
+	if left > 0 {
+		if _, err := s.refund(ctx, rc, tenantID, inv.InvoiceID, left, inv.Currency,
 			domain.RefundCategorySignupFailed, r.Reason); err != nil {
 			return SagaView{}, err
 		}

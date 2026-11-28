@@ -14,7 +14,7 @@ import (
 
 // §8.5: preview → purchase → paid now → confirmed, seat item, history,
 // TenantSeatsChanged {reason: purchase, billing_ref: purchase_id}.
-func TestSeatPurchase(t *testing.T) {
+func TestBIL_EVT_4_SeatPurchase(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	tenant, sub := e.activeSubscription(t, "pro", 10)
@@ -126,7 +126,7 @@ func TestSeatPurchaseDeferred(t *testing.T) {
 
 // §8.6.1: B-P10 schedules (replacing an earlier one), no provider call and
 // no event (BIL-SEAT-4); B-P11 cancels; validation errors.
-func TestScheduledReduction(t *testing.T) {
+func TestBIL_SEAT_4_ScheduledReduction(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	tenant, sub := e.activeSubscription(t, "pro", 100)

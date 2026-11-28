@@ -518,8 +518,13 @@ func (s *Service) CancelPlanChange(ctx context.Context, _ Caller, tenantID strin
 		if !found || req.Status != domain.ChangeScheduled {
 			return domain.NewError(domain.ErrPlanChangeNotFound, "no scheduled plan change")
 		}
-		sub, err = s.Subs.Get(ctx, req.BillingSubscriptionID)
-		return err
+		if sub, err = s.Subs.Get(ctx, req.BillingSubscriptionID); err != nil {
+			return err
+		}
+		if sub.CollectionPaused { // §8.10 BIL-SUB-7 (D-L2, rev 0.73)
+			return domain.NewError(domain.ErrCollectionPaused, "billing is paused for this subscription")
+		}
+		return nil
 	}); err != nil {
 		return err
 	}

@@ -24,7 +24,7 @@ func currentUser(ctx context.Context, t *testing.T, p *pgcommon.Pool) (user, tim
 // Every pool is pgcommon's environment config: the app pool as billing_app,
 // the system pool and the audit drainer with their own role, all with
 // pgcommon's settings (PG_STATEMENT_TIMEOUT here).
-func TestPoolsFromPgcommonConfig(t *testing.T) {
+func TestBIL_OPS_1_PoolsFromPgcommonConfig(t *testing.T) {
 	ctx := context.Background()
 	t.Setenv("DATABASE_URL", withUser(migrateDSN, "billing_app", "devpassword"))
 	t.Setenv("PG_STATEMENT_TIMEOUT", "4s")

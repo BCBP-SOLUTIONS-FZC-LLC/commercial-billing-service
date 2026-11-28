@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // Payload types of billing.events (LLD §7.3). Every payload carries
@@ -239,7 +237,7 @@ func (p TenantQuotaAddOnChanged) Validate() error {
 		}
 		// Entitlements decodes purchase_ref as a UUID and its consumed schema
 		// declares format uuid (contract test, LLD §14.4): canonical form only.
-		if len(p.PurchaseRef) != 36 || uuid.Validate(p.PurchaseRef) != nil {
+		if !canonicalUUID(p.PurchaseRef) {
 			return invalid("TenantQuotaAddOnChanged refund: purchase_ref must be a UUID")
 		}
 	default:
@@ -275,3 +273,26 @@ func (p TenantPaymentPastDue) Tenant() string        { return p.TenantID }
 func (p TenantSubscriptionCancelled) Tenant() string { return p.TenantID }
 func (p TenantReactivated) Tenant() string           { return p.TenantID }
 func (p TenantQuotaAddOnChanged) Tenant() string     { return p.TenantID }
+
+// canonicalUUID reports whether s is a UUID in canonical 8-4-4-4-12 hex form
+// (standard library only, LLD §3.2; C-8 rev 0.73).
+func canonicalUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i := 0; i < 36; i++ {
+		c := s[i]
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			hex := '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
+			if !hex {
+				return false
+			}
+		}
+	}
+	return true
+}

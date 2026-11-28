@@ -39,7 +39,7 @@ func subscribe(t *testing.T, topicARN, queueName, filter string) {
 // by the outbox runner to SNS billing-events, Glue-framed (§7.2), with the
 // SNS attributes the subscriber filters use (§7.3.1), and reaches only the
 // queues whose filter admits its type.
-func TestOutboxPublishesGlueFramedToSNS(t *testing.T) {
+func TestBIL_EVT_5_OutboxPublishesGlueFramedToSNS(t *testing.T) {
 	ctx := context.Background()
 	topicName := unique("billing-events")
 	topic, err := snsClient().CreateTopic(ctx, &sns.CreateTopicInput{Name: &topicName})

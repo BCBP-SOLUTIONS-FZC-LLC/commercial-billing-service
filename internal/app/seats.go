@@ -445,6 +445,9 @@ func (s *Service) scheduleReduction(ctx context.Context, c Caller, tenantID stri
 		if !found || (sub.Status != domain.StatusActive && sub.Status != domain.StatusPastDue) {
 			return domain.NewError(domain.ErrSubscriptionNotActive, "the subscription is not active")
 		}
+		if sub.CollectionPaused { // §8.10 BIL-SUB-7 (D-L2, rev 0.73)
+			return domain.NewError(domain.ErrCollectionPaused, "billing is paused for this subscription")
+		}
 		if !sub.AutoRenew {
 			return domain.NewError(domain.ErrSubscriptionEnding, "the subscription ends at the period end")
 		}
@@ -495,6 +498,9 @@ func (s *Service) CancelReduction(ctx context.Context, _ Caller, tenantID string
 			return err
 		} else if !found {
 			return domain.NewError(domain.ErrScheduleNotFound, "no scheduled reduction")
+		}
+		if sub.CollectionPaused { // §8.10 BIL-SUB-7 (D-L2, rev 0.73)
+			return domain.NewError(domain.ErrCollectionPaused, "billing is paused for this subscription")
 		}
 		sch, found, err = s.Schedules.Latest(ctx, sub.BillingSubscriptionID)
 		switch {

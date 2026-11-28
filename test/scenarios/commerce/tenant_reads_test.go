@@ -30,7 +30,7 @@ func (e *env) warns(tenant string) int {
 // with its follow-up (§7.4): read live, nothing for a manual account,
 // provider and storage failures, and the follow-up retried on each pass
 // until the provider default is set and recorded.
-func TestPaymentMethodPaths(t *testing.T) {
+func TestBIL_API_5_PaymentMethodPaths(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	pm, err := e.svc.ListPaymentMethods(ctx, owner, newTenant())

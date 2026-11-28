@@ -142,8 +142,14 @@ func actorOf(c Caller) string {
 // history appends a §4.2.6 row.
 func (s *Service) history(ctx context.Context, sub domain.Subscription, from *domain.SubscriptionStatus, cause, actor string,
 	eventRef *string, seats *[2]*int, plans *[2]*domain.PlanCode) error {
-	h := domain.StatusHistoryEntry{TenantID: sub.TenantID, BillingSubscriptionID: sub.BillingSubscriptionID, FromStatus: from,
-		ToStatus: sub.Status, Cause: cause, PaymentEventRef: eventRef, ActorID: actor}
+	return s.historyEntry(ctx, sub, domain.StatusHistoryEntry{TenantID: sub.TenantID, BillingSubscriptionID: sub.BillingSubscriptionID,
+		FromStatus: from, ToStatus: sub.Status, Cause: cause, PaymentEventRef: eventRef, ActorID: actor}, seats, plans)
+}
+
+// historyEntry appends h (with seats and plans when given) and logs a
+// status transition.
+func (s *Service) historyEntry(ctx context.Context, sub domain.Subscription, h domain.StatusHistoryEntry, seats *[2]*int, plans *[2]*domain.PlanCode) error {
+	from, cause, actor := h.FromStatus, h.Cause, h.ActorID
 	if seats != nil {
 		h.FromSeats, h.ToSeats = seats[0], seats[1]
 	}
@@ -214,7 +220,7 @@ func (s *Service) actionsFor(c Caller, sub *domain.Subscription, acct *domain.Bi
 		}
 	case domain.StatusIncomplete, domain.StatusEnded:
 	}
-	add(domain.PermBillingView, "view_invoices")
+	add(domain.PermBillingDownloadInvoice, "view_invoices") // B-P17 needs it (C-7, rev 0.73)
 	add(domain.PermPaymentMethodManage, "edit_billing_contact")
 	return nonNil(out)
 }

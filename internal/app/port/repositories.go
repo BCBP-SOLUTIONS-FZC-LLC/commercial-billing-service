@@ -288,6 +288,7 @@ type AdminRepo interface {
 // ReconRun is a reconciliation run (§4.2.22).
 type ReconRun struct {
 	RunID, Provider, StartedBy, Status string
+	Reason                             string // B-O5's reason (C-5, rev 0.73)
 	WindowStart, WindowEnd             time.Time
 	AutoRepair                         bool
 	Counts                             map[string]int
