@@ -143,7 +143,9 @@ env:
   SQS_VISIBILITY_TIMEOUT: 60s
   OUTBOX_POLL_INTERVAL: 500ms
   OUTBOX_BATCH_SIZE: "50"
-  OUTBOX_MAX_ATTEMPTS: "5"
+  OUTBOX_MAX_ATTEMPTS: "10"         # HLD §9.3 v0.66 (BL-OQ-29): 10 attempts,
+  OUTBOX_RETRY_BACKOFF: "30s"       # 30 s doubling,
+  OUTBOX_MAX_RETRY_BACKOFF: "5m"    # capped at 5 min: ~32 min before a row dead-letters
   OUTBOX_RETENTION_DAYS: "8"
   # Read by platform-events' config (LoadSQS / LoadOutbox); Billing's §12
   # values above (wait, visibility, max receive, poll, batch, attempts) are
