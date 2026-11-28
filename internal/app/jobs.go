@@ -226,6 +226,20 @@ func (s *Service) priceAtRenewal(ctx context.Context, sub domain.Subscription, i
 	} else if found && req.Direction == domain.DirectionDowngrade && req.Status == domain.ChangeScheduled {
 		plan = req.ToPlan
 	}
+	return s.priceAt(ctx, sub, cur, plan)
+}
+
+// planPriceAtRenewal is plan's row effective at R (the item's current row
+// when there is no period or no such row).
+func (s *Service) planPriceAtRenewal(ctx context.Context, sub domain.Subscription, item domain.SubscriptionItem, plan domain.PlanCode) (domain.PlanPrice, error) {
+	cur, err := s.Prices.Get(ctx, item.PriceID)
+	if err != nil || sub.CurrentPeriodEnd == nil {
+		return cur, err
+	}
+	return s.priceAt(ctx, sub, cur, plan)
+}
+
+func (s *Service) priceAt(ctx context.Context, sub domain.Subscription, cur domain.PlanPrice, plan domain.PlanCode) (domain.PlanPrice, error) {
 	p, ok, err := s.Prices.PriceAt(ctx, plan, sub.Interval, cur.Currency, sub.Provider, *sub.CurrentPeriodEnd)
 	if err != nil {
 		return domain.PlanPrice{}, err
@@ -486,7 +500,10 @@ func (s *Service) reapplyRenewalQuantity(ctx context.Context, prov port.PaymentP
 		if item, err = s.Subs.Item(ctx, sub.BillingSubscriptionID); err != nil {
 			return err
 		}
-		price, err = s.Prices.Get(ctx, item.PriceID)
+		// BIL-SUB-8: the current plan's row effective at the renewal (a
+		// newer price row), not the item's current one (F-12). Not the
+		// downgrade's plan: reapply runs because that downgrade was blocked.
+		price, err = s.planPriceAtRenewal(ctx, sub, item, sub.Plan)
 		return err
 	}); err != nil || !found || sch.RenewalSeats == nil || sub.ProviderSubscriptionID == nil {
 		return err

@@ -294,11 +294,26 @@ func TestReconciliationFailurePaths(t *testing.T) {
 	missing := []port.ReconPage{{Items: []domain.ProviderObjectState{provInv("in_gone_"+s, cus, map[string]string{"tenant_id": tenant})}}}
 	exec(t, `INSERT INTO payment_event_ledger (provider, provider_event_id, event_type, normalised_kind, livemode, provider_created_at, payload, status, outcome)
 		VALUES ('stripe', $1, 'invoice.paid', 'invoice_paid', false, now(), '{}', 'failed', 'failed:unknown_customer')`, "evt_nocus2_"+s)
+	// F-10 (rev 0.71): seats_mismatch and invoice_mismatch findings.
+	seatsDiff := provSub("sub_"+s, "active", nil)
+	seatsDiff.Fields = map[string]any{"quantity": int64(9)}
+	seats := []port.ReconPage{{Items: []domain.ProviderObjectState{seatsDiff}}}
+	e.mirror(t, tenant, s, "in_mm_"+s, "subscription_cycle", "open", 6900)
+	mmInv := provInv("in_mm_"+s, cus, nil)
+	mmInv.Status = "open"
+	if mmInv.Fields == nil {
+		mmInv.Fields = map[string]any{}
+	}
+	mmInv.Fields["amount_due_minor"] = int64(1)
+	amounts := []port.ReconPage{{Items: []domain.ProviderObjectState{mmInv}}}
 	cases := []struct {
 		name string
 		arm  func()
 	}{
 		{"provider unloaded", func() { e.reg.hidden["stripe"] = true }},
+		{"seats finding", func() { e.p.recon[port.ReconSubscriptions] = seats; e.fail("Recon.AddFinding", 0) }},
+		{"invoice mirrors", func() { e.fail("Recon.InvoiceMirrors", 0) }},
+		{"invoice mismatch finding", func() { e.p.recon[port.ReconInvoices] = amounts; e.fail("Recon.AddFinding", 0) }},
 		{"billing side", func() { e.fail("Recon.BillingSubscriptions", 0) }},
 		{"provider listing", func() { e.p.on("ListSince", answer{err: errProvider}) }},
 		{"orphan finding", func() { e.p.recon[port.ReconSubscriptions] = orphan; e.fail("Recon.AddFinding", 0) }},

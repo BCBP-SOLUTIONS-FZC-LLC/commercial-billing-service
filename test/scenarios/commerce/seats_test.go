@@ -186,6 +186,20 @@ func TestSeatPurchaseOutcomes(t *testing.T) {
 	if quantity(t, sub) != 15 {
 		t.Fatalf("quantity %d", quantity(t, sub))
 	}
+
+	// BIL-CONC-2 (rev 0.71): cancelled while ChangeQuantity runs (renewal
+	// top-up or offboarding) and the provider answers paid: not reopened,
+	// no seats added; the payment is parked for a refund (SEV-2).
+	e.p.on("ChangeQuantity", answer{outcome: port.PaymentOutcome{Status: port.PaymentPaid}, before: func(key string) {
+		exec(t, `UPDATE seat_purchases SET status = 'cancelled' WHERE purchase_id = $1::uuid`, strings.TrimPrefix(key, "seatpur:"))
+	}})
+	res, err = buy(withKey(owner, "k-seat-cancel"), 2)
+	if err != nil || res.Status != "cancelled" || quantity(t, sub) != 15 {
+		t.Fatalf("cancelled during the change %+v %v, quantity %d", res, err, quantity(t, sub))
+	}
+	if !e.log.has("ERROR", "BillingPaymentParked", "paid_after_cancel", res.PurchaseID) {
+		t.Fatalf("payment after cancel not parked: %v", e.log.lines)
+	}
 }
 
 // B-P8 / B-P9 reads with pagination, and the invoice.paid confirmation of

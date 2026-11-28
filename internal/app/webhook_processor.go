@@ -145,10 +145,26 @@ func (p *WebhookProcessor) processOne(ctx context.Context, row domain.LedgerEntr
 		// An operator decides (BIL-OPS-6): failed, no retry; the handler
 		// raised its own alert.
 		finish(domain.LedgerFailed, "failed:"+parked.Reason, nil)
+	case errors.Is(err, errConversionUnwinding):
+		// Waiting for B-O8 or B-O9 to finish is not a failure: retried
+		// every minute without spending an attempt, so a reversal longer than
+		// the retry budget never parks the callback (F-7, rev 0.71).
+		next := p.now().Add(unwindingRetryAfter)
+		if p.Metrics != nil {
+			p.Metrics.WebhookProcessed(row.Provider, row.NormalisedKind, string(domain.LedgerFailed), p.now().Sub(row.ReceivedAt))
+		}
+		if derr := p.Ledger.Defer(ctx, row.Provider, row.ProviderEventID, "failed:"+string(domain.ErrRequestInProgress), next); derr != nil && p.Log != nil {
+			p.Log.Error("ledger deferral not recorded; the row will be reclaimed", map[string]any{
+				"provider": row.Provider, "provider_event_id": row.ProviderEventID, "error": derr.Error()})
+		}
 	default:
 		p.retryOrPark(row, err, finish)
 	}
 }
+
+// unwindingRetryAfter is the wait before a callback deferred by a conversion
+// reversal runs again (RP-4 runs detached for up to 10 min, RP-D30).
+const unwindingRetryAfter = time.Minute
 
 // retryOrPark backs off 1 s, 2 s, 4 s … capped at 5 min; after MaxAttempts
 // the row stays failed (parked) with a SEV-3 for the runbook (§20.2).

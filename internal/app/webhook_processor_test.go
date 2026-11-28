@@ -17,8 +17,9 @@ type finished struct {
 
 type fakeLedger struct {
 	port.LedgerRepo
-	rows []domain.LedgerEntry
-	done map[string]finished
+	rows     []domain.LedgerEntry
+	done     map[string]finished
+	deferred []string
 }
 
 func (f *fakeLedger) Claim(context.Context, int, time.Duration) ([]domain.LedgerEntry, error) {
@@ -29,6 +30,13 @@ func (f *fakeLedger) Claim(context.Context, int, time.Duration) ([]domain.Ledger
 
 func (f *fakeLedger) Finish(_ context.Context, _, id string, st domain.LedgerStatus, outcome string, next *time.Time) error {
 	f.done[id] = finished{st, outcome, next}
+	return nil
+}
+
+// Defer records a deferral (status failed, retry time, attempt given back).
+func (f *fakeLedger) Defer(_ context.Context, _, id, outcome string, next time.Time) error {
+	f.done[id] = finished{domain.LedgerFailed, outcome, &next}
+	f.deferred = append(f.deferred, id)
 	return nil
 }
 
@@ -181,5 +189,29 @@ func TestUnloadedProvider(t *testing.T) {
 	_, _ = p.ProcessBatch(context.Background())
 	if l.done["evt_1"].outcome != "failed:provider_not_loaded" {
 		t.Fatalf("got %+v", l.done["evt_1"])
+	}
+}
+
+// F-7 (rev 0.71): a callback deferred while a conversion reversal runs is
+// retried a minute later without spending an attempt, even past the budget;
+// any other failure at the budget still parks.
+func TestDeferredByConversionReversalNeverParks(t *testing.T) {
+	unwinding := handlerFunc(func(context.Context, string, domain.PaymentEvent, domain.ProviderObjectState) (string, error) {
+		return "", errConversionUnwinding
+	})
+	p, l, _ := setup([]domain.LedgerEntry{row("evt_unwind", "invoice_paid", strp("t1"), `{}`, 10)}, unwinding, &fakeProvider{})
+	_, _ = p.ProcessBatch(context.Background())
+	got := l.done["evt_unwind"]
+	if len(l.deferred) != 1 || got.status != domain.LedgerFailed || got.outcome != "failed:REQUEST_IN_PROGRESS" ||
+		got.next == nil || !got.next.Equal(now.Add(time.Minute)) {
+		t.Fatalf("deferral %+v %v", got, l.deferred)
+	}
+	other := handlerFunc(func(context.Context, string, domain.PaymentEvent, domain.ProviderObjectState) (string, error) {
+		return "", domain.NewError(domain.ErrRequestInProgress, "another request in progress")
+	})
+	p, l, _ = setup([]domain.LedgerEntry{row("evt_busy", "invoice_paid", strp("t1"), `{}`, 10)}, other, &fakeProvider{})
+	_, _ = p.ProcessBatch(context.Background())
+	if len(l.deferred) != 0 || l.done["evt_busy"].next != nil {
+		t.Fatalf("a non-reversal failure at the budget must park: %+v", l.done["evt_busy"])
 	}
 }

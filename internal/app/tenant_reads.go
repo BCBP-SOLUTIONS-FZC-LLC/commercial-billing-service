@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 
@@ -167,6 +168,10 @@ func (s *Service) InvoiceDownloadURL(ctx context.Context, _ Caller, tenantID, in
 		return "", err
 	}
 	link, err := prov.InvoicePDFLink(ctx, port.InvoiceRef{ProviderInvoiceID: inv.ProviderInvoiceID})
+	if errors.Is(err, port.ErrNotFound) {
+		// No PDF (yet) at the provider, or the invoice is gone there (F-3).
+		return "", domain.NewError(domain.ErrInvoiceNotFound, "the invoice has no PDF at the payment provider")
+	}
 	if err != nil {
 		return "", providerErr(err)
 	}

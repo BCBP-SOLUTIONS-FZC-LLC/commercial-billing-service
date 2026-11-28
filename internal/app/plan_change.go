@@ -53,13 +53,19 @@ func (s *Service) liveForChange(ctx context.Context, tenantID string) (domain.Su
 }
 
 // targetPrice is the price row for the target plan on the subscription's
-// interval, currency and provider.
+// interval, currency and provider, effective when the change takes effect:
+// now for an upgrade, the renewal R = current_period_end for a downgrade
+// (BIL-SUB-8: every ScheduleAtPeriodEnd prices at R; F-12, rev 0.71).
 func (s *Service) targetPrice(ctx context.Context, sub domain.Subscription, cur domain.PlanPrice, target domain.PlanCode) (domain.PlanPrice, error) {
+	at := s.now()
+	if domain.DirectionOf(sub.Plan, target) == domain.DirectionDowngrade && sub.CurrentPeriodEnd != nil {
+		at = *sub.CurrentPeriodEnd
+	}
 	var p domain.PlanPrice
 	err := s.Tx.RunInTenantTx(ctx, sub.TenantID, func(ctx context.Context) error {
 		var ok bool
 		var err error
-		p, ok, err = s.Prices.PriceAt(ctx, target, sub.Interval, cur.Currency, sub.Provider, s.now())
+		p, ok, err = s.Prices.PriceAt(ctx, target, sub.Interval, cur.Currency, sub.Provider, at)
 		if err == nil && (!ok || (p.ProviderPriceID == nil && sub.Provider != manualProvider)) {
 			return domain.NewError(domain.ErrPriceNotAvailable, "no price for the target plan")
 		}
@@ -238,14 +244,24 @@ func (s *Service) upgrade(ctx context.Context, c Caller, sub domain.Subscription
 		}
 		ca := &ClientAction{Type: "3ds", ClientSecret: secret}
 		raw, _ := json.Marshal(ca)
+		var settled *domain.PlanChangeRequest
 		if err := s.locked(ctx, sub.TenantID, func(ctx context.Context) error {
-			req.ClientAction = raw
-			if res.Invoice.ProviderInvoiceID != "" {
-				req.ProviderInvoiceID = &res.Invoice.ProviderInvoiceID
+			cur, pending, err := s.reloadUpgrade(ctx, req)
+			if err != nil || !pending {
+				settled = &cur
+				return err
 			}
-			return s.Changes.Update(ctx, req)
+			cur.ClientAction = raw
+			if res.Invoice.ProviderInvoiceID != "" {
+				cur.ProviderInvoiceID = &res.Invoice.ProviderInvoiceID
+			}
+			return s.Changes.Update(ctx, cur)
 		}); err != nil {
 			return out, err
+		}
+		if settled != nil {
+			out.Status, out.EffectiveAt = string(settled.Status), settled.EffectiveAt
+			return out, nil
 		}
 		out.Status, out.ClientAction = string(domain.ChangePendingPayment), ca
 		return out, nil
@@ -255,23 +271,47 @@ func (s *Service) upgrade(ctx context.Context, c Caller, sub domain.Subscription
 		// (which looks the invoice up) settles it.
 		return out, providerErr(err)
 	}
-	if res.Invoice.ProviderInvoiceID != "" {
-		req.ProviderInvoiceID = &res.Invoice.ProviderInvoiceID
-	}
-	if res.Outcome.Status != port.PaymentPaid { // pending: completes on invoice.paid
-		err := s.locked(ctx, sub.TenantID, func(ctx context.Context) error { return s.Changes.Update(ctx, req) })
-		out.Status = string(domain.ChangePendingPayment)
-		return out, err
-	}
+	// Commit the outcome under the lock with a re-read (BIL-CONC-2, F-5 rev
+	// 0.71): the invoice.paid callback or purchase-expiry may have settled the
+	// request while ChangePrice ran; it is never overwritten or applied twice.
 	err = s.locked(ctx, sub.TenantID, func(ctx context.Context) error {
-		if err := s.applyPlanChange(ctx, &req, tp, actorOf(c), "api:B-P4", nil, metaFor(c)); err != nil {
+		cur, pending, err := s.reloadUpgrade(ctx, req)
+		if err != nil {
 			return err
 		}
+		if !pending {
+			req = cur
+			return nil
+		}
+		if res.Invoice.ProviderInvoiceID != "" {
+			cur.ProviderInvoiceID = &res.Invoice.ProviderInvoiceID
+		}
+		if res.Outcome.Status != port.PaymentPaid { // pending: completes on invoice.paid
+			req = cur
+			return s.Changes.Update(ctx, cur)
+		}
+		if err := s.applyPlanChange(ctx, &cur, tp, actorOf(c), "api:B-P4", nil, metaFor(c)); err != nil {
+			return err
+		}
+		req = cur
 		s.metrics().PurchaseToEvent(port.PurchaseKindPlan, 0)
 		return nil
 	})
 	out.Status, out.EffectiveAt = string(req.Status), req.EffectiveAt
 	return out, err
+}
+
+// reloadUpgrade re-reads an upgrade request under the tenant lock after the
+// provider call and reports whether it is still pending_payment (F-5).
+func (s *Service) reloadUpgrade(ctx context.Context, req domain.PlanChangeRequest) (domain.PlanChangeRequest, bool, error) {
+	cur, found, err := s.Changes.Get(ctx, req.TenantID, req.ChangeID)
+	if err != nil {
+		return req, false, err
+	}
+	if !found {
+		return req, false, domain.NewError(domain.ErrInternal, "plan change request not found after the provider call")
+	}
+	return cur, cur.Status == domain.ChangePendingPayment, nil
 }
 
 // upgradeDeclined is the declined upgrade (§8.4.1: request failed, plan

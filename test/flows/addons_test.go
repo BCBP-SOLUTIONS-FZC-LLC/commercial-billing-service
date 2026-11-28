@@ -5,6 +5,7 @@ package flows_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/app"
 	"github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service/internal/domain"
@@ -106,10 +107,82 @@ func TestTokenAddonPaymentSession(t *testing.T) {
 	if v, _ := e.svc.GetAddonPurchase(ctx, owner, tenant, res.PurchaseID); v.Status != "confirmed" {
 		t.Fatalf("status %s", v.Status)
 	}
+	// F-11 (rev 0.71, §4.2.14): once mirrored (invoice.finalized / updated),
+	// the invoice is linked to the purchase it paid for.
+	if _, err := e.handle(t, tenant, app.InvoiceUpdated{S: e.svc}, callback("evt_add_upd", "invoice.updated", domain.KindInvoiceUpdated), cur); err != nil {
+		t.Fatal(err)
+	}
+	if got := scalar[string](t, `SELECT l.ref_type||'/'||l.ref_id::text FROM invoice_links l JOIN invoices i USING (invoice_id)
+		WHERE i.provider_invoice_id = $1`, "in_addon:"+res.PurchaseID); got != "quota_addon_purchase/"+res.PurchaseID {
+		t.Fatalf("invoice link %s", got)
+	}
 	if _, err := e.svc.AddonPaymentSession(ctx, owner, tenant, res.PurchaseID); !domain.HasCode(err, domain.ErrPurchaseNotAwaitingPayment) {
 		t.Fatalf("after payment: %v", err)
 	}
 	if l, err := e.svc.ListAddonPurchases(ctx, owner, tenant, app.Page{}); err != nil || len(l.Items) != 1 {
 		t.Fatalf("list %+v %v", l, err)
+	}
+}
+
+// F-9 (rev 0.71, §8.8.4): offboarding closes an open token add-on purchase
+// too. Its invoice is voided and the purchase cancelled, so purchase-expiry
+// never settles it later and no TenantQuotaAddOnChanged follows the
+// offboarding.
+func TestOffboardingCancelsOpenAddonPurchase(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant, _ := e.converted(t)
+	mustNoErr(t, sql(ctx, `UPDATE billing_accounts SET default_pm_set = false WHERE tenant_id = $1::uuid`, tenant))
+	e.stripe.change = []confirmAnswer{{err: errNoPM}}
+	res, err := e.svc.PurchaseTokenAddon(ctx, withKey(owner, "k-add-off1"), tenant, app.AddonPurchaseRequest{PackCode: "tokens_1m", PackQuantity: 1, AcceptTerms: true})
+	if err != nil || res.Status != "requires_action" {
+		t.Fatalf("purchase %+v %v", res, err)
+	}
+	setLifecycle(t, tenant, "offboarded", nil)
+	if _, err := e.svc.RunLifecycleFollowUps(ctx, 100); err != nil {
+		t.Fatal(err)
+	}
+	if got := scalar[string](t, `SELECT status::text FROM quota_addon_purchases WHERE purchase_id = $1`, res.PurchaseID); got != "cancelled" {
+		t.Fatalf("add-on purchase after offboarding: %s", got)
+	}
+	if n := len(e.stripe.called("VoidInvoice in_addon:" + res.PurchaseID)); n != 1 {
+		t.Fatalf("add-on invoice not voided: %v", e.stripe.called("VoidInvoice"))
+	}
+	e.now = e.now.Add(48 * time.Hour)
+	if _, err := e.svc.ExpireStale(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := scalar[int](t, `SELECT count(*) FROM outbox_events WHERE tenant_id = $1 AND event_type = 'TenantQuotaAddOnChanged'`, tenant); n != 0 {
+		t.Fatalf("%d TenantQuotaAddOnChanged after offboarding", n)
+	}
+}
+
+// F-11 (rev 0.71, §5.4.1 SubscriptionView): B-P1 shows the scheduled seat
+// reduction and the open purchases (here a token add-on awaiting payment),
+// never with its client_action (BIL-API-4: client_secret only to the
+// caller that started the payment).
+func TestBIL_API_4_SubscriptionViewShowsWorkInFlight(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant, _ := e.converted(t)
+	if v, err := e.svc.GetSubscription(ctx, owner, tenant); err != nil || v.ScheduledReduction != nil || v.PendingPlanChange != nil || len(v.OpenPurchases) != 0 {
+		t.Fatalf("idle view %+v %v", v, err)
+	}
+	if _, err := e.svc.ScheduleReduction(ctx, owner, tenant, app.ReductionRequest{TargetSeats: 1}); err != nil {
+		t.Fatal(err)
+	}
+	e.stripe.change = []confirmAnswer{{err: errNoPM}}
+	mustNoErr(t, sql(ctx, `UPDATE billing_accounts SET default_pm_set = false WHERE tenant_id = $1::uuid`, tenant))
+	res, err := e.svc.PurchaseTokenAddon(ctx, withKey(owner, "k-add-view1"), tenant, app.AddonPurchaseRequest{PackCode: "tokens_1m", PackQuantity: 1, AcceptTerms: true})
+	if err != nil || res.Status != "requires_action" {
+		t.Fatalf("purchase %+v %v", res, err)
+	}
+	v, err := e.svc.GetSubscription(ctx, owner, tenant)
+	if err != nil || v.ScheduledReduction == nil || v.ScheduledReduction.TargetSeats != 1 {
+		t.Fatalf("scheduled reduction %+v %v", v.ScheduledReduction, err)
+	}
+	if len(v.OpenPurchases) != 1 || v.OpenPurchases[0].PurchaseID != res.PurchaseID || v.OpenPurchases[0].Kind != "token_addon" ||
+		v.OpenPurchases[0].ClientAction != nil {
+		t.Fatalf("open purchases %+v", v.OpenPurchases)
 	}
 }

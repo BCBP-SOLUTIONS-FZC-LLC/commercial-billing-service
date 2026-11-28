@@ -161,6 +161,20 @@ func TestAddonPurchaseOutcomes(t *testing.T) {
 		t.Fatalf("race %+v %v", res, err)
 	}
 
+	// BIL-CONC-2 (rev 0.71): the purchase is cancelled (offboarding) while
+	// the charge is in flight and the provider answers paid: B-P20 neither
+	// reopens nor grants it; the payment is parked for a refund (SEV-2).
+	e.p.on("ChargeOneOff", answer{before: func(key string) {
+		exec(t, `UPDATE quota_addon_purchases SET status = 'cancelled' WHERE purchase_id = $1::uuid`, strings.TrimPrefix(key, "addon:"))
+	}})
+	res, err = buy(withKey(owner, "k-add-cancel1"))
+	if err != nil || res.Status != "cancelled" || addonEvents(t, res.PurchaseID) != 0 {
+		t.Fatalf("cancelled during the charge %+v %v", res, err)
+	}
+	if !e.log.has("ERROR", "BillingPaymentParked", "paid_after_cancel", res.PurchaseID) {
+		t.Fatalf("payment after cancel not parked: %v", e.log.lines)
+	}
+
 	res, err = buy(owner)
 	if err != nil || res.Status != "confirmed" || addonEvents(t, res.PurchaseID) != 1 {
 		t.Fatalf("no key %+v %v", res, err)

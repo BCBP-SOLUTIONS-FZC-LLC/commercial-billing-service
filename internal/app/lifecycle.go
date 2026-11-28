@@ -164,7 +164,47 @@ func (s *Service) mirrorFromState(ctx context.Context, tenantID, provider string
 		at = s.now()
 	}
 	id, err := s.Invoices.Mirror(ctx, tenantID, provider, v, at)
+	if err == nil && id != "" {
+		err = s.linkInvoice(ctx, tenantID, provider, id, cur)
+	}
 	return id, v.AmountDue, err
+}
+
+// linkInvoice records what the mirrored invoice paid for (§4.2.14
+// invoice_links; F-11, rev 0.71): the purchase or plan change whose
+// provider invoice it is, otherwise the Billing subscription of its provider
+// subscription. Idempotent (ON CONFLICT DO NOTHING); an invoice Billing
+// cannot attribute gets no link.
+func (s *Service) linkInvoice(ctx context.Context, tenantID, provider, invoiceID string, cur domain.ProviderObjectState) error {
+	if p, ok, err := s.SeatPurchases.ByProviderInvoice(ctx, tenantID, cur.Ref.ID); err != nil || ok {
+		if ok {
+			err = s.Invoices.Link(ctx, invoiceID, tenantID, "seat_purchase", p.PurchaseID)
+		}
+		return err
+	}
+	if ch, ok, err := s.Changes.ByProviderInvoice(ctx, tenantID, cur.Ref.ID); err != nil || ok {
+		if ok {
+			err = s.Invoices.Link(ctx, invoiceID, tenantID, "plan_change", ch.ChangeID)
+		}
+		return err
+	}
+	if s.Addons != nil {
+		if a, ok, err := s.Addons.ByProviderInvoice(ctx, tenantID, cur.Ref.ID); err != nil || ok {
+			if ok {
+				err = s.Invoices.Link(ctx, invoiceID, tenantID, "quota_addon_purchase", a.PurchaseID)
+			}
+			return err
+		}
+	}
+	providerSub, _ := cur.Fields["subscription"].(string)
+	if providerSub == "" {
+		return nil
+	}
+	sub, ok, err := s.Subs.ByProvider(ctx, provider, providerSub)
+	if err != nil || !ok || sub.TenantID != tenantID {
+		return err
+	}
+	return s.Invoices.Link(ctx, invoiceID, tenantID, "subscription", sub.BillingSubscriptionID)
 }
 
 // PaymentFailed is §8.8.1: a cycle invoice payment failed → past_due and

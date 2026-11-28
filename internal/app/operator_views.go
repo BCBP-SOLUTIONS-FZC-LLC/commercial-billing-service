@@ -168,6 +168,63 @@ func (s *Service) GetReconciliationRun(ctx context.Context, _ Caller, runID stri
 }
 
 // providerStatus maps a provider subscription status to Billing's.
+// seatAndPlanFindings compares a live subscription's seat quantity and
+// price with the provider's (§8.13, F-10 rev 0.71). An open seat purchase or
+// pending upgrade explains a difference while it settles, so none is
+// reported then. Neither is auto-repaired: money may be involved.
+func seatAndPlanFindings(b port.ReconSubscription, it domain.ProviderObjectState, autoRepair bool) []port.ReconFinding {
+	st := domain.SubscriptionStatus(b.Status)
+	if b.PendingUpdate || st != domain.StatusActive && st != domain.StatusPastDue {
+		return nil
+	}
+	var out []port.ReconFinding
+	note := func(f port.ReconFinding) port.ReconFinding {
+		if autoRepair {
+			f.RepairNote = ptr("not auto-repaired: needs a person (money may be involved)")
+		}
+		return f
+	}
+	if q, ok := intField(it.Fields["quantity"]); ok && q != b.Quantity {
+		out = append(out, note(port.ReconFinding{TenantID: b.TenantID, Kind: "seats_mismatch",
+			BillingValue: mustJSON(map[string]int{"seats": b.Quantity}), ProviderValue: mustJSON(map[string]int{"quantity": q})}))
+	}
+	if price, _ := it.Fields["price"].(string); price != "" && price != b.PriceRef && price != b.ScheduledPriceRef {
+		out = append(out, note(port.ReconFinding{TenantID: b.TenantID, Kind: "plan_mismatch",
+			BillingValue:  mustJSON(map[string]string{"plan": b.Plan, "price": b.PriceRef}),
+			ProviderValue: mustJSON(map[string]string{"price": price})}))
+	}
+	return out
+}
+
+// invoiceMismatch compares Billing's mirror of an invoice with the
+// provider's listing: status, currency, amount due and amount paid (§8.13
+// invoice_mismatch; repaired by re-mirroring the invoice).
+func invoiceMismatch(m port.ReconInvoice, it domain.ProviderObjectState) (port.ReconFinding, bool) {
+	due, hasDue := int64Field(it.Fields["amount_due_minor"])
+	paid, hasPaid := int64Field(it.Fields["amount_paid_minor"])
+	cur, _ := it.Fields["currency"].(string)
+	if it.Status == m.Status && (!hasDue || due == m.AmountDueMinor) && (!hasPaid || paid == m.AmountPaidMinor) && (cur == "" || cur == m.Currency) {
+		return port.ReconFinding{}, false
+	}
+	return port.ReconFinding{TenantID: m.TenantID, Kind: "invoice_mismatch",
+		BillingValue: mustJSON(map[string]any{"id": it.Ref.ID, "status": m.Status, "currency": m.Currency,
+			"amount_due_minor": m.AmountDueMinor, "amount_paid_minor": m.AmountPaidMinor}),
+		ProviderValue: mustJSON(map[string]any{"id": it.Ref.ID, "status": it.Status, "currency": cur,
+			"amount_due_minor": due, "amount_paid_minor": paid})}, true
+}
+
+func int64Field(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	case float64:
+		return int64(n), true
+	}
+	return 0, false
+}
+
 func providerStatus(st string) domain.SubscriptionStatus {
 	switch st {
 	case "active", "trialing":
@@ -279,15 +336,21 @@ func (s *Service) reconcile(ctx context.Context, run port.ReconRun) (map[string]
 				continue
 			}
 			want := providerStatus(it.Status)
-			got := domain.SubscriptionStatus(b[1])
+			got := domain.SubscriptionStatus(b.Status)
 			if want != got && (want != domain.StatusCancelled || got != domain.StatusEnded) {
-				f := port.ReconFinding{TenantID: b[0], Kind: "status_mismatch", BillingValue: mustJSON(map[string]string{"status": b[1]}),
+				f := port.ReconFinding{TenantID: b.TenantID, Kind: "status_mismatch", BillingValue: mustJSON(map[string]string{"status": b.Status}),
 					ProviderValue: mustJSON(map[string]string{"status": it.Status})}
 				if want == domain.StatusCancelled || want == domain.StatusEnded {
-					repair(&f, func() error { return s.ledgerReread(ctx, run, b[0], it, domain.KindSubscriptionEnded) })
+					repair(&f, func() error { return s.ledgerReread(ctx, run, b.TenantID, it, domain.KindSubscriptionEnded) })
 				} else if run.AutoRepair {
 					f.RepairNote = ptr("not auto-repaired: the next callback or a replay (B-O13) applies it")
 				}
+				if err := add(f); err != nil {
+					return err
+				}
+				continue
+			}
+			for _, f := range seatAndPlanFindings(b, it, run.AutoRepair) {
 				if err := add(f); err != nil {
 					return err
 				}
@@ -304,12 +367,30 @@ func (s *Service) reconcile(ctx context.Context, run port.ReconRun) (map[string]
 			for _, it := range items {
 				ids = append(ids, it.Ref.ID)
 			}
-			known, err := s.Recon.KnownIDs(ctx, run.Provider, string(kind), ids)
-			if err != nil {
+			known := map[string]bool{}
+			mirrors := map[string]port.ReconInvoice{}
+			var err error
+			if kind == port.ReconInvoices {
+				if mirrors, err = s.Recon.InvoiceMirrors(ctx, run.Provider, ids); err != nil {
+					return err
+				}
+				for id := range mirrors {
+					known[id] = true
+				}
+			} else if known, err = s.Recon.KnownIDs(ctx, run.Provider, string(kind), ids); err != nil {
 				return err
 			}
 			for _, it := range items {
 				counts[string(kind)]++
+				if m, ok := mirrors[it.Ref.ID]; ok {
+					if f, differs := invoiceMismatch(m, it); differs {
+						repair(&f, func() error { return s.mirrorMissing(ctx, prov, run.Provider, m.TenantID, it.Ref) })
+						if err := add(f); err != nil {
+							return err
+						}
+					}
+					continue
+				}
 				if known[it.Ref.ID] {
 					continue
 				}
@@ -417,12 +498,15 @@ func (s *Service) mirrorMissing(ctx context.Context, prov port.PaymentProvider, 
 		return errors.New("invoice has no tenant_id metadata")
 	}
 	ref.Kind = domain.ObjectInvoice
+	// Stamped with the time before the re-read: a change after it arrives
+	// with a later event time and still wins the mirror's ordering guard.
+	fetchedAt := s.now()
 	cur, err := prov.FetchCurrent(ctx, ref)
 	if err != nil {
 		return providerErr(err)
 	}
 	return s.locked(ctx, tenantID, func(ctx context.Context) error {
-		_, _, err := s.mirrorFromState(ctx, tenantID, provider, domain.PaymentEvent{Provider: provider}, cur)
+		_, _, err := s.mirrorFromState(ctx, tenantID, provider, domain.PaymentEvent{Provider: provider, ProviderCreatedAt: fetchedAt}, cur)
 		return err
 	})
 }

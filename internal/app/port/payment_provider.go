@@ -456,7 +456,12 @@ func ProviderErrorToDomain(err error) error {
 	case errors.Is(err, ErrPriceMismatch):
 		return &domain.DomainError{Code: domain.ErrProviderPriceMismatch, Message: err.Error(), Cause: err}
 	case errors.Is(err, ErrNotFound):
-		return &domain.DomainError{Code: domain.ErrProviderPriceMismatch, Message: "the provider object does not exist", Cause: err}
+		// A provider object Billing recorded no longer exists: Billing and the
+		// provider disagree, which is a bug to page, not a price mismatch
+		// (F-3, rev 0.71). Routes with a meaningful 404 map it themselves
+		// (B-P18 INVOICE_NOT_FOUND); VerifyPrice reports a missing price as
+		// ErrPriceMismatch.
+		return &domain.DomainError{Code: domain.ErrInternal, Message: "a provider object Billing recorded does not exist", Cause: err}
 	case errors.Is(err, ErrInvalidSignature):
 		return &domain.DomainError{Code: domain.ErrInvalidSignature, Message: "invalid webhook signature", Cause: err}
 	}

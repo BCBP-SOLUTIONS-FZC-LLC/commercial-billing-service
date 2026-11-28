@@ -412,8 +412,11 @@ func (r recon) Get(ctx context.Context, id string) (port.ReconRun, []port.ReconF
 	}
 	return r.ReconRepo.Get(ctx, id)
 }
-func (r recon) BillingSubscriptions(ctx context.Context, p string) (map[string][2]string, error) {
-	return f2(r.f, "Recon.BillingSubscriptions", func() (map[string][2]string, error) { return r.ReconRepo.BillingSubscriptions(ctx, p) })
+func (r recon) InvoiceMirrors(ctx context.Context, p string, ids []string) (map[string]port.ReconInvoice, error) {
+	return f2(r.f, "Recon.InvoiceMirrors", func() (map[string]port.ReconInvoice, error) { return r.ReconRepo.InvoiceMirrors(ctx, p, ids) })
+}
+func (r recon) BillingSubscriptions(ctx context.Context, p string) (map[string]port.ReconSubscription, error) {
+	return f2(r.f, "Recon.BillingSubscriptions", func() (map[string]port.ReconSubscription, error) { return r.ReconRepo.BillingSubscriptions(ctx, p) })
 }
 func (r recon) KnownIDs(ctx context.Context, p, k string, ids []string) (map[string]bool, error) {
 	return f2(r.f, "Recon.KnownIDs", func() (map[string]bool, error) { return r.ReconRepo.KnownIDs(ctx, p, k, ids) })

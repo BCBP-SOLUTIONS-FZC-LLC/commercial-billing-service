@@ -55,6 +55,22 @@ func TestSagaReversalRequestConstraint(t *testing.T) {
 	}
 }
 
+// 000010 (rev 0.71, F-13): a reactivation checkout carries the
+// subscription's seat count, up to the seat item's 100000 bound.
+func TestCheckoutRequestedSeatsBound(t *testing.T) {
+	s := seedTenant(t)
+	ins := `INSERT INTO checkout_sessions (session_id, tenant_id, purpose, provider_session_id, billing_subscription_id, requested_plan,
+	          requested_interval, requested_seats, requested_by, expires_at)
+	        VALUES ($1, $2, 'reactivation', $3, $4, 'pro', 'month', $5, $6, now() + interval '1 hour')`
+	mustExec(t, superPool, ins, newID(), s.Tenant, "cs_big_"+s.Sub, s.Sub, 5000, commercialSystem)
+	want(t, "23514", "above the seat item bound", ins, newID(), s.Tenant, "cs_huge_"+s.Sub, s.Sub, 100001, commercialSystem)
+	n, err := count(context.Background(), superPool, `SELECT count(*) FROM pg_constraint WHERE conrelid = 'checkout_sessions'::regclass
+		AND pg_get_constraintdef(oid) LIKE '%requested_seats%'`)
+	if err != nil || n != 1 {
+		t.Errorf("requested_seats constraints: %d, %v (the 1000 bound must be gone)", n, err)
+	}
+}
+
 // BIL-SEAT-1 / BIL-SEAT-2: one open purchase and one open schedule.
 func TestBIL_SEAT_1_and_2_OneOpen(t *testing.T) {
 	s := seedTenant(t)

@@ -62,6 +62,11 @@ func (r *PlanChangeRepository) Open(ctx context.Context, tenantID string) (domai
 	return r.one(ctx, `WHERE tenant_id = $1::uuid AND status IN ('pending_payment','scheduled') FOR UPDATE`, tenantID)
 }
 
+// Get implements port.PlanChangeRepo: one request, locked, in any status.
+func (r *PlanChangeRepository) Get(ctx context.Context, tenantID, changeID string) (domain.PlanChangeRequest, bool, error) {
+	return r.one(ctx, `WHERE tenant_id = $1::uuid AND change_id = $2::uuid FOR UPDATE`, tenantID, changeID)
+}
+
 // ByProviderInvoice implements port.PlanChangeRepo.
 func (r *PlanChangeRepository) ByProviderInvoice(ctx context.Context, tenantID, providerInvoiceID string) (domain.PlanChangeRequest, bool, error) {
 	return r.one(ctx, `WHERE tenant_id = $1::uuid AND provider_invoice_id = $2 FOR UPDATE`, tenantID, providerInvoiceID)

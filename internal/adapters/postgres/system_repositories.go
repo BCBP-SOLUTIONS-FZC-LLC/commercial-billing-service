@@ -309,6 +309,20 @@ func (r *LedgerRepository) Finish(ctx context.Context, provider, eventID string,
 	})
 }
 
+// Defer implements port.LedgerRepo: failed with a retry time, and the
+// attempt the claim counted is given back.
+func (r *LedgerRepository) Defer(ctx context.Context, provider, eventID, outcome string, nextAttempt time.Time) error {
+	return inTx(ctx, r.pool, func(q querier) error {
+		_, err := q.Exec(ctx, `
+			UPDATE payment_event_ledger
+			SET status = 'failed', outcome = $3, claimed_until = NULL, next_attempt_at = $4,
+			    attempts = GREATEST(attempts - 1, 0)
+			WHERE provider = $1 AND provider_event_id = $2`,
+			provider, eventID, outcome, nextAttempt)
+		return err
+	})
+}
+
 // qualify prefixes each column of a comma-separated list with alias.
 func qualify(alias, cols string) string {
 	parts := strings.Split(cols, ",")

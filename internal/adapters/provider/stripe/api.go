@@ -830,7 +830,18 @@ func (a *Adapter) ListSince(ctx context.Context, kind port.ReconKind, since time
 			if err != nil {
 				return page, mapErr(err)
 			}
-			page.Items = append(page.Items, domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectSubscription, ID: s.ID}, Status: string(s.Status), Metadata: s.Metadata})
+			st := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectSubscription, ID: s.ID}, Status: string(s.Status), Metadata: s.Metadata,
+				Fields: map[string]any{}}
+			// The seat item's quantity and price, for seats_mismatch and
+			// plan_mismatch (§8.13).
+			if s.Items != nil && len(s.Items.Data) > 0 {
+				it := s.Items.Data[0]
+				st.Fields["quantity"] = it.Quantity
+				if it.Price != nil {
+					st.Fields["price"] = it.Price.ID
+				}
+			}
+			page.Items = append(page.Items, st)
 			if len(page.Items) == limit {
 				page.NextCursor = s.ID
 				break
@@ -851,6 +862,9 @@ func (a *Adapter) ListSince(ctx context.Context, kind port.ReconKind, since time
 			if inv.Customer != nil {
 				st.Fields["customer"] = inv.Customer.ID // the tenant comes from Billing's customer mapping (BIL-PAY-3)
 			}
+			// Amounts for invoice_mismatch (§8.13).
+			st.Fields["amount_due_minor"], st.Fields["amount_paid_minor"] = inv.AmountDue, inv.AmountPaid
+			st.Fields["currency"] = strings.ToUpper(string(inv.Currency))
 			page.Items = append(page.Items, st)
 			if len(page.Items) == limit {
 				page.NextCursor = inv.ID
@@ -1062,6 +1076,9 @@ func stringOrNil(v string) *string {
 // count of 1 (Billing's month / year mean one month / one year), or one-off.
 func (a *Adapter) VerifyPrice(ctx context.Context, priceRef string, want port.PriceExpectation) error {
 	p, err := call(ctx, a, func() (*stripego.Price, error) { return a.sc.V1Prices.Retrieve(ctx, priceRef, nil) })
+	if errors.Is(err, port.ErrNotFound) {
+		return fmt.Errorf("%w: price %s does not exist", port.ErrPriceMismatch, priceRef)
+	}
 	if err != nil {
 		return err
 	}

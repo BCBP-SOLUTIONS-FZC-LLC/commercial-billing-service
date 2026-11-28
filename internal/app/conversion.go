@@ -71,8 +71,63 @@ func (s *Service) subscriptionView(ctx context.Context, c Caller, sub domain.Sub
 		v.RenewalEstimate = &RenewalEstimate{Seats: item.Quantity,
 			Amount: MoneyFrom(domain.Money{AmountMinor: renewalUnit * int64(item.Quantity), Currency: price.Currency})}
 	}
+	if err := s.inFlight(ctx, sub, &v); err != nil {
+		return SubscriptionView{}, err
+	}
 	v.CallerPermissions, v.ActionsAvailable = CallerPermissions(c), s.actionsFor(c, &sub, acct)
 	return v, nil
+}
+
+// inFlight fills the view's pending plan change, scheduled seat reduction
+// and open seat / add-on purchases (§5.4.1 SubscriptionView; F-11, rev
+// 0.71). A purchase's client_action is never included: client_secret goes
+// only to the caller that started the payment (BIL-API-4), and this view is
+// read by anyone with billing.view.
+func (s *Service) inFlight(ctx context.Context, sub domain.Subscription, v *SubscriptionView) error {
+	// The repository reads below lock rows (FOR UPDATE). Taking the tenant
+	// lock first orders them like every writer's (BIL-CONC-1), so a read
+	// never deadlocks a writer.
+	if err := s.Lock.LockTenant(ctx, sub.TenantID); err != nil {
+		return err
+	}
+	if ch, ok, err := s.Changes.Open(ctx, sub.TenantID); err != nil {
+		return err
+	} else if ok && ch.BillingSubscriptionID == sub.BillingSubscriptionID {
+		bl := make([]Blocker, 0, len(ch.BlockerCodes))
+		for _, code := range ch.BlockerCodes {
+			bl = append(bl, Blocker{Code: code})
+		}
+		v.PendingPlanChange = &PlanChangeView{ChangeID: ch.ChangeID, Direction: string(ch.Direction), FromPlan: string(ch.FromPlan),
+			ToPlan: string(ch.ToPlan), Status: string(ch.Status), EffectiveAt: ch.EffectiveAt, Blockers: bl}
+	}
+	if sch, ok, err := s.Schedules.Open(ctx, sub.BillingSubscriptionID); err != nil {
+		return err
+	} else if ok {
+		v.ScheduledReduction = &ScheduleView{ScheduleID: sch.ScheduleID, TargetSeats: sch.TargetSeats, EffectiveAt: sch.EffectiveAt,
+			Status: string(sch.Status), SeatsInUse: sch.SeatsInUseAtApply, RenewalEstimateSeats: sch.RenewalSeats}
+	}
+	if p, ok, err := s.SeatPurchases.Open(ctx, sub.BillingSubscriptionID); err != nil {
+		return err
+	} else if ok {
+		pv := seatView(p)
+		pv.ClientAction = nil
+		v.OpenPurchases = append(v.OpenPurchases, pv)
+	}
+	if s.Addons == nil {
+		return nil
+	}
+	addons, err := s.Addons.List(ctx, sub.TenantID, "", 100)
+	if err != nil {
+		return err
+	}
+	for _, p := range addons {
+		if p.Status.Open() {
+			pv := addonView(p)
+			pv.ClientAction = nil
+			v.OpenPurchases = append(v.OpenPurchases, pv)
+		}
+	}
+	return nil
 }
 
 // ── B-P2 ───────────────────────────────────────────────────────────────────
@@ -436,6 +491,11 @@ func (h CheckoutCompleted) Handle(ctx context.Context, tenantID string, ev domai
 	if err != nil {
 		return "", err
 	}
+	if session.Purpose == domain.PurposeReactivation {
+		if err := s.applyReactivationPrice(ctx, linked, session); err != nil {
+			return "", err
+		}
+	}
 	// The re-read session carries its first invoice (BIL-PAY-4). If that is
 	// already paid, the payment is confirmed here, whatever the order and
 	// fate of the invoice.paid callback (§9.4).
@@ -449,6 +509,40 @@ func (h CheckoutCompleted) Handle(ctx context.Context, tenantID string, ev domai
 		return "applied:conversion_payment", nil
 	}
 	return "applied:subscription_linked", nil
+}
+
+// applyReactivationPrice records what the B-P14 checkout bought (F-4, rev
+// 0.71): the new provider subscription runs on the requested interval (the
+// previous one by default) at the price row current when the checkout was
+// created, so the subscription's interval and the seat item's price_id follow
+// it. Otherwise renewals, previews and schedules would price the old
+// interval or an expired row (BIL-SUB-8).
+func (s *Service) applyReactivationPrice(ctx context.Context, sub domain.Subscription, session domain.CheckoutSession) error {
+	interval := sub.Interval
+	if session.RequestedInterval != nil {
+		interval = *session.RequestedInterval
+	}
+	acct, err := s.Accounts.Get(ctx, sub.TenantID)
+	if err != nil {
+		return err
+	}
+	price, ok, err := s.Prices.PriceAt(ctx, sub.Plan, interval, acct.Currency, sub.Provider, session.CreatedAt)
+	if err != nil || !ok {
+		return err // B-P14 priced it from this row; none means the price book was edited since: keep the item
+	}
+	if interval != sub.Interval {
+		if _, err := s.Subs.Update(ctx, sub.BillingSubscriptionID, 0, func(x *domain.Subscription) { x.Interval = interval }); err != nil {
+			return err
+		}
+	}
+	item, err := s.Subs.Item(ctx, sub.BillingSubscriptionID)
+	if err != nil || item.PriceID == price.PriceID && item.ScheduledPriceID == nil {
+		return err
+	}
+	// A renewal reprice scheduled on the deleted provider subscription no
+	// longer applies (§8.16).
+	item.PriceID, item.ScheduledPriceID, item.ScheduledPriceAt = price.PriceID, nil, nil
+	return s.Subs.SetItem(ctx, item)
 }
 
 // CheckoutExpired abandons the session's incomplete subscription (§8.1.3).

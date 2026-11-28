@@ -185,6 +185,16 @@ func (s *Service) purchaseSeats(ctx context.Context, c Caller, tenantID string, 
 			p = cur
 			return nil
 		}
+		if !cur.Status.Open() {
+			// Cancelled (renewal top-up, offboarding) or expired while
+			// ChangeQuantity ran: never reopened or granted (BIL-CONC-2); a
+			// payment taken anyway is parked for a refund.
+			if res.Outcome.Status == port.PaymentPaid {
+				s.purchasePaymentParked(ctx, tenantID, port.PurchaseKindSeats, cur.PurchaseID, deref(p.ProviderInvoiceID), "paid_after_cancel", "")
+			}
+			p = cur
+			return nil
+		}
 		cur.ProviderInvoiceID, cur.ClientAction, cur.Status = p.ProviderInvoiceID, p.ClientAction, p.Status
 		if res.Outcome.Status == port.PaymentPaid && p.Status == domain.PurchasePendingPayment {
 			if err := s.confirmSeats(ctx, &cur, "api:B-P7", actorOf(c), nil, metaFor(c)); err != nil {

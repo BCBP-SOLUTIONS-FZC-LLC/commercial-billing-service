@@ -133,3 +133,40 @@ func TestCancellationAndReactivation(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// F-4 (rev 0.71): B-P14 on a cancelled subscription may choose another
+// interval (§5.4.1 B-P14). Once the checkout completes, the subscription's
+// interval and the seat item's price row follow what the checkout bought,
+// so renewals and previews price the new interval (BIL-SUB-8).
+func TestReactivationOnAnotherIntervalUpdatesSubscription(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	tenant, sub := e.activeSubscription(t, "pro", 3)
+	before := scalar[string](t, `SELECT interval::text FROM subscriptions WHERE billing_subscription_id = $1`, sub)
+	other := "year"
+	if before == "year" {
+		other = "month"
+	}
+	if _, err := e.svc.CancelSubscription(ctx, owner, tenant, app.CancelRequest{RecordVersion: e.version(t, sub), Reason: "too_expensive"}); err != nil {
+		t.Fatal(err)
+	}
+	ended := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectSubscription, ID: "sub_" + sub}, Status: "canceled"}
+	if _, err := e.handle(t, tenant, app.SubscriptionEnded{S: e.svc}, callback("evt_del", "customer.subscription.deleted", domain.KindSubscriptionEnded), ended); err != nil {
+		t.Fatal(err)
+	}
+	r, err := e.svc.Reactivate(ctx, owner, tenant, app.ReactivateRequest{Interval: other})
+	if err != nil || r.Kind != "checkout" {
+		t.Fatalf("checkout %+v %v", r, err)
+	}
+	cs := scalar[string](t, `SELECT provider_session_id FROM checkout_sessions WHERE session_id = $1`, r.CheckoutSessionID)
+	done := domain.ProviderObjectState{Ref: domain.ProviderObjectRef{Kind: domain.ObjectCheckoutSession, ID: cs}, Status: "complete",
+		Fields: map[string]any{"subscription": "sub_new_" + sub}}
+	if _, err := e.handle(t, tenant, app.CheckoutCompleted{S: e.svc}, callback("evt_cs2", "checkout.session.completed", domain.KindCheckoutCompleted), done); err != nil {
+		t.Fatal(err)
+	}
+	if got := scalar[string](t, `SELECT s.interval::text||'/'||p.interval::text||'/'||p.provider_price_id FROM subscriptions s
+		JOIN subscription_items i USING (billing_subscription_id) JOIN plan_prices p ON p.price_id = i.price_id
+		WHERE s.billing_subscription_id = $1`, sub); got != other+"/"+other+"/price_pro_"+other {
+		t.Fatalf("after the reactivation checkout: %s (was %s)", got, before)
+	}
+}
