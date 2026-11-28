@@ -6,6 +6,10 @@ This service has never been deployed to any environment, and there is no release
 
 ## [Unreleased]
 
+### Changed (2026-11-28 — LLD rev 0.74: rebase on Commercial HLD v0.68)
+
+- **LLD rebased on HLD v0.68**, which records the alignment review's decisions (HLD §17.11): no operator plan, seat or add-on changes, Billing's 5xx release gate, PD-LLM-1 and ENT-D6 approved, the `manual` adapter exempt, the gateway namespace to confirm with Platform-edge. Each was already the LLD's position; docs only.
+
 ### Fixed (2026-11-28 — alignment review step 5: remaining decisions, LLD rev 0.73)
 
 - **Money: refunds in flight count against what is left to refund** (D-L14). B-O3, B-O8 and B-O9 subtract pending refunds, so two refunds cannot together pay back more than was paid. B-O9 `refund` now uses one key per subscription (`refund:signup:<id>`): a retry without a client `Idempotency-Key` used to start a second refund of the whole payment.
