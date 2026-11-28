@@ -2,7 +2,7 @@
 
 This document describes the internal structure, dependency rules and runtime data flows of `commercial-billing-service`.
 
-`commercial-billing` is a **private Go service** (`github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service`, Go 1.26.11), deployed as a containerised microservice in namespace `billing` (HPA 2–4 replicas). It refines the **Commercial Domain HLD v0.65** and is specified by its LLD, [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md) (rev 0.71). The LLD is the source of truth: where this document and the LLD disagree, the LLD wins, and this document should be fixed.
+`commercial-billing` is a **private Go service** (`github.com/BCBP-SOLUTIONS-FZC-LLC/commercial-billing-service`, Go 1.26.11), deployed as a containerised microservice in namespace `billing` (HPA 2–4 replicas). It refines the **Commercial Domain HLD v0.65** and is specified by its LLD, [`docs/lld/commercial-lld-billing-service.md`](docs/lld/commercial-lld-billing-service.md) (rev 0.72). The LLD is the source of truth: where this document and the LLD disagree, the LLD wins, and this document should be fixed.
 
 **What Billing owns:**
 - subscriptions, renewals and seat licensing;
@@ -998,7 +998,7 @@ A service consuming `billing.events` must:
 - BL-OQ-24, the `UsagePeriodClosed` contract;
 - BL-OQ-12, Notification messages;
 - BL-OQ-28, Entitlements' findings: Glue decode on its consumer (F-5, critical), access to the eligibility route (F-1, F-2), the plan-change race (F-6) and B-4 to B-8. All are fixed on Entitlements' `main` (PR #4, `52d7ac6`) and re-checked by Billing; they wait on Entitlements' deploy;
-- CD-57, the settle-only sign-in for a suspended tenant's owner (IAM; support settles until it is built, BL-OQ-30 b);
+- CD-59 (numbered CD-57 in HLD v0.66), the settle-only sign-in for a suspended tenant's owner (IAM; support settles until it is built, BL-OQ-30 b);
 - Audit Log `v0.3.0` live before `FEATURE_TOKEN_ADDONS=true` (HLD §17.9 V-9).
 
 **Before go-live:** certification of Stripe adapter 1.1.0 in staging (the release gate fails until then), the Loki rules for the log-based alerts (`BillingReversalDecisionNeeded`, `BillingReviewTrigger`, `BillingPaymentParked`), and the LLD §20.10 checks (Pushgateway `honorLabels`, kube-state-metrics CronJob families, AWS endpoint CIDRs, client IP trust, scrape mode, `production` deployment-branch rules).
