@@ -209,7 +209,7 @@ func (h PaymentFailed) Handle(ctx context.Context, tenantID string, ev domain.Pa
 	if next, ok := cur.Fields["next_payment_attempt"].(time.Time); ok {
 		payload.NextRetryAt = &next
 	}
-	if _, err := s.Events.Enqueue(ctx, payload, webhookMeta()); err != nil {
+	if err := s.emit(ctx, payload, webhookMeta()); err != nil {
 		return "", err
 	}
 	return "applied:past_due", nil
@@ -258,7 +258,7 @@ func (h SubscriptionEnded) Handle(ctx context.Context, tenantID string, ev domai
 	if err := s.history(ctx, cancelled, &from, "webhook:"+ev.EventType, domain.CommercialSystemPrincipal, eventRef(ev), nil, nil); err != nil {
 		return "", err
 	}
-	if _, err := s.Events.Enqueue(ctx, domain.TenantSubscriptionCancelled{TenantID: tenantID, CancelledAt: now, Reason: reason},
+	if err := s.emit(ctx, domain.TenantSubscriptionCancelled{TenantID: tenantID, CancelledAt: now, Reason: reason},
 		webhookMeta()); err != nil {
 		return "", err
 	}
@@ -341,7 +341,7 @@ func (h CycleInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain
 			if err := s.Subs.SetItem(ctx, item); err != nil {
 				return "", err
 			}
-			if _, err := s.Events.Enqueue(ctx, domain.TenantSeatsChanged{TenantID: tenantID, LicensedSeats: q, PreviousLicensedSeats: &before,
+			if err := s.emit(ctx, domain.TenantSeatsChanged{TenantID: tenantID, LicensedSeats: q, PreviousLicensedSeats: &before,
 				Reason: domain.SeatsReactivation, BillingSubscriptionID: sub.BillingSubscriptionID}, webhookMeta()); err != nil {
 				return "", err
 			}
@@ -350,7 +350,7 @@ func (h CycleInvoicePaid) Handle(ctx context.Context, tenantID string, ev domain
 			&[2]*int{&before, &item.Quantity}, nil); err != nil {
 			return "", err
 		}
-		if _, err := s.Events.Enqueue(ctx, domain.TenantReactivated{TenantID: tenantID, Source: domain.ReactivationSource,
+		if err := s.emit(ctx, domain.TenantReactivated{TenantID: tenantID, Source: domain.ReactivationSource,
 			ReactivatedAt: now, PreviousStatus: from}, webhookMeta()); err != nil {
 			return "", err
 		}

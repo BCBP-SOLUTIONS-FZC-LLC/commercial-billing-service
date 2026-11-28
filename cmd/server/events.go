@@ -76,6 +76,7 @@ func buildBusWith(ctx context.Context, cfg config.Config, appPool, sysPool *pgco
 	b.emissions = &app.EmissionWorker{
 		Emissions: pgadapter.NewEmissionRepository(appPool, sysPool),
 		Subs:      pgadapter.NewSubscriptionRepository(appPool),
+		Sagas:     pgadapter.NewSagaRepository(appPool, sysPool),
 		Tx:        pgadapter.NewTxRunner(appPool),
 		Lock:      pgadapter.TenantLocker{},
 		Events:    b.events,

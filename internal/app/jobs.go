@@ -310,7 +310,7 @@ func (s *Service) completeRenewal(ctx context.Context, sch domain.SeatChangeSche
 		if before == final && topup == nil {
 			return nil
 		}
-		_, err = s.Events.Enqueue(ctx, domain.TenantSeatsChanged{TenantID: sch.TenantID, LicensedSeats: final, PreviousLicensedSeats: &before,
+		err = s.emit(ctx, domain.TenantSeatsChanged{TenantID: sch.TenantID, LicensedSeats: final, PreviousLicensedSeats: &before,
 			Reason: reason, BillingRef: ref, BillingSubscriptionID: sub.BillingSubscriptionID}, port.EventMeta{Actor: domain.CommercialSystemPrincipal})
 		return err
 	})
